@@ -18,6 +18,9 @@ from collections import defaultdict
 #   - Time window selector moved from sidebar to top-right of main area
 #   - Window start capped at first transaction date (fixes 1 Year = All Time
 #     when account is less than 12 months old)
+#   - FIXED: Windowed equity P/L now uses FIFO cost basis — proceeds minus
+#     purchase cost — instead of gross proceeds. Prevents share sales showing
+#     as inflated profit in short windows.
 #
 #   Metrics:
 #   - Portfolio Overview Realized P/L now respects selected time window
@@ -593,14 +596,26 @@ total_realized_pnl = closed_camp_pnl + open_premiums_banked + pure_opts_pnl
 capital_deployed += extra_capital_deployed
 
 # ── Windowed P/L (respects time window selector) ───────────────────────────
-# Cash-flow view — all option transactions + equity SALES only (not purchases)
-# Matches TastyTrade's approach: every settled option transaction counts,
-# share purchases are unrealised until sold.
+# Options: sum all option cash flows in the window (credits + debits)
+# Equity: for each sale in the window, calculate net P/L using FIFO cost basis
+# from the most recent prior buy — avoids counting gross proceeds as pure profit
 _w_opts = df_window[df_window['Instrument Type'].isin(['Equity Option','Future Option']) &
                     (df_window['Type'].isin(['Trade','Receive Deliver']))]
-_w_eq_sales = df_window[(df_window['Instrument Type']=='Equity') &
-                         (df_window['Net_Qty_Row'] < 0)]  # sales only — negative qty
-window_realized_pnl = _w_opts['Total'].sum() + _w_eq_sales['Total'].sum()
+
+_eq_df   = df[df['Instrument Type']=='Equity'].copy()
+_eq_buys = _eq_df[_eq_df['Net_Qty_Row'] > 0].sort_values('Date')
+_w_eq_sales = df_window[(df_window['Instrument Type']=='Equity') & (df_window['Net_Qty_Row'] < 0)]
+
+_eq_pnl = 0.0
+for _, _sale in _w_eq_sales.iterrows():
+    _prior = _eq_buys[(_eq_buys['Ticker']==_sale['Ticker']) & (_eq_buys['Date'] < _sale['Date'])]
+    if not _prior.empty:
+        _cost_per_sh = abs(_prior.iloc[-1]['Total'] / _prior.iloc[-1]['Net_Qty_Row'])
+        _eq_pnl += _sale['Total'] - (_cost_per_sh * abs(_sale['Net_Qty_Row']))
+    else:
+        _eq_pnl += _sale['Total']  # no prior buy found — use proceeds as fallback
+
+window_realized_pnl = _w_opts['Total'].sum() + _eq_pnl
 
 # Income
 div_income = df_window[df_window['Sub Type']=='Dividend']['Total'].sum()
