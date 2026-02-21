@@ -6,17 +6,44 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 # ==========================================
-# TastyMechanics v24
+# TastyMechanics v25
 # ==========================================
-# Updates:
-#   - RENAMED: App is now TastyMechanics.
-#   - FIXED: Added Covered Strangle & Covered Straddle detection to closed trades.
-#   - RETAINED: Fractional share cost basis logic and 5-tab layout.
-#   - FIXED: Realized P/L now excludes the cost of open fractional shares 
-#     (UNH, META, etc.) and correctly treats them as Capital Deployed.
+# Changelog:
+#
+# v25 (2026-02-22)
+#   UI & Charts:
+#   - Win/Loss distribution histogram (Derivatives Performance tab)
+#   - P/L heatmap by ticker and month (Derivatives Performance tab)
+#   - Open chain leg highlighted in roll chains (green row + 🟢 prefix)
+#   - Time window selector moved from sidebar to top-right of main area
+#   - Window start capped at first transaction date (fixes 1 Year = All Time
+#     when account is less than 12 months old)
+#
+#   Metrics:
+#   - Portfolio Overview Realized P/L now respects selected time window
+#   - Breakdown expander shows Options/Equity/Div split for windowed views
+#   - "Actual $/Day (gross)" removed — replaced by "Banked $/Day" (net P/L/day)
+#     with gross as delta for context
+#   - Short window warning added (Last 5 Days / Month / 3 Months) explaining
+#     cross-window trade distortion
+#
+#   Code quality:
+#   - .applymap() → .map() throughout (pandas 2.1+ compatibility)
+#   - use_container_width= → width= throughout (Streamlit deprecation)
+#   - st.plotly_chart config={'displayModeBar': False} on all charts
+#   - strat_df column count fixed (was 6, now correctly 7 with medians)
+#   - Leftover v23.1 dev comment removed
+#
+# v24 (prior)
+#   - TastyMechanics branding
+#   - Sparkline equity curve (window-aware)
+#   - Win % colour coding across all performance tables
+#   - Campaign cards replacing outer expanders
+#   - Banked $/Day metric (window-aware)
+#   - Window labels on filtered tabs
 # ==========================================
 
-st.set_page_config(page_title="TastyMechanics", layout="wide")
+st.set_page_config(page_title="TastyMechanics v25", layout="wide")
 st.markdown("""
     <style>
     .stApp { background-color: #0d1117; color: #c9d1d9; }
@@ -424,16 +451,12 @@ with st.sidebar:
     st.header('⚙️ Data Control')
     uploaded_file = st.file_uploader('Upload TastyTrade History CSV', type='csv')
     st.markdown('---')
-    time_options = ['YTD', 'Last 5 Days', 'Last Month', 'Last 3 Months', 'Half Year', '1 Year', 'All Time']
-    selected_period = st.selectbox('Time Window', time_options, index=6)
-    
-    st.markdown('---')
     st.header('🎯 Campaign Settings')
     use_lifetime = st.toggle('Show Lifetime "House Money"', value=False, 
         help='If ON, combines ALL history for a ticker into one campaign. If OFF, resets breakeven every time shares hit zero.')
 
 if not uploaded_file:
-    st.info('🛰️ **TastyMechanics v24 Ready.** Upload your TastyTrade CSV to begin.')
+    st.info('🛰️ **TastyMechanics v25 Ready.** Upload your TastyTrade CSV to begin.')
     st.stop()
 
 # ── load ───────────────────────────────────────────────────────────────────────
@@ -447,6 +470,12 @@ df = df.sort_values('Date').reset_index(drop=True)
 
 latest_date = df['Date'].max()
 
+# ── Time window selector — top right ──────────────────────────────────────────
+time_options = ['YTD', 'Last 5 Days', 'Last Month', 'Last 3 Months', 'Half Year', '1 Year', 'All Time']
+_hdr_left, _hdr_right = st.columns([3, 1])
+with _hdr_right:
+    selected_period = st.selectbox('Time Window', time_options, index=6, label_visibility='collapsed')
+
 if   selected_period == 'All Time':      start_date = df['Date'].min()
 elif selected_period == 'YTD':           start_date = pd.Timestamp(latest_date.year, 1, 1, tz='UTC')
 elif selected_period == 'Last 5 Days':   start_date = latest_date - timedelta(days=5)
@@ -455,19 +484,24 @@ elif selected_period == 'Last 3 Months': start_date = latest_date - timedelta(da
 elif selected_period == 'Half Year':     start_date = latest_date - timedelta(days=182)
 elif selected_period == '1 Year':        start_date = latest_date - timedelta(days=365)
 
+# Cap start at first transaction — prevents 1 Year / Half Year going before data exists
+# which would inflate window_days and deflate per-day metrics
+start_date = max(start_date, df['Date'].min())
+
 df_window = df[df['Date'] >= start_date].copy()
 window_label = '🗓 Window: %s → %s (%s)' % (
     start_date.strftime('%d/%m/%Y'), latest_date.strftime('%d/%m/%Y'), selected_period)
 
-st.markdown("""
-    <div class='sync-header'>
-        📡 <b>DATA SYNC:</b> %s UTC &nbsp;|&nbsp;
-        📅 <b>WINDOW:</b> <span class='highlight-range'>%s</span> → %s (%s)
-    </div>
-""" % (latest_date.strftime('%d/%m/%Y %H:%M'),
-       start_date.strftime('%d/%m/%Y'),
-       latest_date.strftime('%d/%m/%Y'),
-       selected_period), unsafe_allow_html=True)
+with _hdr_left:
+    st.markdown("""
+        <div class='sync-header'>
+            📡 <b>DATA SYNC:</b> %s UTC &nbsp;|&nbsp;
+            📅 <b>WINDOW:</b> <span class='highlight-range'>%s</span> → %s (%s)
+        </div>
+    """ % (latest_date.strftime('%d/%m/%Y %H:%M'),
+           start_date.strftime('%d/%m/%Y'),
+           latest_date.strftime('%d/%m/%Y'),
+           selected_period), unsafe_allow_html=True)
 
 # ── build open positions ledger ────────────────────────────────────────────────
 
@@ -558,6 +592,16 @@ for ticker, camps in all_campaigns.items():
 total_realized_pnl = closed_camp_pnl + open_premiums_banked + pure_opts_pnl
 capital_deployed += extra_capital_deployed
 
+# ── Windowed P/L (respects time window selector) ───────────────────────────
+# Cash-flow view — all option transactions + equity SALES only (not purchases)
+# Matches TastyTrade's approach: every settled option transaction counts,
+# share purchases are unrealised until sold.
+_w_opts = df_window[df_window['Instrument Type'].isin(['Equity Option','Future Option']) &
+                    (df_window['Type'].isin(['Trade','Receive Deliver']))]
+_w_eq_sales = df_window[(df_window['Instrument Type']=='Equity') &
+                         (df_window['Net_Qty_Row'] < 0)]  # sales only — negative qty
+window_realized_pnl = _w_opts['Total'].sum() + _w_eq_sales['Total'].sum()
+
 # Income
 div_income = df_window[df_window['Sub Type']=='Dividend']['Total'].sum()
 int_net    = df_window[df_window['Sub Type'].isin(['Credit Interest','Debit Interest'])]['Total'].sum()
@@ -577,11 +621,25 @@ realized_ror    = total_realized_pnl / net_deposited * 100 if net_deposited > 0 
 # ── TOP METRICS ────────────────────────────────────────────────────────────────
 
 st.markdown('### 📊 Portfolio Overview')
+_is_all_time = selected_period == 'All Time'
+_is_short_window = selected_period in ['Last 5 Days', 'Last Month', 'Last 3 Months']
+_pnl_display = total_realized_pnl if _is_all_time else window_realized_pnl
+_ror_display = _pnl_display / net_deposited * 100 if net_deposited > 0 else 0.0
 m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric('Realized P/L',    '$%.2f' % total_realized_pnl)
-m1.caption('All cash actually banked — premiums collected, campaigns closed, standalone trades. Unrealised share P/L not included.')
-m2.metric('Realized ROR',    '%.1f%%' % realized_ror)
+m1.metric('Realized P/L',    '$%.2f' % _pnl_display)
+m1.caption('All cash actually banked — options P/L, share sales, premiums collected. Filtered to selected time window. Unrealised share P/L not included.')
+m2.metric('Realized ROR',    '%.1f%%' % _ror_display)
 m2.caption('Realized P/L as a %% of net deposits. How hard your deposited capital is working.')
+
+if _is_short_window:
+    st.warning(
+        '⚠️ **Short window — Realized P/L may be misleading.** '
+        'This view shows raw cash flows in the selected window. '
+        'If a trade was *opened* in a previous window and *closed* in this one, '
+        'only the buyback cost appears here — the original credit is in an earlier window. '
+        'This can make an actively managed period look like a loss even when the underlying trades are profitable. '
+        '**All Time or YTD give the most reliable P/L picture.**'
+    )
 m3.metric('Capital Deployed','$%.2f' % capital_deployed)
 m3.caption('Cash tied up in open share positions (wheel campaigns + any fractional holdings). Options margin not included.')
 m4.metric('Margin Loan',     '$%.2f' % margin_loan)
@@ -593,14 +651,26 @@ m6.caption('Days since your first transaction. Useful context for how long your 
 
 with st.expander('💡 Realized P/L Breakdown', expanded=False):
     b1, b2, b3, b4 = st.columns(4)
-    b1.metric('Closed Campaign P/L',    '$%.2f' % closed_camp_pnl)
-    b1.caption('P/L from fully closed wheel campaigns — shares bought, options traded, shares sold. Complete cycles only.')
-    b2.metric('Open Campaign Premiums', '$%.2f' % open_premiums_banked)
-    b2.caption('Premiums banked so far in campaigns still running. Shares not yet sold so overall campaign P/L not finalised.')
-    b3.metric('Standalone Trades P/L', '$%.2f' % pure_opts_pnl)
-    b3.caption('Everything outside wheel campaigns — standalone options, futures options, index trades, pre/post-campaign options on wheel tickers.')
-    b4.metric('Total Realized',         '$%.2f' % total_realized_pnl)
-    b4.caption('Sum of all three above. The single number that matters — real cash generated by your trading.')
+    if _is_all_time:
+        b1.metric('Closed Campaign P/L',    '$%.2f' % closed_camp_pnl)
+        b1.caption('P/L from fully closed wheel campaigns — shares bought, options traded, shares sold. Complete cycles only.')
+        b2.metric('Open Campaign Premiums', '$%.2f' % open_premiums_banked)
+        b2.caption('Premiums banked so far in campaigns still running. Shares not yet sold so overall campaign P/L not finalised.')
+        b3.metric('Standalone Trades P/L', '$%.2f' % pure_opts_pnl)
+        b3.caption('Everything outside wheel campaigns — standalone options, futures options, index trades, pre/post-campaign options on wheel tickers.')
+        b4.metric('Total Realized',         '$%.2f' % total_realized_pnl)
+        b4.caption('Sum of all three above. The single number that matters — real cash generated by your trading.')
+    else:
+        _w_opts_only = _w_opts['Total'].sum()
+        _w_eq_only   = _w_eq_sales['Total'].sum()
+        b1.metric('Options P/L',   '$%.2f' % _w_opts_only)
+        b1.caption('Net cash from all option transactions in the window — credits received minus buyback costs, expirations, assignments.')
+        b2.metric('Equity Sales P/L',    '$%.2f' % _w_eq_only)
+        b2.caption('Net cash from share sales in the window. Purchases excluded — unrealised until sold.')
+        b3.metric('Div + Interest','$%.2f' % (div_income + int_net))
+        b3.caption('Dividends received plus net interest in the window.')
+        b4.metric('Total',          '$%.2f' % _pnl_display)
+        b4.caption("Sum of options and equity cash flows in the selected window. Matches TastyTrade's cash-flow view.")
 
 # ── Sparkline equity curve ───────────────────────────────────────────────────
 if not closed_trades_df.empty:
@@ -1086,7 +1156,7 @@ with tab2:
                                 status_icon, cp_icon, cp.title(), ci+1, n_rolls, ch_pnl)
                             with st.expander(chain_label, expanded=is_open):
                                 chain_rows = []
-                                for leg in chain:
+                                for leg_i, leg in enumerate(chain):
                                     sub = str(leg['sub_type']).lower()
                                     if 'to open' in sub:
                                         action = '↪️ Sell to Open'
@@ -1105,25 +1175,38 @@ with tab2:
                                             exp_dt = pd.to_datetime(leg['exp'], dayfirst=True)
                                             dte_str = '%dd' % max((exp_dt - leg['date'].replace(tzinfo=None)).days, 0)
                                         except: dte_str = ''
+                                    # Mark the open leg — last STO with no following BTC
+                                    is_open_leg = is_open and leg_i == len(chain) - 1
                                     chain_rows.append({
-                                        'Action': action,
+                                        'Action': ('🟢 ' + action) if is_open_leg else action,
                                         'Date': leg['date'].strftime('%d/%m/%y'),
                                         'Strike': '%.1f%s' % (leg['strike'], cp[0]),
                                         'Exp': leg['exp'],
                                         'DTE': dte_str,
                                         'Cash': leg['total'],
+                                        '_open': is_open_leg,
                                     })
                                 ch_df = pd.DataFrame(chain_rows)
                                 # Add total row
                                 ch_df = pd.concat([ch_df, pd.DataFrame([{
                                     'Action': '━━ Chain Total', 'Date': '',
-                                    'Strike': '', 'Exp': '', 'DTE': '', 'Cash': ch_pnl
+                                    'Strike': '', 'Exp': '', 'DTE': '', 'Cash': ch_pnl, '_open': False
                                 }])], ignore_index=True)
-                                st.dataframe(ch_df.style.format({'Cash': lambda x: '${:.2f}'.format(x)})
-                                    .map(lambda v: 'color: #00cc96' if isinstance(v,float) and v>0
-                                        else ('color: #ef553b' if isinstance(v,float) and v<0 else ''),
-                                        subset=['Cash']),
-                                    width='stretch', hide_index=True)
+                                def _style_chain_row(row):
+                                    if row.get('_open', False):
+                                        return ['background-color: rgba(0,204,150,0.12); font-weight:600'] * len(row)
+                                    return [''] * len(row)
+                                _display_cols = ['Action','Date','Strike','Exp','DTE','Cash']
+                                st.dataframe(
+                                    ch_df[_display_cols + ['_open']].style
+                                        .apply(_style_chain_row, axis=1)
+                                        .format({'Cash': lambda x: '${:.2f}'.format(x)})
+                                        .map(lambda v: 'color: #00cc96' if isinstance(v,float) and v>0
+                                            else ('color: #ef553b' if isinstance(v,float) and v<0 else ''),
+                                            subset=['Cash']),
+                                    width='stretch', hide_index=True,
+                                    column_config={'_open': None}
+                                )
 
                     # ── Share + Dividend events ──────────────────────────────
                     st.markdown('**📋 Share & Dividend Events**')
