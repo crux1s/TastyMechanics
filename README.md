@@ -86,7 +86,7 @@ cd tastymechanics
 pip install streamlit pandas plotly
 
 # Run
-streamlit run Tastytrade_CSV_Dashboard.py
+streamlit run app.py
 ```
 
 Then open `http://localhost:8501` in your browser.
@@ -147,21 +147,7 @@ Options are grouped into chains based on same-day or near-same-day activity (wit
 
 ---
 
-## Testing with Synthetic Data
 
-A synthetic CSV generator is included for testing without using real account data:
-
-```bash
-python3 generate_tastytrade_csv.py
-```
-
-This produces `tastytrade_synthetic_sample.csv` with 179 rows covering:
-- 3 wheel campaigns (NVDA, MSTR, PLTR) including assignment, rolling, and a covered strangle
-- Short puts, strangles, spreads, iron condors, butterfly, 0DTE index trades
-- Futures options (/MES, /GC)
-- Deposits, dividends, interest, regulatory fees
-
----
 
 ## Built With
 
