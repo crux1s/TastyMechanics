@@ -12,7 +12,6 @@ from collections import defaultdict
 #   - RENAMED: App is now TastyMechanics.
 #   - FIXED: Added Covered Strangle & Covered Straddle detection to closed trades.
 #   - RETAINED: Fractional share cost basis logic and 5-tab layout.
-#   - REVERTED: UI layout strictly matches v23.1 (Tabs, wording, charts).
 #   - FIXED: Realized P/L now excludes the cost of open fractional shares 
 #     (UNH, META, etc.) and correctly treats them as Capital Deployed.
 # ==========================================
@@ -757,17 +756,19 @@ with tab1:
                         Trades=('Won','count'),
                         Win_Rate=('Won', lambda x: x.mean()*100),
                         Total_PNL=('Net P/L','sum'),
-                        Avg_Capture=('Capture %','mean'),
-                        Avg_Days=('Days Held','mean'),
+                        Med_Capture=('Capture %','median'),
+                        Med_Days=('Days Held','median'),
+                        Med_DTE=('DTE Open','median'),
                     ).reset_index().sort_values('Total_PNL', ascending=False).round(1)
-                    strat_df.columns = ['Strategy','Trades','Win %','Total P/L','Avg Capture %','Avg Days']
+                    strat_df.columns = ['Strategy','Trades','Win %','Total P/L','Med Capture %','Med Days','Med DTE']
                     st.markdown('##### 🧩 Defined vs Undefined Risk — by Strategy')
                     st.caption('All closed trades — credit and debit. Naked = undefined risk, higher premium. Spreads/Condors = defined max loss, less credit. Debit spreads show P/L but no capture % (not applicable). Are your defined-risk trades worth the premium you give up for the protection?')
                     st.dataframe(strat_df.style.format({
                         'Win %': lambda x: '{:.1f}%'.format(x),
-                        'Avg Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
+                        'Med Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
                         'Total P/L': lambda x: '${:,.2f}'.format(x),
-                        'Avg Days': lambda x: '{:.1f}'.format(x),
+                        'Med Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                        'Med DTE': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                     }).applymap(color_win_rate, subset=['Win %'])
                     .applymap(lambda v: 'color: #00cc96' if isinstance(v,(int,float)) and v>0
                         else ('color: #ef553b' if isinstance(v,(int,float)) and v<0 else ''),
