@@ -625,7 +625,7 @@ if not closed_trades_df.empty:
         xaxis=dict(visible=False), yaxis=dict(visible=False),
         showlegend=False
     )
-    st.plotly_chart(_fig_spark, use_container_width=True, config={'displayModeBar': False})
+    st.plotly_chart(_fig_spark, width='stretch', config={'displayModeBar': False})
 
 st.markdown('---')
 
@@ -664,7 +664,7 @@ with tab0:
                     show = t_df[['Status','Details','DTE','Cost Basis']].sort_values('Status')
                     show.columns = ['Type','Position','DTE','Basis']
                     st.dataframe(show.style.format({'Basis': format_cost_basis}),
-                        use_container_width=True, hide_index=True)
+                        width='stretch', hide_index=True)
 
 
 # ── Tab 1: Derivatives Performance ────────────────────────────────────────
@@ -688,10 +688,9 @@ with tab1:
             '0DTE trades producing meaningless numbers — treat with caution on small sample sizes. '
             '**Med Premium/Day** = median credit-per-day across individual trades — your typical theta capture rate per trade, '
             'but skewed upward by short-dated trades where large credits are divided by very few days. '
-            '**Actual $/Day (gross)** = total net credit received on closed trades divided by account age — '
-            'real cash that flowed in when opening positions, before buyback costs. '
-            'The delta shows the **net** figure (gross minus all buybacks) — what you actually kept per day. '
-            'Net $/day is the honest number to compare against income needs; gross shows your trading velocity.'
+            '**Banked $/Day** = realized P/L divided by window days — what you actually kept after all buybacks. '
+            'The delta shows the gross credit rate for context — the gap between the two is your buyback cost. '
+            'This is the number to compare against income needs or running costs.'
         )
         dm1, dm2, dm3, dm4, dm5, dm6 = st.columns(6)
         if has_credit:
@@ -703,8 +702,8 @@ with tab1:
             dm3.metric('Median Days Held', '%.0f' % credit_cdf['Days Held'].median())
             dm4.metric('Median Ann. Return', '%.0f%%' % credit_cdf['Ann Return %'].median())
             dm5.metric('Med Premium/Day', '$%.2f' % credit_cdf['Prem/Day'].median())
-            dm6.metric('Actual $/Day (gross)', '$%.2f' % (total_credit_rcvd / window_days),
-                delta='net $%.2f/day' % (total_net_pnl_closed / window_days),
+            dm6.metric('Banked $/Day', '$%.2f' % (total_net_pnl_closed / window_days),
+                delta='vs $%.2f gross' % (total_credit_rcvd / window_days),
                 delta_color='normal')
         else:
             st.info('No closed credit trades in this window.')
@@ -724,7 +723,7 @@ with tab1:
                         color_discrete_sequence=colors,
                         title='Premium Capture % Distribution (Credit Trades)', text='Trades')
                     fig_cap.update_layout(template='plotly_dark', height=300, showlegend=False)
-                    st.plotly_chart(fig_cap, use_container_width=True)
+                    st.plotly_chart(fig_cap, width='stretch', config={'displayModeBar': False})
 
             with col2:
                 if has_credit:
@@ -747,11 +746,11 @@ with tab1:
                         '$/Day': lambda x: '${:.2f}'.format(x),
                         'Med Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                         'Med DTE': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                    }).applymap(color_win_rate, subset=['Win %'])
-                    .applymap(lambda v: 'color: #00cc96' if isinstance(v,(int,float)) and v>0
+                    }).map(color_win_rate, subset=['Win %'])
+                    .map(lambda v: 'color: #00cc96' if isinstance(v,(int,float)) and v>0
                         else ('color: #ef553b' if isinstance(v,(int,float)) and v<0 else ''),
                         subset=['Total P/L']),
-                    use_container_width=True, hide_index=True)
+                    width='stretch', hide_index=True)
                     strat_df = all_cdf.groupby('Trade Type').agg(
                         Trades=('Won','count'),
                         Win_Rate=('Won', lambda x: x.mean()*100),
@@ -769,11 +768,11 @@ with tab1:
                         'Total P/L': lambda x: '${:,.2f}'.format(x),
                         'Med Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                         'Med DTE': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                    }).applymap(color_win_rate, subset=['Win %'])
-                    .applymap(lambda v: 'color: #00cc96' if isinstance(v,(int,float)) and v>0
+                    }).map(color_win_rate, subset=['Win %'])
+                    .map(lambda v: 'color: #00cc96' if isinstance(v,(int,float)) and v>0
                         else ('color: #ef553b' if isinstance(v,(int,float)) and v<0 else ''),
                         subset=['Total P/L']),
-                    use_container_width=True, hide_index=True)
+                    width='stretch', hide_index=True)
 
             st.markdown('---')
             st.markdown('#### Performance by Ticker')
@@ -828,10 +827,63 @@ with tab1:
                     'Med Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
                     'Med Ann Ret %': lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
                     'Total Credit Rcvd': lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—'
-                }).applymap(color_win_rate, subset=['Win %'])
-                .applymap(color_pnl_cell, subset=['Total P/L']),
-                use_container_width=True, hide_index=True
+                }).map(color_win_rate, subset=['Win %'])
+                .map(color_pnl_cell, subset=['Total P/L']),
+                width='stretch', hide_index=True
             )
+
+            st.markdown('---')
+            st.markdown('#### 🗓 P/L by Ticker & Month')
+            st.caption(
+                'Net P/L per ticker per calendar month, based on close date. '
+                'Green = profitable month for that ticker, red = losing month. '
+                'Intensity shows size — dark green is a big win, dark red is a big loss. '
+                'Grey = no closed trades that month.'
+            )
+            _hm_df = all_cdf.copy()
+            _hm_df['Month'] = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%b %Y')
+            _hm_df['MonthSort'] = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%Y-%m')
+            _hm_pivot = _hm_df.groupby(['Ticker','MonthSort','Month'])['Net P/L'].sum().reset_index()
+            _months_sorted = sorted(_hm_pivot['MonthSort'].unique())
+            _month_labels  = [_hm_pivot[_hm_pivot['MonthSort']==m]['Month'].iloc[0] for m in _months_sorted]
+            _tickers_sorted = sorted(_hm_pivot['Ticker'].unique(), 
+                key=lambda t: _hm_pivot[_hm_pivot['Ticker']==t]['Net P/L'].sum(), reverse=True)
+
+            # Build matrix
+            import numpy as np
+            _z  = []
+            _text = []
+            for tkr in _tickers_sorted:
+                row_z, row_t = [], []
+                for ms in _months_sorted:
+                    val = _hm_pivot[(_hm_pivot['Ticker']==tkr) & (_hm_pivot['MonthSort']==ms)]['Net P/L'].sum()
+                    row_z.append(val if val != 0 else None)
+                    row_t.append('$%.0f' % val if val != 0 else '')
+                _z.append(row_z)
+                _text.append(row_t)
+
+            _fig_hm = go.Figure(data=go.Heatmap(
+                z=_z, x=_month_labels, y=_tickers_sorted,
+                text=_text, texttemplate='%{text}',
+                colorscale=[
+                    [0.0,  '#7f1d1d'], [0.35, '#ef553b'],
+                    [0.5,  '#1a1a2e'],
+                    [0.65, '#00cc96'], [1.0,  '#004d3a'],
+                ],
+                zmid=0,
+                showscale=True,
+                colorbar=dict(title='P/L ($)', tickformat='$,.0f'),
+                hoverongaps=False,
+                hovertemplate='%{y} — %{x}<br>P/L: $%{z:,.2f}<extra></extra>',
+            ))
+            _fig_hm.update_layout(
+                template='plotly_dark',
+                height=max(280, len(_tickers_sorted) * 28),
+                margin=dict(l=0, r=0, t=10, b=0),
+                xaxis=dict(side='top'),
+                yaxis=dict(autorange='reversed'),
+            )
+            st.plotly_chart(_fig_hm, width='stretch', config={'displayModeBar': False})
 
             st.markdown('---')
             cum_df = all_cdf.sort_values('Close Date').copy()
@@ -840,7 +892,7 @@ with tab1:
                 title='Cumulative Realized P/L', height=260)
             fig_eq.update_traces(line_color='#00cc96', fill='tozeroy')
             fig_eq.update_layout(template='plotly_dark')
-            st.plotly_chart(fig_eq, use_container_width=True)
+            st.plotly_chart(fig_eq, width='stretch', config={'displayModeBar': False})
 
             if has_credit:
                 roll_df = credit_cdf.sort_values('Close Date').copy()
@@ -850,7 +902,38 @@ with tab1:
                 fig_cap2.update_traces(line_color='#58a6ff')
                 fig_cap2.add_hline(y=50, line_dash='dash', line_color='#ffa421')
                 fig_cap2.update_layout(template='plotly_dark')
-                st.plotly_chart(fig_cap2, use_container_width=True)
+                st.plotly_chart(fig_cap2, width='stretch', config={'displayModeBar': False})
+
+            st.markdown('---')
+            st.markdown('##### 📊 Win / Loss Distribution')
+            st.caption(
+                'Each bar is one trade — green bars are winners, red are losers. '
+                'A healthy theta engine shows many small green bars clustered near zero and at the 50% capture target, '
+                'with losses contained and not wider than the win cluster. '
+                'Fat red tails mean losses are outsized relative to wins — the key risk to manage.'
+            )
+            _hist_df = all_cdf.copy()
+            _hist_df['Colour'] = _hist_df['Net P/L'].apply(lambda x: 'Win' if x >= 0 else 'Loss')
+            _fig_hist = px.histogram(
+                _hist_df, x='Net P/L', color='Colour',
+                color_discrete_map={'Win': '#00cc96', 'Loss': '#ef553b'},
+                nbins=40, height=280,
+                labels={'Net P/L': 'Trade P/L ($)', 'count': 'Trades'},
+                barmode='overlay', opacity=0.85
+            )
+            _fig_hist.add_vline(x=0, line_color='rgba(255,255,255,0.3)', line_width=1)
+            _fig_hist.add_vline(
+                x=all_cdf['Net P/L'].median(),
+                line_dash='dash', line_color='#ffa421', line_width=1.5,
+                annotation_text='median $%.0f' % all_cdf['Net P/L'].median(),
+                annotation_position='top right', annotation_font_color='#ffa421'
+            )
+            _fig_hist.update_layout(
+                template='plotly_dark', showlegend=True,
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+                margin=dict(t=30, b=0)
+            )
+            st.plotly_chart(_fig_hist, width='stretch', config={'displayModeBar': False})
 
             st.markdown('---')
             bcol, wcol = st.columns(2)
@@ -860,14 +943,14 @@ with tab1:
                 st.dataframe(best.style.format({
                     'Premium Rcvd': lambda x: '${:.2f}'.format(x),
                     'Net P/L': lambda x: '${:.2f}'.format(x)
-                }), use_container_width=True, hide_index=True)
+                }), width='stretch', hide_index=True)
             with wcol:
                 st.markdown('##### 💀 Worst 5 Trades')
                 worst = all_cdf.nsmallest(5, 'Net P/L')[['Ticker','Trade Type','Type','Days Held','Premium Rcvd','Net P/L']].copy()
                 st.dataframe(worst.style.format({
                     'Premium Rcvd': lambda x: '${:.2f}'.format(x),
                     'Net P/L': lambda x: '${:.2f}'.format(x)
-                }), use_container_width=True, hide_index=True)
+                }), width='stretch', hide_index=True)
 
             with st.expander('📋 Full Closed Trade Log', expanded=False):
                 log = all_cdf[['Ticker','Trade Type','Type','Open Date','Close Date',
@@ -882,8 +965,8 @@ with tab1:
                     'Capital Risk': lambda x: '${:,.0f}'.format(x),
                     'Capture %':    lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
                     'Ann Return %': lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
-                }).applymap(color_pnl_cell, subset=['Net P/L']),
-                use_container_width=True, hide_index=True)
+                }).map(color_pnl_cell, subset=['Net P/L']),
+                width='stretch', hide_index=True)
 
 # ── Tab 2: Wheel Campaigns ─────────────────────────────────────────────────
 with tab2:
@@ -924,7 +1007,7 @@ with tab2:
             'Dividends': lambda x: '${:,.2f}'.format(x),
             'Exit Proceeds': lambda x: '${:,.2f}'.format(x),
             'Realized P/L': lambda x: '${:,.2f}'.format(x)
-        }).applymap(color_pnl, subset=['Realized P/L']), use_container_width=True, hide_index=True)
+        }).map(color_pnl, subset=['Realized P/L']), width='stretch', hide_index=True)
         st.markdown('---')
         for ticker, camps in sorted(all_campaigns.items()):
             for i, c in enumerate(camps):
@@ -1037,10 +1120,10 @@ with tab2:
                                     'Strike': '', 'Exp': '', 'DTE': '', 'Cash': ch_pnl
                                 }])], ignore_index=True)
                                 st.dataframe(ch_df.style.format({'Cash': lambda x: '${:.2f}'.format(x)})
-                                    .applymap(lambda v: 'color: #00cc96' if isinstance(v,float) and v>0
+                                    .map(lambda v: 'color: #00cc96' if isinstance(v,float) and v>0
                                         else ('color: #ef553b' if isinstance(v,float) and v<0 else ''),
                                         subset=['Cash']),
-                                    use_container_width=True, hide_index=True)
+                                    width='stretch', hide_index=True)
 
                     # ── Share + Dividend events ──────────────────────────────
                     st.markdown('**📋 Share & Dividend Events**')
@@ -1051,10 +1134,10 @@ with tab2:
                         ev_share['date'] = pd.to_datetime(ev_share['date']).dt.strftime('%d/%m/%y %H:%M')
                         ev_share.columns = ['Date','Type','Detail','Cash']
                         st.dataframe(ev_share.style.format({'Cash': lambda x: '${:,.2f}'.format(x)})
-                            .applymap(lambda v: 'color: #00cc96' if isinstance(v,float) and v>0
+                            .map(lambda v: 'color: #00cc96' if isinstance(v,float) and v>0
                                 else ('color: #ef553b' if isinstance(v,float) and v<0 else ''),
                                 subset=['Cash']),
-                            use_container_width=True, hide_index=True)
+                            width='stretch', hide_index=True)
                     else:
                         st.caption('No share/dividend events.')
 
@@ -1115,7 +1198,7 @@ with tab3:
             'Standalone Trades': lambda x: '${:,.2f}'.format(x),
             'Capital Deployed': lambda x: '${:,.2f}'.format(x),
             'Realized P/L': lambda x: '${:,.2f}'.format(x)
-        }).applymap(color_pnl2, subset=['Realized P/L']), use_container_width=True, hide_index=True)
+        }).map(color_pnl2, subset=['Realized P/L']), width='stretch', hide_index=True)
 
 # ── Tab 4: Income & Fees ───────────────────────────────────────────────────
 with tab4:
@@ -1130,6 +1213,6 @@ with tab4:
     )][['Date','Ticker','Sub Type','Description','Total']].sort_values('Date', ascending=False)
     if not income_df.empty:
         st.dataframe(income_df.style.format({'Total': lambda x: '${:,.2f}'.format(x)}),
-            use_container_width=True, hide_index=True)
+            width='stretch', hide_index=True)
     else:
         st.info('No income / fee events in this window.')
