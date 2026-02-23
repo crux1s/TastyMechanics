@@ -3,12 +3,58 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-from collections import defaultdict
+from collections import defaultdict, deque
 
 # ==========================================
-# TastyMechanics v25
+# TastyMechanics v25.3
 # ==========================================
 # Changelog:
+#
+# v25.3 (2026-02-23)
+#   Weekly Review Features:
+#   - Expiry Alert Strip: inline chip strip below metrics showing all options
+#     expiring within 21 days. Green (>14d) → amber (≤14d) → red (≤5d).
+#     Only shown when open option positions exist.
+#   - Period Comparison Card: "this period vs last period" inline summary card
+#     showing Realized P/L, Trades Closed, Win Rate, and Dividends — each with
+#     a delta vs the prior equivalent window. Shown for all windows except All Time.
+#   - Weekly / Monthly P/L bar chart (Derivatives Performance tab): side-by-side
+#     colour-coded bar charts (green = positive week/month, red = negative).
+#     Monthly bars include value labels. Sits above the ticker heatmap.
+#
+#   Open Positions tab:
+#   - Replaced cramped 3-column expanders with 2-column card grid
+#   - Each card has: ticker + strategy badge (colour-coded by bias),
+#     per-leg breakdown with basis chip, DTE progress bar (green→amber→red)
+#   - Summary strip at top: ticker count, option legs, share positions,
+#     strategy pills showing active strategies at a glance
+#   - Cards use CSS hover effect and gradient backgrounds
+#
+#   Charts & Visualisations:
+#   - New chart_layout() helper: consistent dark background, IBM Plex font,
+#     subtle grid, proper margins across all charts
+#   - Cumulative P/L: upgraded to go.Scatter for fill colour control,
+#     $-formatted y-axis, cleaner hover tooltips
+#   - Rolling Capture %: gradient fill under line, styled 50% target annotation
+#   - Win/Loss histogram: dot-style median line, $-formatted x-axis
+#   - Heatmap: IBM Plex Mono cell font, improved colorbar, per-cell hover
+#   - Capture % distribution: outside text labels, axis labels added
+#   - Sparkline: slightly taller, transparent background
+#
+#   Styling:
+#   - New CSS: IBM Plex Sans + IBM Plex Mono typography throughout
+#   - Deeper background (#0a0e17), refined metric label styling
+#   - chart-section-title / chart-section-sub classes for consistent
+#     section headings without relying on markdown headers
+#
+#
+# v25.1 (2026-02-22)
+#   - FIXED: Windowed equity P/L now uses true FIFO cost basis via deque —
+#     oldest lot consumed first, partial lot splits handled correctly.
+#     Our v25 used .iloc[-1] (most recent buy = LIFO-like), which gave
+#     correct results for single-lot positions but would diverge on partial
+#     sales of multi-lot positions (e.g. selling 50 of 200 SOFI shares).
+#     Extracted into named function: calculate_windowed_equity_pnl().
 #
 # v25 (2026-02-22)
 #   UI & Charts:
@@ -18,9 +64,6 @@ from collections import defaultdict
 #   - Time window selector moved from sidebar to top-right of main area
 #   - Window start capped at first transaction date (fixes 1 Year = All Time
 #     when account is less than 12 months old)
-#   - FIXED: Windowed equity P/L now uses FIFO cost basis — proceeds minus
-#     purchase cost — instead of gross proceeds. Prevents share sales showing
-#     as inflated profit in short windows.
 #
 #   Metrics:
 #   - Portfolio Overview Realized P/L now respects selected time window
@@ -35,7 +78,6 @@ from collections import defaultdict
 #   - use_container_width= → width= throughout (Streamlit deprecation)
 #   - st.plotly_chart config={'displayModeBar': False} on all charts
 #   - strat_df column count fixed (was 6, now correctly 7 with medians)
-#   - Leftover v23.1 dev comment removed
 #
 # v24 (prior)
 #   - TastyMechanics branding
@@ -46,20 +88,85 @@ from collections import defaultdict
 #   - Window labels on filtered tabs
 # ==========================================
 
-st.set_page_config(page_title="TastyMechanics v25", layout="wide")
+st.set_page_config(page_title="TastyMechanics v25.3", layout="wide")
 st.markdown("""
     <style>
-    .stApp { background-color: #0d1117; color: #c9d1d9; }
-    div[data-testid="stMetricValue"] { font-size: 1.35rem !important; color: #00cc96; }
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
+
+    .stApp { background-color: #0a0e17; color: #c9d1d9; font-family: 'IBM Plex Sans', sans-serif; }
+    div[data-testid="stMetricValue"] { font-size: 1.4rem !important; color: #00cc96; font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+    div[data-testid="stMetricLabel"] { color: #8b949e; font-size: 0.78rem !important; text-transform: uppercase; letter-spacing: 0.05em; }
+    div[data-testid="stMetricDelta"] { font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem !important; }
     .stTable { font-size: 0.85rem !important; }
-    [data-testid="stExpander"] { background: #161b22; border-radius: 8px;
-        border: 1px solid #30363d; margin-bottom: 5px; }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-    .stTabs [data-baseweb="tab"] { background-color: #111418;
-        border-radius: 4px 4px 0px 0px; padding: 8px 16px; }
-    .sync-header { color: #8b949e; font-size: 0.95rem;
+    [data-testid="stExpander"] { background: #111827; border-radius: 10px;
+        border: 1px solid #1f2937; margin-bottom: 8px; }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; border-bottom: 1px solid #1f2937; }
+    .stTabs [data-baseweb="tab"] { background-color: #0f1520;
+        border-radius: 6px 6px 0px 0px; padding: 10px 20px; font-size: 0.9rem; }
+    .sync-header { color: #8b949e; font-size: 0.9rem;
         margin-top: -15px; margin-bottom: 25px; line-height: 1.5; }
-    .highlight-range { color: #58a6ff; font-weight: bold; }
+    .highlight-range { color: #58a6ff; font-weight: 600; }
+
+    /* ── Position Cards ── */
+    .pos-card {
+        background: linear-gradient(135deg, #111827 0%, #0f1520 100%);
+        border: 1px solid #1f2937;
+        border-radius: 12px;
+        padding: 18px 20px 14px 20px;
+        margin-bottom: 16px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+        transition: border-color 0.2s ease;
+    }
+    .pos-card:hover { border-color: #374151; }
+    .pos-card-header {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 12px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #1f2937;
+    }
+    .pos-ticker {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 1.3rem; font-weight: 600; color: #f0f6fc;
+        letter-spacing: 0.04em;
+    }
+    .pos-strategy-badge {
+        font-size: 0.72rem; font-weight: 600;
+        padding: 3px 10px; border-radius: 20px;
+        text-transform: uppercase; letter-spacing: 0.06em;
+        background: rgba(88,166,255,0.12); color: #58a6ff;
+        border: 1px solid rgba(88,166,255,0.25);
+        white-space: nowrap;
+    }
+    .pos-badge-bullish { background: rgba(0,204,150,0.1); color: #00cc96; border-color: rgba(0,204,150,0.25); }
+    .pos-badge-bearish { background: rgba(239,85,59,0.1); color: #ef553b; border-color: rgba(239,85,59,0.25); }
+    .pos-badge-neutral { background: rgba(255,165,0,0.1); color: #ffa500; border-color: rgba(255,165,0,0.25); }
+    .pos-leg {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.04);
+        font-size: 0.85rem;
+    }
+    .pos-leg:last-child { border-bottom: none; }
+    .pos-leg-label { color: #8b949e; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .pos-leg-value { font-family: 'IBM Plex Mono', monospace; color: #e6edf3; font-size: 0.88rem; }
+    .pos-dte-bar-wrap { margin-top: 10px; }
+    .pos-dte-bar-bg { background: #1f2937; border-radius: 4px; height: 4px; width: 100%; }
+    .pos-dte-bar-fill { background: #58a6ff; border-radius: 4px; height: 4px; }
+    .pos-dte-label { color: #6b7280; font-size: 0.72rem; margin-top: 4px; }
+    .pos-basis-chip {
+        display: inline-block; margin-top: 8px;
+        background: rgba(255,255,255,0.04); border: 1px solid #1f2937;
+        border-radius: 6px; padding: 3px 10px;
+        font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; color: #8b949e;
+    }
+
+    /* ── Chart section titles ── */
+    .chart-section-title {
+        font-size: 1.05rem; font-weight: 600; color: #e6edf3;
+        margin: 28px 0 2px 0; letter-spacing: 0.01em;
+    }
+    .chart-section-sub {
+        font-size: 0.8rem; color: #6b7280; margin-bottom: 12px; line-height: 1.5;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -106,6 +213,110 @@ def translate_readable(row):
 def format_cost_basis(val):
     return '$%.2f %s' % (abs(val), 'Cr' if val < 0 else 'Db')
 
+def chart_layout(title='', height=300, margin_t=36, margin_b=20):
+    """Consistent base layout for all plotly charts."""
+    return dict(
+        template='plotly_dark',
+        height=height,
+        paper_bgcolor='rgba(10,14,23,0)',
+        plot_bgcolor='rgba(10,14,23,0)',
+        font=dict(family='IBM Plex Sans, sans-serif', size=12, color='#8b949e'),
+        title=dict(text=title, font=dict(size=13, color='#c9d1d9', family='IBM Plex Sans'), x=0, xanchor='left', pad=dict(l=0, b=8)) if title else None,
+        margin=dict(l=8, r=8, t=margin_t if title else 16, b=margin_b),
+        xaxis=dict(gridcolor='rgba(255,255,255,0.05)', linecolor='rgba(255,255,255,0.08)', tickfont=dict(size=11)),
+        yaxis=dict(gridcolor='rgba(255,255,255,0.05)', linecolor='rgba(255,255,255,0.08)', tickfont=dict(size=11)),
+        legend=dict(bgcolor='rgba(0,0,0,0)', borderwidth=0, font=dict(size=11)),
+    )
+
+def _badge_inline_style(strat):
+    """Return fully inlined style string for strategy badge (no CSS classes)."""
+    s = strat.lower()
+    if any(k in s for k in ['put', 'strangle', 'condor', 'lizard', 'reversal']):
+        return ('font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;'
+                'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;'
+                'background:rgba(0,204,150,0.1);color:#00cc96;border:1px solid rgba(0,204,150,0.25);')
+    if any(k in s for k in ['long call', 'bearish']):
+        return ('font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;'
+                'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;'
+                'background:rgba(239,85,59,0.1);color:#ef553b;border:1px solid rgba(239,85,59,0.25);')
+    if any(k in s for k in ['covered', 'wheel', 'stock']):
+        return ('font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;'
+                'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;'
+                'background:rgba(255,165,0,0.1);color:#ffa500;border:1px solid rgba(255,165,0,0.25);')
+    return ('font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;'
+            'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;'
+            'background:rgba(88,166,255,0.12);color:#58a6ff;border:1px solid rgba(88,166,255,0.25);')
+
+def render_position_card(ticker, t_df):
+    strat      = detect_strategy(t_df)
+    badge_style = _badge_inline_style(strat)
+
+    # Card wrapper — fully inline
+    CARD  = ('background:linear-gradient(135deg,#111827 0%,#0f1520 100%);'
+             'border:1px solid #1f2937;border-radius:12px;padding:18px 20px 14px 20px;'
+             'margin-bottom:16px;box-shadow:0 2px 12px rgba(0,0,0,0.4);')
+    HDR   = ('display:flex;align-items:center;justify-content:space-between;'
+             'margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #1f2937;')
+    TICK  = ('font-family:monospace;font-size:1.3rem;font-weight:600;'
+             'color:#f0f6fc;letter-spacing:0.04em;')
+    LEG   = ('display:flex;align-items:flex-start;justify-content:space-between;'
+             'padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05);')
+    LBL   = 'color:#8b949e;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:2px;'
+    VAL   = 'font-family:monospace;color:#e6edf3;font-size:0.88rem;'
+    CHIP  = ('display:inline-block;margin-top:6px;background:rgba(255,255,255,0.04);'
+             'border:1px solid #1f2937;border-radius:6px;padding:3px 10px;'
+             'font-family:monospace;font-size:0.8rem;color:#8b949e;')
+
+    legs_html = ''
+    rows_sorted = t_df.sort_values('Status')
+    for i, (_, row) in enumerate(rows_sorted.iterrows()):
+        pos_type = row['Status']
+        detail   = row['Details']
+        dte      = row['DTE']
+        basis    = format_cost_basis(row['Cost Basis'])
+        is_last  = (i == len(rows_sorted) - 1)
+        leg_style = LEG if not is_last else LEG.replace('border-bottom:1px solid rgba(255,255,255,0.05);', '')
+
+        dte_html = ''
+        if dte != 'N/A' and 'd' in str(dte):
+            try:
+                dte_val   = int(str(dte).replace('d', ''))
+                pct       = min(dte_val / 45 * 100, 100)
+                bar_color = '#00cc96' if dte_val > 14 else '#ffa500' if dte_val > 5 else '#ef553b'
+                dte_html  = (
+                    f'<div style="margin-top:6px;">'
+                    f'<div style="background:#1f2937;border-radius:4px;height:4px;width:140px;">'
+                    f'<div style="width:{pct:.0f}%;background:{bar_color};border-radius:4px;height:4px;"></div>'
+                    f'</div>'
+                    f'<div style="color:#6b7280;font-size:0.7rem;margin-top:3px;">{dte} to expiry</div>'
+                    f'</div>'
+                )
+            except: pass
+
+        legs_html += (
+            f'<div style="{leg_style}">'
+            f'  <div>'
+            f'    <div style="{LBL}">{pos_type}</div>'
+            f'    <div style="{VAL}">{detail}</div>'
+            f'    {dte_html}'
+            f'  </div>'
+            f'  <div style="text-align:right;flex-shrink:0;margin-left:12px;">'
+            f'    <div style="{LBL}">Basis</div>'
+            f'    <div style="{CHIP}">{basis}</div>'
+            f'  </div>'
+            f'</div>'
+        )
+
+    return (
+        f'<div style="{CARD}">'
+        f'  <div style="{HDR}">'
+        f'    <span style="{TICK}">{ticker}</span>'
+        f'    <span style="{badge_style}">{strat}</span>'
+        f'  </div>'
+        f'  {legs_html}'
+        f'</div>'
+    )
+
 def detect_strategy(ticker_df):
     types = [identify_pos_type(r) for _, r in ticker_df.iterrows()]
     ls = types.count('Long Stock');  sc = types.count('Short Call')
@@ -113,10 +324,8 @@ def detect_strategy(ticker_df):
     lp = types.count('Long Put')
     strikes  = ticker_df['Strike Price'].dropna().unique()
     exps     = ticker_df['Expiration Date'].dropna().unique()
-    # Calendar: same strike, different expirations
     if lc > 0 and sc > 0 and len(exps) >= 2 and len(strikes) == 1: return 'Calendar Spread'
     if lp > 0 and sp > 0 and len(exps) >= 2 and len(strikes) == 1: return 'Calendar Spread'
-    # Butterfly: 2 long + 1 short (x2), 3 strikes, same expiry
     if lc == 2 and sc == 1 and len(strikes) == 3 and len(exps) == 1: return 'Call Butterfly'
     if lp == 2 and sp == 1 and len(strikes) == 3 and len(exps) == 1: return 'Put Butterfly'
     if ls > 0 and sc > 0 and sp > 0:    return 'Covered Strangle'
@@ -125,13 +334,132 @@ def detect_strategy(ticker_df):
     if sc >= 1 and sp >= 1 and lp >= 1: return 'Big Lizard'
     if sc >= 1 and sp >= 1:             return 'Short Strangle'
     if lc >= 1 and sp >= 1:             return 'Risk Reversal'
-    if lc > 1  and sc > 0:             return 'Call Debit Spread'
+    if lc > 1  and sc > 0:              return 'Call Debit Spread'
     if sp > 0:  return 'Short Put'
     if lc > 0:  return 'Long Call'
     if ls > 0:  return 'Long Stock'
     return 'Custom/Mixed'
 
-# ── WHEEL CAMPAIGN ENGINE ──────────────────────────────────────────────────────
+# ── TRUE FIFO EQUITY P/L ───────────────────────────────────────────────────────
+def calculate_windowed_equity_pnl(df_full, start_date, end_date=None):
+    """
+    Calculates net equity P/L for sales occurring on or after start_date
+    and (optionally) on or before end_date.
+    Uses a per-ticker FIFO deque — oldest lot consumed first, with correct
+    partial lot handling. Processes ALL equity rows chronologically so cost
+    basis is always accurate regardless of when the buy occurred.
+    end_date is required for prior-period comparisons to avoid double-counting
+    sales that fall in the current window.
+    """
+    _eq_pnl = 0.0
+    fifo_queues = {}
+
+    equity_rows = df_full[df_full['Instrument Type'].str.strip() == 'Equity'].sort_values('Date')
+    for _, row in equity_rows.iterrows():
+        ticker = row['Ticker']
+        if ticker not in fifo_queues:
+            fifo_queues[ticker] = deque()
+
+        if row['Net_Qty_Row'] > 0:
+            # Buy — push lot onto queue as (qty, cost_per_share)
+            qty = row['Net_Qty_Row']
+            cost_per = abs(row['Total']) / qty if qty != 0 else 0
+            fifo_queues[ticker].append((qty, cost_per))
+
+        elif row['Net_Qty_Row'] < 0:
+            # Sell — consume oldest lots first (FIFO)
+            sell_qty      = abs(row['Net_Qty_Row'])
+            sell_proceeds = row['Total']
+            remaining     = sell_qty
+            sale_cost_basis = 0.0
+            q = fifo_queues[ticker]
+
+            while remaining > 0 and q:
+                b_qty, b_cost = q[0]
+                use = min(remaining, b_qty)
+                sale_cost_basis += use * b_cost
+                remaining -= use
+                if use == b_qty:
+                    q.popleft()          # lot fully consumed
+                else:
+                    q[0] = (b_qty - use, b_cost)  # partial lot — update in place
+
+            # Only count P/L if sale is inside the window (start_date..end_date)
+            in_window = row['Date'] >= start_date
+            if end_date is not None:
+                in_window = in_window and row['Date'] < end_date
+            if in_window:
+                _eq_pnl += (sell_proceeds - sale_cost_basis)
+
+    return _eq_pnl
+
+# ── DAILY REALIZED P/L (for period charts) ────────────────────────────────────
+def calculate_daily_realized_pnl(df_full, start_date):
+    """
+    Returns a DataFrame with columns [Date, PnL] representing realized P/L
+    by settlement date across the full portfolio:
+      - Options: full cash flow on the day (already realized at close/expiry)
+      - Equity sells: net gain/loss vs FIFO cost basis on the sale date
+      - Dividends + interest: cash received on the day
+    Share purchases are excluded — they are capital deployment, not P/L.
+    Only rows with Date >= start_date are returned, but ALL equity history
+    is processed so FIFO cost basis is always correct.
+    """
+    records = []
+    fifo_queues = {}
+
+    equity_rows = df_full[df_full['Instrument Type'].str.strip() == 'Equity'].sort_values('Date')
+    for _, row in equity_rows.iterrows():
+        ticker = row['Ticker']
+        if ticker not in fifo_queues:
+            fifo_queues[ticker] = deque()
+        if row['Net_Qty_Row'] > 0:
+            qty      = row['Net_Qty_Row']
+            cost_per = abs(row['Total']) / qty if qty != 0 else 0
+            fifo_queues[ticker].append((qty, cost_per))
+        elif row['Net_Qty_Row'] < 0:
+            sell_qty        = abs(row['Net_Qty_Row'])
+            sell_proceeds   = row['Total']
+            remaining       = sell_qty
+            sale_cost_basis = 0.0
+            q = fifo_queues[ticker]
+            while remaining > 0 and q:
+                b_qty, b_cost = q[0]
+                use = min(remaining, b_qty)
+                sale_cost_basis += use * b_cost
+                remaining -= use
+                if use == b_qty:
+                    q.popleft()
+                else:
+                    q[0] = (b_qty - use, b_cost)
+            if row['Date'] >= start_date:
+                records.append({'Date': row['Date'], 'PnL': sell_proceeds - sale_cost_basis})
+
+    # Options flows (all realized at trade/expiry date)
+    opt_rows = df_full[
+        df_full['Instrument Type'].isin(['Equity Option', 'Future Option']) &
+        df_full['Type'].isin(['Trade', 'Receive Deliver']) &
+        (df_full['Date'] >= start_date)
+    ]
+    for _, row in opt_rows.iterrows():
+        records.append({'Date': row['Date'], 'PnL': row['Total']})
+
+    # Dividends + interest
+    income_rows = df_full[
+        df_full['Sub Type'].isin(['Dividend', 'Credit Interest', 'Debit Interest']) &
+        (df_full['Date'] >= start_date)
+    ]
+    for _, row in income_rows.iterrows():
+        records.append({'Date': row['Date'], 'PnL': row['Total']})
+
+    if not records:
+        return pd.DataFrame(columns=['Date', 'PnL'])
+
+    daily = pd.DataFrame(records)
+    daily['Date'] = pd.to_datetime(daily['Date']).dt.tz_localize(None)
+    return daily.groupby('Date')['PnL'].sum().reset_index()
+
+
 
 WHEEL_MIN_SHARES = 100
 
@@ -139,43 +467,40 @@ def build_campaigns(df, ticker, use_lifetime=False):
     t = df[df['Ticker'] == ticker].copy()
     t['Sort_Inst'] = t['Instrument Type'].apply(lambda x: 0 if 'Equity' in str(x) and 'Option' not in str(x) else 1)
     t = t.sort_values(['Date', 'Sort_Inst'])
-    
+
     if use_lifetime:
         net_shares = 0
         for _, row in t.iterrows():
-             if is_share_row(row['Instrument Type']):
-                 net_shares += row['Net_Qty_Row']
-        
+            if is_share_row(row['Instrument Type']):
+                net_shares += row['Net_Qty_Row']
         if net_shares >= WHEEL_MIN_SHARES:
-             total_cost = 0.0; premiums = 0.0; dividends = 0.0; events = []
-             start_date = t['Date'].iloc[0]
-             
-             for _, row in t.iterrows():
-                 inst = str(row['Instrument Type']); total = row['Total']; sub_type = str(row['Sub Type'])
-                 if is_share_row(inst):
-                      if row['Net_Qty_Row'] > 0:
-                          total_cost += abs(total)
-                          events.append({'date': row['Date'], 'type': 'Entry/Add', 'detail': f"Bought {row['Net_Qty_Row']} shares", 'cash': total})
-                      else:
-                          total_cost -= abs(total)
-                          events.append({'date': row['Date'], 'type': 'Exit', 'detail': f"Sold {abs(row['Net_Qty_Row'])} shares", 'cash': total})
-                 elif is_option_row(inst):
-                      premiums += total
-                      events.append({'date': row['Date'], 'type': sub_type, 'detail': str(row['Description'])[:60], 'cash': total})
-                 elif sub_type == 'Dividend':
-                      dividends += total
-                      events.append({'date': row['Date'], 'type': 'Dividend', 'detail': 'Dividend', 'cash': total})
+            total_cost = 0.0; premiums = 0.0; dividends = 0.0; events = []
+            start_date = t['Date'].iloc[0]
+            for _, row in t.iterrows():
+                inst = str(row['Instrument Type']); total = row['Total']; sub_type = str(row['Sub Type'])
+                if is_share_row(inst):
+                    if row['Net_Qty_Row'] > 0:
+                        total_cost += abs(total)
+                        events.append({'date': row['Date'], 'type': 'Entry/Add', 'detail': f"Bought {row['Net_Qty_Row']} shares", 'cash': total})
+                    else:
+                        total_cost -= abs(total)
+                        events.append({'date': row['Date'], 'type': 'Exit', 'detail': f"Sold {abs(row['Net_Qty_Row'])} shares", 'cash': total})
+                elif is_option_row(inst):
+                    premiums += total
+                    events.append({'date': row['Date'], 'type': sub_type, 'detail': str(row['Description'])[:60], 'cash': total})
+                elif sub_type == 'Dividend':
+                    dividends += total
+                    events.append({'date': row['Date'], 'type': 'Dividend', 'detail': 'Dividend', 'cash': total})
+            net_lifetime_cash = t[t['Type'].isin(['Trade', 'Receive Deliver', 'Money Movement'])]['Total'].sum()
+            return [{
+                'ticker': ticker, 'total_shares': net_shares,
+                'total_cost': abs(net_lifetime_cash) if net_lifetime_cash < 0 else 0,
+                'blended_basis': abs(net_lifetime_cash)/net_shares if net_shares>0 else 0,
+                'premiums': premiums, 'dividends': dividends,
+                'exit_proceeds': 0, 'start_date': start_date, 'end_date': None,
+                'status': 'open', 'events': events
+            }]
 
-             net_lifetime_cash = t[t['Type'].isin(['Trade', 'Receive Deliver', 'Money Movement'])]['Total'].sum()
-             return [{
-                 'ticker': ticker, 'total_shares': net_shares,
-                 'total_cost': abs(net_lifetime_cash) if net_lifetime_cash < 0 else 0,
-                 'blended_basis': abs(net_lifetime_cash)/net_shares if net_shares>0 else 0,
-                 'premiums': premiums, 'dividends': dividends,
-                 'exit_proceeds': 0, 'start_date': start_date, 'end_date': None,
-                 'status': 'open', 'events': events
-             }]
-             
     campaigns = []; current = None; running_shares = 0.0
     for _, row in t.iterrows():
         inst = str(row['Instrument Type']); qty = row['Net_Qty_Row']
@@ -290,12 +615,10 @@ def build_closed_trades(df, campaign_windows=None):
             w_call = (call_strikes.max() - call_strikes.min()) * 100 if len(call_strikes) >= 2 else 0
             w_put  = (put_strikes.max()  - put_strikes.min())  * 100 if len(put_strikes)  >= 2 else 0
 
-            # Calendar spread: same strike(s), different expirations
             expirations = grp['Expiration Date'].dropna().unique()
             strikes_all = grp['Strike Price'].dropna().unique()
             is_calendar = len(expirations) >= 2 and len(strikes_all) == 1
 
-            # Butterfly: 2 long legs + 1 short leg (x2 qty), same type, 3 strikes, equal wings
             short_opens_sp = opens[opens['Net_Qty_Row'] < 0]
             long_opens_sp  = opens[opens['Net_Qty_Row'] > 0]
             n_short_legs   = len(short_opens_sp)
@@ -306,8 +629,6 @@ def build_closed_trades(df, campaign_windows=None):
                             short_qty_total == 2 and long_qty_total == 2 and
                             len(strikes_all) == 3 and len(expirations) == 1)
 
-            # Jade Lizard: short put + short call spread (sc + lc at higher strike), no put spread
-            # Structure: 1 short put (no long put) + 1 short call + 1 long call above it
             short_cp = short_opens_sp['Call or Put'].dropna().str.upper().tolist()
             long_cp  = long_opens_sp['Call or Put'].dropna().str.upper().tolist()
             has_short_put_only  = any('PUT'  in c for c in short_cp) and not any('PUT'  in c for c in long_cp)
@@ -315,30 +636,24 @@ def build_closed_trades(df, campaign_windows=None):
             is_jade_lizard = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1
 
             if is_butterfly:
-                if len(call_strikes.unique()) == 3:
-                    trade_type = 'Call Butterfly'
-                else:
-                    trade_type = 'Put Butterfly'
+                trade_type = 'Call Butterfly' if len(call_strikes.unique()) == 3 else 'Put Butterfly'
                 wing_width = (strikes_all.max() - strikes_all.min()) * 100 / 2
                 capital_risk = max(abs(open_credit), wing_width, 1)
             elif is_jade_lizard:
                 trade_type   = 'Jade Lizard'
-                spread_width = w_call
-                capital_risk = max(spread_width - abs(open_credit), 1)
+                capital_risk = max(w_call - abs(open_credit), 1)
             elif is_calendar:
                 trade_type   = 'Calendar Spread'
                 capital_risk = max(abs(open_credit), 1)
             elif w_call > 0 and w_put > 0:
-                trade_type, spread_width = 'Iron Condor', max(w_call, w_put)
-                capital_risk = max(spread_width - abs(open_credit), 1)
+                trade_type   = 'Iron Condor'
+                capital_risk = max(max(w_call, w_put) - abs(open_credit), 1)
             elif w_call > 0:
                 trade_type   = 'Call Credit Spread' if is_credit else 'Call Debit Spread'
-                spread_width = w_call
-                capital_risk = max(spread_width - abs(open_credit), 1)
+                capital_risk = max(w_call - abs(open_credit), 1)
             else:
                 trade_type   = 'Put Credit Spread' if is_credit else 'Put Debit Spread'
-                spread_width = w_put
-                capital_risk = max(spread_width - abs(open_credit), 1)
+                capital_risk = max(w_put - abs(open_credit), 1)
         else:
             strikes      = grp['Strike Price'].dropna().tolist()
             capital_risk = max(strikes) * 100 if strikes else 1
@@ -352,7 +667,6 @@ def build_closed_trades(df, campaign_windows=None):
             has_lp = any('PUT'  in c for c in cp_longs)
             n_contracts = int(abs(opens['Net_Qty_Row'].sum()))
             if not is_credit:
-                # Debit single-leg longs
                 if has_lc and not has_lp: trade_type = 'Long Call'
                 elif has_lp and not has_lc: trade_type = 'Long Put'
                 else: trade_type = 'Long Strangle'
@@ -360,8 +674,6 @@ def build_closed_trades(df, campaign_windows=None):
                 if has_sc and has_sp:
                     all_strikes = grp['Strike Price'].dropna().unique()
                     trade_type = 'Short Straddle' if len(all_strikes) == 1 else 'Short Strangle'
-
-                    # Check if we hold shares to make it a 'Covered' Strangle/Straddle
                     windows = campaign_windows.get(ticker, [])
                     in_campaign = any(s <= open_date <= e for s, e in windows)
                     if in_campaign:
@@ -369,16 +681,13 @@ def build_closed_trades(df, campaign_windows=None):
                 elif has_sc:
                     windows = campaign_windows.get(ticker, [])
                     in_campaign = any(s <= open_date <= e for s, e in windows)
-                    if in_campaign:
-                        trade_type = 'Covered Call'
-                    else:
-                        trade_type = 'Short Call' if n_contracts == 1 else 'Short Call (x%d)' % n_contracts
+                    trade_type = 'Covered Call' if in_campaign else (
+                        'Short Call' if n_contracts == 1 else 'Short Call (x%d)' % n_contracts)
                 elif has_sp:
                     trade_type = 'Short Put' if n_contracts == 1 else 'Short Put (x%d)' % n_contracts
                 else:
                     trade_type = 'Short (other)'
 
-        # DTE at open: days from open_date to nearest expiration of the opening legs
         try:
             exp_dates = opens['Expiration Date'].dropna()
             if not exp_dates.empty:
@@ -389,13 +698,16 @@ def build_closed_trades(df, campaign_windows=None):
         except: dte_open = None
 
         closed_list.append({
-            'Ticker': ticker, 'Trade Type': trade_type, 'Type': 'Call' if 'CALL' in cp else 'Put' if 'PUT' in cp else 'Mixed',
+            'Ticker': ticker, 'Trade Type': trade_type,
+            'Type': 'Call' if 'CALL' in cp else 'Put' if 'PUT' in cp else 'Mixed',
             'Spread': n_long > 0, 'Is Credit': is_credit, 'Days Held': days_held,
             'Open Date': open_date, 'Close Date': close_date, 'Premium Rcvd': open_credit,
             'Net P/L': net_pnl, 'Capture %': net_pnl / open_credit * 100 if is_credit else None,
-            'Capital Risk': capital_risk, 'Ann Return %': max(min(net_pnl / capital_risk * 365 / days_held * 100, 500), -500) if (is_credit and capital_risk > 0) else None,
-            'Prem/Day': open_credit / days_held if is_credit else None, 'Won': net_pnl > 0,
-            'DTE Open': dte_open,
+            'Capital Risk': capital_risk,
+            'Ann Return %': max(min(net_pnl / capital_risk * 365 / days_held * 100, 500), -500)
+                if (is_credit and capital_risk > 0) else None,
+            'Prem/Day': open_credit / days_held if is_credit else None,
+            'Won': net_pnl > 0, 'DTE Open': dte_open,
         })
     return pd.DataFrame(closed_list)
 
@@ -424,7 +736,8 @@ def build_option_chains(ticker_opts):
             qty = row['Net_Qty_Row']
             event = {
                 'date': row['Date'], 'sub_type': row['Sub Type'],
-                'strike': row['Strike Price'], 'exp': pd.to_datetime(row['Expiration Date']).strftime('%d/%m/%y') if pd.notna(row['Expiration Date']) else '',
+                'strike': row['Strike Price'],
+                'exp': pd.to_datetime(row['Expiration Date']).strftime('%d/%m/%y') if pd.notna(row['Expiration Date']) else '',
                 'qty': qty, 'total': row['Total'], 'cp': cp_type,
                 'desc': str(row['Description'])[:55],
             }
@@ -448,14 +761,14 @@ def build_option_chains(ticker_opts):
 
 # ── MAIN APP ───────────────────────────────────────────────────────────────────
 
-st.title('📟 TastyMechanics v24')
+st.title('📟 TastyMechanics v25.3')
 
 with st.sidebar:
     st.header('⚙️ Data Control')
     uploaded_file = st.file_uploader('Upload TastyTrade History CSV', type='csv')
     st.markdown('---')
     st.header('🎯 Campaign Settings')
-    use_lifetime = st.toggle('Show Lifetime "House Money"', value=False, 
+    use_lifetime = st.toggle('Show Lifetime "House Money"', value=False,
         help='If ON, combines ALL history for a ticker into one campaign. If OFF, resets breakeven every time shares hit zero.')
 
 if not uploaded_file:
@@ -522,6 +835,24 @@ for name, group in groups:
             'Cost Basis': group['Total'].sum() * -1})
 df_open = pd.DataFrame(open_records)
 
+# ── expiry alert data (computed here, rendered after metrics) ─────────────────
+_expiry_alerts = []
+if not df_open.empty:
+    _opts_open = df_open[df_open['Instrument Type'].str.contains('Option', na=False)].copy()
+    if not _opts_open.empty and _opts_open['Expiration Date'].notna().any():
+        _opts_open['_exp_dt'] = pd.to_datetime(_opts_open['Expiration Date'], format='mixed', errors='coerce')
+        _opts_open = _opts_open.dropna(subset=['_exp_dt'])
+        _opts_open['_dte'] = (_opts_open['_exp_dt'] - latest_date.replace(tzinfo=None)).dt.days.clip(lower=0)
+        for _, r in _opts_open[_opts_open['_dte'] <= 21].sort_values('_dte').iterrows():
+            cp   = str(r.get('Call or Put','')).upper()
+            side = 'C' if 'CALL' in cp else 'P'
+            _expiry_alerts.append({
+                'ticker': r['Ticker'],
+                'label':  '%.0f%s' % (r['Strike Price'], side),
+                'dte':    int(r['_dte']),
+                'qty':    int(r['Net_Qty']),
+            })
+
 # ── wheel campaigns ────────────────────────────────────────────────────────────
 
 wheel_tickers = []
@@ -536,13 +867,11 @@ for ticker in wheel_tickers:
     camps = build_campaigns(df, ticker, use_lifetime=use_lifetime)
     if camps: all_campaigns[ticker] = camps
 
-all_tickers           = [t for t in df['Ticker'].unique() if t != 'CASH']
+all_tickers          = [t for t in df['Ticker'].unique() if t != 'CASH']
 pure_options_tickers = [t for t in all_tickers if t not in wheel_tickers]
 
 # ── derivatives metrics ────────────────────────────────────────────────────────
 
-
-# Build campaign windows for covered call detection
 _camp_windows = {}
 for _t, _camps in all_campaigns.items():
     _camp_windows[_t] = [(_c["start_date"], _c["end_date"] or latest_date) for _c in _camps]
@@ -557,65 +886,72 @@ closed_camp_pnl      = sum(realized_pnl(c, use_lifetime) for camps in all_campai
                            for c in camps if c['status'] == 'closed')
 open_premiums_banked = sum(realized_pnl(c, use_lifetime) for camps in all_campaigns.values()
                            for c in camps if c['status'] == 'open')
-capital_deployed     = sum(c['total_cost'] for camps in all_campaigns.values()
+capital_deployed     = sum(c['total_shares'] * c['blended_basis'] for camps in all_campaigns.values()
                            for c in camps if c['status'] == 'open')
 
 pure_opts_pnl = 0.0
-extra_capital_deployed = 0.0 # NEW: Capture cost of fractional shares
+extra_capital_deployed = 0.0  # Cost of fractional/standalone share holdings
 
 for t in pure_options_tickers:
-    # UPDATED LOGIC: Check if we hold shares. If so, move cost to Capital Deployed.
     t_df = df[df['Ticker'] == t]
     mask = (df['Ticker']==t) & (df['Type'].isin(['Trade','Receive Deliver']))
     total_flow = df.loc[mask, 'Total'].sum()
-    
-    # Check net shares for this "pure" ticker
-    s_mask = t_df['Instrument Type'].str.contains('Equity', na=False) & ~t_df['Instrument Type'].str.contains('Option', na=False)
-    net_shares = t_df[s_mask]['Net_Qty_Row'].sum()
-    
+    s_mask = t_df['Instrument Type'].str.contains('Equity', na=False) & \
+             ~t_df['Instrument Type'].str.contains('Option', na=False)
+    eq_rows = t_df[s_mask & t_df['Type'].isin(['Trade','Receive Deliver'])]
+    net_shares = eq_rows['Net_Qty_Row'].sum()
     if net_shares > 0.0001:
-        # We hold shares. Calculate the cost (negative equity flow)
-        equity_flow = t_df[(t_df['Instrument Type'].str.contains('Equity', na=False)) & (t_df['Type'].isin(['Trade','Receive Deliver']))]['Total'].sum()
+        # Use net_shares x avg cost so Capital Deployed reflects only shares still held
+        total_bought   = eq_rows[eq_rows['Net_Qty_Row'] > 0]['Net_Qty_Row'].sum()
+        total_buy_cost = eq_rows[eq_rows['Net_Qty_Row'] > 0]['Total'].apply(abs).sum()
+        avg_cost = total_buy_cost / total_bought if total_bought > 0 else 0
+        deployed = net_shares * avg_cost
+        equity_flow = eq_rows['Total'].sum()
         if equity_flow < 0:
-            # Add back the cost to P/L (so it's not a loss)
             pure_opts_pnl += (total_flow + abs(equity_flow))
-            # Add the cost to Capital Deployed
-            extra_capital_deployed += abs(equity_flow)
+            extra_capital_deployed += deployed
         else:
             pure_opts_pnl += total_flow
     else:
         pure_opts_pnl += total_flow
 
-# Also add extra capital to the wheel campaigns cost if needed, but wheel campaigns handle it internally.
-# But pure_options_pnl loop above handles tickers NOT in wheel_tickers list.
-# What about pre-campaign options for wheel tickers?
 for ticker, camps in all_campaigns.items():
     pure_opts_pnl += pure_options_pnl(df, ticker, camps)
 
 total_realized_pnl = closed_camp_pnl + open_premiums_banked + pure_opts_pnl
-capital_deployed += extra_capital_deployed
+capital_deployed  += extra_capital_deployed
 
-# ── Windowed P/L (respects time window selector) ───────────────────────────
+# ── Windowed P/L (respects time window selector) ──────────────────────────────
 # Options: sum all option cash flows in the window (credits + debits)
-# Equity: for each sale in the window, calculate net P/L using FIFO cost basis
-# from the most recent prior buy — avoids counting gross proceeds as pure profit
+# Equity: FIFO cost basis via calculate_windowed_equity_pnl() — oldest lot first,
+#         partial lot splits handled correctly, pre-window buys tracked
 _w_opts = df_window[df_window['Instrument Type'].isin(['Equity Option','Future Option']) &
                     (df_window['Type'].isin(['Trade','Receive Deliver']))]
 
-_eq_df   = df[df['Instrument Type']=='Equity'].copy()
-_eq_buys = _eq_df[_eq_df['Net_Qty_Row'] > 0].sort_values('Date')
-_w_eq_sales = df_window[(df_window['Instrument Type']=='Equity') & (df_window['Net_Qty_Row'] < 0)]
-
-_eq_pnl = 0.0
-for _, _sale in _w_eq_sales.iterrows():
-    _prior = _eq_buys[(_eq_buys['Ticker']==_sale['Ticker']) & (_eq_buys['Date'] < _sale['Date'])]
-    if not _prior.empty:
-        _cost_per_sh = abs(_prior.iloc[-1]['Total'] / _prior.iloc[-1]['Net_Qty_Row'])
-        _eq_pnl += _sale['Total'] - (_cost_per_sh * abs(_sale['Net_Qty_Row']))
-    else:
-        _eq_pnl += _sale['Total']  # no prior buy found — use proceeds as fallback
+_eq_pnl = calculate_windowed_equity_pnl(df, start_date)
 
 window_realized_pnl = _w_opts['Total'].sum() + _eq_pnl
+
+# ── Prior period P/L (for WoW / MoM comparison card) ─────────────────────────
+_window_span = latest_date - start_date
+_prior_end   = start_date
+_prior_start = _prior_end - _window_span
+_df_prior    = df[(df['Date'] >= _prior_start) & (df['Date'] < _prior_end)].copy()
+_prior_opts  = _df_prior[_df_prior['Instrument Type'].isin(['Equity Option','Future Option']) &
+                          _df_prior['Type'].isin(['Trade','Receive Deliver'])]['Total'].sum()
+_prior_eq    = calculate_windowed_equity_pnl(df, _prior_start, end_date=_prior_end)
+prior_period_pnl = _prior_opts + _prior_eq
+prior_period_trades = 0
+if not closed_trades_df.empty:
+    prior_period_trades = closed_trades_df[
+        (closed_trades_df['Close Date'] >= _prior_start) &
+        (closed_trades_df['Close Date'] < _prior_end)
+    ].shape[0]
+current_period_trades = 0
+if not closed_trades_df.empty:
+    current_period_trades = closed_trades_df[
+        closed_trades_df['Close Date'] >= start_date
+    ].shape[0]
 
 # Income
 div_income = df_window[df_window['Sub Type']=='Dividend']['Total'].sum()
@@ -636,11 +972,16 @@ realized_ror    = total_realized_pnl / net_deposited * 100 if net_deposited > 0 
 # ── TOP METRICS ────────────────────────────────────────────────────────────────
 
 st.markdown('### 📊 Portfolio Overview')
-_is_all_time = selected_period == 'All Time'
+_is_all_time    = selected_period == 'All Time'
 _is_short_window = selected_period in ['Last 5 Days', 'Last Month', 'Last 3 Months']
-_pnl_display = total_realized_pnl if _is_all_time else window_realized_pnl
-_ror_display = _pnl_display / net_deposited * 100 if net_deposited > 0 else 0.0
-m1, m2, m3, m4, m5, m6 = st.columns(6)
+_pnl_display    = total_realized_pnl if _is_all_time else window_realized_pnl
+_ror_display    = _pnl_display / net_deposited * 100 if net_deposited > 0 else 0.0
+# Capital Efficiency Score — annualised return on capital currently deployed
+# Uses window P/L and window days so it responds to time selector
+_window_days_int = max((latest_date - start_date).days, 1)
+cap_eff_score = (_pnl_display / capital_deployed / _window_days_int * 365 * 100)     if capital_deployed > 0 else 0.0
+
+m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
 m1.metric('Realized P/L',    '$%.2f' % _pnl_display)
 m1.caption('All cash actually banked — options P/L, share sales, premiums collected. Filtered to selected time window. Unrealised share P/L not included.')
 m2.metric('Realized ROR',    '%.1f%%' % _ror_display)
@@ -655,14 +996,16 @@ if _is_short_window:
         'This can make an actively managed period look like a loss even when the underlying trades are profitable. '
         '**All Time or YTD give the most reliable P/L picture.**'
     )
-m3.metric('Capital Deployed','$%.2f' % capital_deployed)
-m3.caption('Cash tied up in open share positions (wheel campaigns + any fractional holdings). Options margin not included.')
-m4.metric('Margin Loan',     '$%.2f' % margin_loan)
-m4.caption('Negative cash balance — what you currently owe the broker. Zero is ideal unless deliberately leveraging.')
-m5.metric('Div + Interest',  '$%.2f' % (div_income + int_net))
-m5.caption('Dividends received plus net interest (credit earned minus debit charged on margin). Filtered to selected time window.')
-m6.metric('Account Age',     '%d days' % account_days)
-m6.caption('Days since your first transaction. Useful context for how long your track record covers.')
+m3.metric('Cap Efficiency',  '%.1f%%' % cap_eff_score)
+m3.caption('Annualised return on capital deployed in shares — (Realized P/L ÷ Capital Deployed) × 365. Benchmark: S&P ~10%/yr. Shows if your wheel is outperforming simple buy-and-hold on the same capital.')
+m4.metric('Capital Deployed','$%.2f' % capital_deployed)
+m4.caption('Cash tied up in open share positions (wheel campaigns + any fractional holdings). Options margin not included.')
+m5.metric('Margin Loan',     '$%.2f' % margin_loan)
+m5.caption('Negative cash balance — what you currently owe the broker. Zero is ideal unless deliberately leveraging.')
+m6.metric('Div + Interest',  '$%.2f' % (div_income + int_net))
+m6.caption('Dividends received plus net interest (credit earned minus debit charged on margin). Filtered to selected time window.')
+m7.metric('Account Age',     '%d days' % account_days)
+m7.caption('Days since your first transaction. Useful context for how long your track record covers.')
 
 with st.expander('💡 Realized P/L Breakdown', expanded=False):
     b1, b2, b3, b4 = st.columns(4)
@@ -677,17 +1020,104 @@ with st.expander('💡 Realized P/L Breakdown', expanded=False):
         b4.caption('Sum of all three above. The single number that matters — real cash generated by your trading.')
     else:
         _w_opts_only = _w_opts['Total'].sum()
-        _w_eq_only   = _w_eq_sales['Total'].sum()
-        b1.metric('Options P/L',   '$%.2f' % _w_opts_only)
+        b1.metric('Options P/L',      '$%.2f' % _w_opts_only)
         b1.caption('Net cash from all option transactions in the window — credits received minus buyback costs, expirations, assignments.')
-        b2.metric('Equity Sales P/L',    '$%.2f' % _w_eq_only)
-        b2.caption('Net cash from share sales in the window. Purchases excluded — unrealised until sold.')
-        b3.metric('Div + Interest','$%.2f' % (div_income + int_net))
+        b2.metric('Equity Sales P/L', '$%.2f' % _eq_pnl)
+        b2.caption('Net profit from share sales in the window (FIFO cost basis applied). Purchases excluded — unrealised until sold.')
+        b3.metric('Div + Interest',   '$%.2f' % (div_income + int_net))
         b3.caption('Dividends received plus net interest in the window.')
-        b4.metric('Total',          '$%.2f' % _pnl_display)
-        b4.caption("Sum of options and equity cash flows in the selected window. Matches TastyTrade's cash-flow view.")
+        b4.metric('Total',            '$%.2f' % _pnl_display)
+        b4.caption('Sum of options and equity P/L in the selected window.')
 
-# ── Sparkline equity curve ───────────────────────────────────────────────────
+# ── Expiry Alert Strip ─────────────────────────────────────────────────────────
+if _expiry_alerts:
+    def _dte_chip(a):
+        dte = a['dte']
+        if dte <= 5:
+            bg, fg = 'rgba(239,85,59,0.15)', '#ef553b'
+            label = '🔴 %dd' % dte
+        elif dte <= 14:
+            bg, fg = 'rgba(255,165,0,0.12)', '#ffa500'
+            label = '🟡 %dd' % dte
+        else:
+            bg, fg = 'rgba(0,204,150,0.1)', '#00cc96'
+            label = '🟢 %dd' % dte
+        return (
+            f'<span style="display:inline-flex;align-items:center;gap:6px;'
+            f'background:{bg};border:1px solid {fg}33;border-radius:8px;'
+            f'padding:5px 12px;margin:3px 4px;font-size:0.82rem;">'
+            f'<span style="color:{fg};font-weight:600;font-family:monospace;">{label}</span>'
+            f'<span style="color:#8b949e;">{a["ticker"]}</span>'
+            f'<span style="color:#c9d1d9;font-family:monospace;">{a["label"]}</span>'
+            f'</span>'
+        )
+
+    chips = ''.join(_dte_chip(a) for a in _expiry_alerts)
+    st.markdown(
+        f'<div style="background:#0f1520;border:1px solid #1f2937;border-radius:10px;'
+        f'padding:10px 14px;margin:12px 0 20px 0;">'
+        f'<div style="color:#6b7280;font-size:0.72rem;text-transform:uppercase;'
+        f'letter-spacing:0.06em;margin-bottom:6px;">⏰ Expiring within 21 days</div>'
+        f'<div style="display:flex;flex-wrap:wrap;">{chips}</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+# ── Period Comparison Card ─────────────────────────────────────────────────────
+if selected_period != 'All Time' and not _df_prior.empty:
+    _pnl_delta  = _pnl_display - prior_period_pnl
+    _delta_sign = '+' if _pnl_delta >= 0 else ''
+    _delta_col  = '#00cc96' if _pnl_delta >= 0 else '#ef553b'
+    _arrow      = '▲' if _pnl_delta >= 0 else '▼'
+    _period_lbl = selected_period.replace('Last ','').replace('YTD','Year-to-date')
+
+    def _cmp_block(label, curr, prev, is_pct=False):
+        delta = curr - prev
+        dcol  = '#00cc96' if delta >= 0 else '#ef553b'
+        dsign = '+' if delta >= 0 else ''
+        if is_pct:
+            curr_str  = f'{curr:.1f}%'
+            delta_str = f'{dsign}{delta:.1f}%'
+        else:
+            curr_str  = f'${curr:,.2f}' if curr >= 0 else f'-${abs(curr):,.2f}'
+            delta_str = (f'{dsign}${delta:,.2f}' if delta >= 0 else f'-${abs(delta):,.2f}')
+        return (
+            f'<div style="flex:1;min-width:120px;padding:0 16px;border-right:1px solid #1f2937;">'
+            f'<div style="color:#6b7280;font-size:0.7rem;text-transform:uppercase;'
+            f'letter-spacing:0.05em;margin-bottom:4px;">{label}</div>'
+            f'<div style="font-family:monospace;font-size:1.05rem;color:#e6edf3;">{curr_str}</div>'
+            f'<div style="font-size:0.78rem;color:{dcol};margin-top:2px;">{delta_str} vs prior</div>'
+            f'</div>'
+        )
+
+    _curr_wr, _prev_wr = 0.0, 0.0
+    if not closed_trades_df.empty:
+        _cw = closed_trades_df[closed_trades_df['Close Date'] >= start_date]
+        _pw = closed_trades_df[(closed_trades_df['Close Date'] >= _prior_start) &
+                               (closed_trades_df['Close Date'] < _prior_end)]
+        _curr_wr = _cw['Won'].mean() * 100 if not _cw.empty else 0.0
+        _prev_wr = _pw['Won'].mean() * 100 if not _pw.empty else 0.0
+
+    _curr_div = df_window[df_window['Sub Type']=='Dividend']['Total'].sum()
+    _prev_div = _df_prior[_df_prior['Sub Type']=='Dividend']['Total'].sum()
+
+    blocks = (
+        _cmp_block('Realized P/L', _pnl_display, prior_period_pnl) +
+        _cmp_block('Trades Closed', current_period_trades, prior_period_trades, is_pct=False) +
+        _cmp_block('Win Rate', _curr_wr, _prev_wr, is_pct=True) +
+        _cmp_block('Dividends', _curr_div, _prev_div)
+    )
+
+    st.markdown(
+        f'<div style="background:linear-gradient(135deg,#111827,#0f1520);border:1px solid #1f2937;'
+        f'border-radius:10px;padding:14px 18px;margin:0 0 20px 0;">'
+        f'<div style="color:#8b949e;font-size:0.72rem;text-transform:uppercase;'
+        f'letter-spacing:0.06em;margin-bottom:10px;">'
+        f'📅 {selected_period} vs prior {_period_lbl}</div>'
+        f'<div style="display:flex;flex-wrap:wrap;gap:0;">{blocks}</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
 if not closed_trades_df.empty:
     _spark_df = closed_trades_df[closed_trades_df['Close Date'] >= start_date].sort_values('Close Date').copy()
     if _spark_df.empty:
@@ -695,7 +1125,6 @@ if not closed_trades_df.empty:
     _spark_df['Cum P/L'] = _spark_df['Net P/L'].cumsum()
     _spark_color = '#00cc96' if _spark_df['Cum P/L'].iloc[-1] >= 0 else '#ef553b'
     _fill_color  = 'rgba(0,204,150,0.15)' if _spark_color == '#00cc96' else 'rgba(239,85,59,0.15)'
-    import plotly.graph_objects as go
     _fig_spark = go.Figure()
     _fig_spark.add_trace(go.Scatter(
         x=_spark_df['Close Date'], y=_spark_df['Cum P/L'],
@@ -705,8 +1134,8 @@ if not closed_trades_df.empty:
     ))
     _fig_spark.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
     _fig_spark.update_layout(
-        height=80, margin=dict(l=0, r=0, t=0, b=0),
-        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        height=90, margin=dict(l=0, r=0, t=4, b=4),
+        paper_bgcolor='rgba(10,14,23,0)', plot_bgcolor='rgba(10,14,23,0)',
         xaxis=dict(visible=False), yaxis=dict(visible=False),
         showlegend=False
     )
@@ -714,7 +1143,7 @@ if not closed_trades_df.empty:
 
 st.markdown('---')
 
-# ── TABS (full width) ──────────────────────────────────────────────────────────
+# ── TABS ───────────────────────────────────────────────────────────────────────
 tab0, tab1, tab2, tab3, tab4 = st.tabs([
     '📡 Open Positions',
     '📈 Derivatives Performance',
@@ -735,32 +1164,53 @@ with tab0:
         def calc_dte(row):
             if not is_option_row(str(row['Instrument Type'])) or pd.isna(row['Expiration Date']): return 'N/A'
             try:
-                exp  = pd.to_datetime(row['Expiration Date']).tz_localize(latest_date.tzinfo)
+                exp = pd.to_datetime(row['Expiration Date']).tz_localize(None).tz_localize(latest_date.tzinfo)
                 return '%dd' % max((exp - latest_date).days, 0)
             except: return 'N/A'
 
         df_open['DTE'] = df_open.apply(calc_dte, axis=1)
         tickers_open = [t for t in sorted(df_open['Ticker'].unique()) if t != 'CASH']
-        cols = st.columns(3)
+
+        # Summary strip — count of positions and strategies
+        n_options = df_open[df_open['Instrument Type'].str.contains('Option', na=False)].shape[0]
+        n_shares  = df_open[df_open['Instrument Type'].str.strip() == 'Equity'].shape[0]
+        strategies = [detect_strategy(df_open[df_open['Ticker']==t]) for t in tickers_open]
+        unique_strats = list(dict.fromkeys(strategies))  # preserve order
+
+        summary_pills = ''.join(
+            f'<span style="display:inline-block;background:rgba(88,166,255,0.1);border:1px solid rgba(88,166,255,0.2);'
+            f'border-radius:20px;padding:2px 10px;font-size:0.75rem;color:#58a6ff;margin-right:6px;margin-bottom:6px;">{s}</span>'
+            for s in unique_strats
+        )
+        st.markdown(
+            f'<div style="margin-bottom:20px;color:#6b7280;font-size:0.85rem;">'
+            f'<b style="color:#8b949e">{len(tickers_open)}</b> tickers &nbsp;·&nbsp; '
+            f'<b style="color:#8b949e">{n_options}</b> option legs &nbsp;·&nbsp; '
+            f'<b style="color:#8b949e">{n_shares}</b> share positions'
+            f'</div>'
+            f'<div style="margin-bottom:24px;">{summary_pills}</div>',
+            unsafe_allow_html=True
+        )
+
+        # 2-column card grid
+        col_a, col_b = st.columns(2, gap='medium')
         for i, ticker in enumerate(tickers_open):
-            with cols[i % 3]:
-                t_df = df_open[df_open['Ticker'] == ticker].copy()
-                with st.expander('%s — %s' % (ticker, detect_strategy(t_df)), expanded=True):
-                    show = t_df[['Status','Details','DTE','Cost Basis']].sort_values('Status')
-                    show.columns = ['Type','Position','DTE','Basis']
-                    st.dataframe(show.style.format({'Basis': format_cost_basis}),
-                        width='stretch', hide_index=True)
+            t_df = df_open[df_open['Ticker'] == ticker].copy()
+            card_html = render_position_card(ticker, t_df)
+            if i % 2 == 0:
+                col_a.markdown(card_html, unsafe_allow_html=True)
+            else:
+                col_b.markdown(card_html, unsafe_allow_html=True)
 
-
-# ── Tab 1: Derivatives Performance ────────────────────────────────────────
+# ── Tab 1: Derivatives Performance ────────────────────────────────────────────
 with tab1:
     if closed_trades_df.empty:
         st.info('No closed trades found.')
     else:
-        all_cdf = window_trades_df if not window_trades_df.empty else closed_trades_df
+        all_cdf    = window_trades_df if not window_trades_df.empty else closed_trades_df
         credit_cdf = all_cdf[all_cdf['Is Credit']].copy() if not all_cdf.empty else pd.DataFrame()
         has_credit = not credit_cdf.empty
-        has_data = not all_cdf.empty
+        has_data   = not all_cdf.empty
 
         st.info(window_label)
         st.markdown('#### 🎯 Premium Selling Scorecard')
@@ -779,17 +1229,49 @@ with tab1:
         )
         dm1, dm2, dm3, dm4, dm5, dm6 = st.columns(6)
         if has_credit:
-            total_credit_rcvd = credit_cdf['Premium Rcvd'].sum()
+            total_credit_rcvd    = credit_cdf['Premium Rcvd'].sum()
             total_net_pnl_closed = credit_cdf['Net P/L'].sum()
             window_days = max((latest_date - start_date).days, 1)
-            dm1.metric('Win Rate', '%.1f%%' % (credit_cdf['Won'].mean() * 100))
-            dm2.metric('Median Capture %', '%.1f%%' % credit_cdf['Capture %'].median())
-            dm3.metric('Median Days Held', '%.0f' % credit_cdf['Days Held'].median())
+            dm1.metric('Win Rate',           '%.1f%%' % (credit_cdf['Won'].mean() * 100))
+            dm2.metric('Median Capture %',   '%.1f%%' % credit_cdf['Capture %'].median())
+            dm3.metric('Median Days Held',   '%.0f'   % credit_cdf['Days Held'].median())
             dm4.metric('Median Ann. Return', '%.0f%%' % credit_cdf['Ann Return %'].median())
-            dm5.metric('Med Premium/Day', '$%.2f' % credit_cdf['Prem/Day'].median())
+            dm5.metric('Med Premium/Day',    '$%.2f'  % credit_cdf['Prem/Day'].median())
             dm6.metric('Banked $/Day', '$%.2f' % (total_net_pnl_closed / window_days),
                 delta='vs $%.2f gross' % (total_credit_rcvd / window_days),
                 delta_color='normal')
+
+            # ── Row 2: Avg Winner / Avg Loser / Fees ──────────────────────
+            _winners = all_cdf[all_cdf['Net P/L'] > 0]['Net P/L']
+            _losers  = all_cdf[all_cdf['Net P/L'] < 0]['Net P/L']
+            _avg_win  = _winners.mean() if not _winners.empty else 0.0
+            _avg_loss = _losers.mean()  if not _losers.empty  else 0.0
+            _ratio    = abs(_avg_win / _avg_loss) if _avg_loss != 0 else 0.0
+
+            # Fees: commissions + fees on all option trades in window
+            _w_option_rows = df_window[
+                df_window['Instrument Type'].isin(['Equity Option','Future Option']) &
+                df_window['Type'].isin(['Trade','Receive Deliver'])
+            ]
+            _total_fees = (_w_option_rows['Commissions'].apply(abs).sum() +
+                           _w_option_rows['Fees'].apply(abs).sum())
+            _fees_pct   = (_total_fees / abs(total_net_pnl_closed) * 100
+                           if total_net_pnl_closed != 0 else 0.0)
+
+            st.markdown('---')
+            r1, r2, r3, r4, r5, r6 = st.columns(6)
+            r1.metric('Avg Winner',   '$%.2f' % _avg_win)
+            r1.caption('Mean P/L of all winning trades. Compare to Avg Loser — you want this number meaningfully larger.')
+            r2.metric('Avg Loser',    '$%.2f' % _avg_loss)
+            r2.caption('Mean P/L of all losing trades. A healthy system has avg loss smaller than avg win, even at high win rates.')
+            r3.metric('Win/Loss Ratio', '%.2fx' % _ratio)
+            r3.caption('Avg Winner ÷ Avg Loser. Above 1.0 means your wins are larger than your losses on average. TastyTrade targets >1.0 at lower win rates, or compensates with high win rate if below 1.0.')
+            r4.metric('Total Fees',   '$%.2f' % _total_fees)
+            r4.caption('Commissions + exchange fees on option trades in this window. The silent drag on every trade.')
+            r5.metric('Fees % of P/L', '%.1f%%' % _fees_pct)
+            r5.caption('Total fees as a percentage of net realized P/L. Under 10%% is healthy. High on 0DTE or frequent small trades — fees eat a larger slice of smaller credits.')
+            r6.metric('Fees/Trade',   '$%.2f' % (_total_fees / len(all_cdf) if len(all_cdf) > 0 else 0))
+            r6.caption('Average fee cost per closed trade. Useful for comparing cost efficiency across strategies — defined risk spreads cost more per trade than naked puts.')
         else:
             st.info('No closed credit trades in this window.')
 
@@ -798,16 +1280,20 @@ with tab1:
             col1, col2 = st.columns(2)
             with col1:
                 if has_credit:
-                    bins = [-999, 0, 25, 50, 75, 100, 999]
+                    bins   = [-999, 0, 25, 50, 75, 100, 999]
                     labels = ['Loss', '0–25%', '25–50%', '50–75%', '75–100%', '>100%']
                     credit_cdf['Bucket'] = pd.cut(credit_cdf['Capture %'], bins=bins, labels=labels)
                     bucket_df = credit_cdf.groupby('Bucket', observed=False).agg(
                         Trades=('Net P/L', 'count')).reset_index()
                     colors = ['#ef553b','#ffa421','#ffe066','#7ec8e3','#00cc96','#58a6ff']
                     fig_cap = px.bar(bucket_df, x='Bucket', y='Trades', color='Bucket',
-                        color_discrete_sequence=colors,
-                        title='Premium Capture % Distribution (Credit Trades)', text='Trades')
-                    fig_cap.update_layout(template='plotly_dark', height=300, showlegend=False)
+                        color_discrete_sequence=colors, text='Trades')
+                    fig_cap.update_traces(textposition='outside', textfont_size=11, marker_line_width=0)
+                    _lay = chart_layout('Premium Capture % Distribution', height=320, margin_t=40)
+                    _lay['showlegend'] = False
+                    _lay['xaxis']['title'] = dict(text='Capture Bucket', font=dict(size=11))
+                    _lay['yaxis']['title'] = dict(text='# Trades', font=dict(size=11))
+                    fig_cap.update_layout(**_lay)
                     st.plotly_chart(fig_cap, width='stretch', config={'displayModeBar': False})
 
             with col2:
@@ -821,21 +1307,22 @@ with tab1:
                         Med_Days=('Days Held', 'median'),
                         Med_DTE=('DTE Open', 'median'),
                     ).reset_index().round(1)
-                    type_df.columns = ['Type','Trades','Win %','Med Capture %','Total P/L','$/Day','Med Days','Med DTE']
+                    type_df.columns = ['Type','Trades','Win %','Capture %','P/L','Prem/Day','Days','DTE']
                     st.markdown('##### 📊 Call vs Put Performance')
                     st.caption('Do you perform better selling calls or puts? Skew, IV rank and stock direction all affect which side pays more. Mixed = multi-leg trades with both calls and puts (strangles, iron condors, lizards). Knowing your edge by type helps you lean into your strengths.')
                     st.dataframe(type_df.style.format({
                         'Win %': lambda x: '{:.1f}%'.format(x),
-                        'Med Capture %': lambda x: '{:.1f}%'.format(x),
-                        'Total P/L': lambda x: '${:,.2f}'.format(x),
-                        '$/Day': lambda x: '${:.2f}'.format(x),
-                        'Med Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                        'Med DTE': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                        'Capture %': lambda x: '{:.1f}%'.format(x),
+                        'P/L': lambda x: '${:,.2f}'.format(x),
+                        'Prem/Day': lambda x: '${:.2f}'.format(x),
+                        'Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                        'DTE': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                     }).map(color_win_rate, subset=['Win %'])
                     .map(lambda v: 'color: #00cc96' if isinstance(v,(int,float)) and v>0
                         else ('color: #ef553b' if isinstance(v,(int,float)) and v<0 else ''),
-                        subset=['Total P/L']),
+                        subset=['P/L']),
                     width='stretch', hide_index=True)
+
                     strat_df = all_cdf.groupby('Trade Type').agg(
                         Trades=('Won','count'),
                         Win_Rate=('Won', lambda x: x.mean()*100),
@@ -844,19 +1331,19 @@ with tab1:
                         Med_Days=('Days Held','median'),
                         Med_DTE=('DTE Open','median'),
                     ).reset_index().sort_values('Total_PNL', ascending=False).round(1)
-                    strat_df.columns = ['Strategy','Trades','Win %','Total P/L','Med Capture %','Med Days','Med DTE']
+                    strat_df.columns = ['Strategy','Trades','Win %','P/L','Capture %','Days','DTE']
                     st.markdown('##### 🧩 Defined vs Undefined Risk — by Strategy')
                     st.caption('All closed trades — credit and debit. Naked = undefined risk, higher premium. Spreads/Condors = defined max loss, less credit. Debit spreads show P/L but no capture % (not applicable). Are your defined-risk trades worth the premium you give up for the protection?')
                     st.dataframe(strat_df.style.format({
                         'Win %': lambda x: '{:.1f}%'.format(x),
-                        'Med Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
-                        'Total P/L': lambda x: '${:,.2f}'.format(x),
-                        'Med Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                        'Med DTE': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                        'Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
+                        'P/L': lambda x: '${:,.2f}'.format(x),
+                        'Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                        'DTE': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                     }).map(color_win_rate, subset=['Win %'])
                     .map(lambda v: 'color: #00cc96' if isinstance(v,(int,float)) and v>0
                         else ('color: #ef553b' if isinstance(v,(int,float)) and v<0 else ''),
-                        subset=['Total P/L']),
+                        subset=['P/L']),
                     width='stretch', hide_index=True)
 
             st.markdown('---')
@@ -865,15 +1352,11 @@ with tab1:
                 'All closed trades — credit and debit — grouped by underlying. '
                 '**Win %** counts any trade that closed positive, regardless of size. '
                 '**Total P/L** is your actual net result after all opens and closes on that ticker. '
-                '**Med Days** = median holding period across all trades — typical time in the trade, resistant to outliers like a single long-dated position or 0DTE skewing the average. '
-                '**Med Capture %** = median percentage of opening credit you kept at close — credit trades only. '
-                'TastyTrade targets 50% capture; higher means you let trades run longer, lower means you took profits early. '
-                'Debit trades show — as capture % is not applicable. '
-                '**Med Ann Ret %** = median annualised return on capital at risk — normalises trades of different sizes and durations so you can compare efficiency across tickers. '
-                'Capped at ±500% to prevent 0DTE trades producing meaningless astronomical figures. '
-                'Treat this number cautiously on tickers with few trades — small sample sizes make it unreliable. '
-                '**Total Credit Rcvd** = gross cash received when opening credit trades, before buyback costs. '
-                'The gap between this and Total P/L is your total spend closing positions.'
+                '**Med Days** = median holding period across all trades. '
+                '**Med Capture %** = median percentage of opening credit kept at close — credit trades only. '
+                'TastyTrade targets 50% capture. '
+                '**Med Ann Ret %** = median annualised return on capital at risk, capped at ±500%. '
+                '**Total Credit Rcvd** = gross cash received when opening credit trades.'
             )
 
             def color_pnl_cell(val):
@@ -901,123 +1384,179 @@ with tab1:
                 ticker_df['Total_Prem']  = None
 
             ticker_df = ticker_df.sort_values('Total_PNL', ascending=False)
-            ticker_df.columns = ['Ticker','Trades','Win %','Total P/L','Med Days',
-                                 'Med Capture %','Med Ann Ret %','Total Credit Rcvd']
-
+            ticker_df.columns = ['Ticker','Trades','Win %','P/L','Days',
+                                 'Capture %','Ann Ret %','Credit Rcvd']
             st.dataframe(
                 ticker_df.style.format({
                     'Win %': lambda x: '{:.1f}%'.format(x),
-                    'Total P/L': lambda x: '${:,.2f}'.format(x),
-                    'Med Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                    'Med Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
-                    'Med Ann Ret %': lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
-                    'Total Credit Rcvd': lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—'
+                    'P/L': lambda x: '${:,.2f}'.format(x),
+                    'Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                    'Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
+                    'Ann Ret %': lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
+                    'Credit Rcvd': lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—'
                 }).map(color_win_rate, subset=['Win %'])
-                .map(color_pnl_cell, subset=['Total P/L']),
+                .map(color_pnl_cell, subset=['P/L']),
                 width='stretch', hide_index=True
             )
 
             st.markdown('---')
-            st.markdown('#### 🗓 P/L by Ticker & Month')
-            st.caption(
-                'Net P/L per ticker per calendar month, based on close date. '
-                'Green = profitable month for that ticker, red = losing month. '
-                'Intensity shows size — dark green is a big win, dark red is a big loss. '
-                'Grey = no closed trades that month.'
-            )
+            # ── Week-over-Week / Month-over-Month P/L bar chart ───────────────
+            st.markdown('<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">📅 Options P/L by Week &amp; Month</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;"><b style="color:#58a6ff;">Options trades only</b> — net P/L from closed equity &amp; futures options, grouped by the date the trade closed. Excludes share sales, dividends, and interest. See the <b>All Trades</b> tab for total portfolio P/L by period.</div>', unsafe_allow_html=True)
+
+            _period_df = all_cdf.copy()
+            _period_df['CloseDate'] = pd.to_datetime(_period_df['Close Date']).dt.tz_localize(None)
+            _period_df['Week']  = _period_df['CloseDate'].dt.to_period('W').apply(lambda p: p.start_time)
+            _period_df['Month'] = _period_df['CloseDate'].dt.to_period('M').apply(lambda p: p.start_time)
+
+            _pcol1, _pcol2 = st.columns(2)
+
+            with _pcol1:
+                _weekly = _period_df.groupby('Week')['Net P/L'].sum().reset_index()
+                _weekly['Week'] = pd.to_datetime(_weekly['Week'])
+                _weekly['Colour'] = _weekly['Net P/L'].apply(lambda x: '#00cc96' if x >= 0 else '#ef553b')
+                _fig_wk = go.Figure()
+                _fig_wk.add_trace(go.Bar(
+                    x=_weekly['Week'], y=_weekly['Net P/L'],
+                    marker_color=_weekly['Colour'],
+                    marker_line_width=0,
+                    hovertemplate='Week of %{x|%d %b}<br><b>$%{y:,.2f}</b><extra></extra>'
+                ))
+                _fig_wk.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
+                _wk_lay = chart_layout('Weekly P/L', height=280, margin_t=36)
+                _wk_lay['yaxis']['tickprefix'] = '$'
+                _wk_lay['yaxis']['tickformat'] = ',.0f'
+                _wk_lay['bargap'] = 0.25
+                _fig_wk.update_layout(**_wk_lay)
+                st.plotly_chart(_fig_wk, width='stretch', config={'displayModeBar': False})
+
+            with _pcol2:
+                _monthly = _period_df.groupby('Month')['Net P/L'].sum().reset_index()
+                _monthly['Month'] = pd.to_datetime(_monthly['Month'])
+                _monthly['Colour'] = _monthly['Net P/L'].apply(lambda x: '#00cc96' if x >= 0 else '#ef553b')
+                _monthly['Label'] = _monthly['Month'].dt.strftime('%b %Y')
+                _fig_mo = go.Figure()
+                _fig_mo.add_trace(go.Bar(
+                    x=_monthly['Label'], y=_monthly['Net P/L'],
+                    marker_color=_monthly['Colour'],
+                    marker_line_width=0,
+                    text=[f'${v:,.0f}' if v >= 0 else f'-${abs(v):,.0f}' for v in _monthly['Net P/L']],
+                    textposition='outside',
+                    textfont=dict(size=10, family='IBM Plex Mono', color='#8b949e'),
+                    hovertemplate='%{x}<br><b>$%{y:,.2f}</b><extra></extra>'
+                ))
+                _fig_mo.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
+                _mo_lay = chart_layout('Monthly P/L', height=280, margin_t=36)
+                _mo_lay['yaxis']['tickprefix'] = '$'
+                _mo_lay['yaxis']['tickformat'] = ',.0f'
+                _mo_lay['bargap'] = 0.35
+                _fig_mo.update_layout(**_mo_lay)
+                st.plotly_chart(_fig_mo, width='stretch', config={'displayModeBar': False})
+
+            st.markdown('---')
+            st.markdown('<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">🗓 P/L by Ticker &amp; Month</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;">Net P/L per ticker per calendar month (by close date). Green = profitable, red = losing. Intensity shows size. Grey = no closed trades that month.</div>', unsafe_allow_html=True)
             _hm_df = all_cdf.copy()
-            _hm_df['Month'] = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%b %Y')
+            _hm_df['Month']     = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%b %Y')
             _hm_df['MonthSort'] = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%Y-%m')
             _hm_pivot = _hm_df.groupby(['Ticker','MonthSort','Month'])['Net P/L'].sum().reset_index()
-            _months_sorted = sorted(_hm_pivot['MonthSort'].unique())
-            _month_labels  = [_hm_pivot[_hm_pivot['MonthSort']==m]['Month'].iloc[0] for m in _months_sorted]
-            _tickers_sorted = sorted(_hm_pivot['Ticker'].unique(), 
+            _months_sorted  = sorted(_hm_pivot['MonthSort'].unique())
+            _month_labels   = [_hm_pivot[_hm_pivot['MonthSort']==m]['Month'].iloc[0] for m in _months_sorted]
+            _tickers_sorted = sorted(_hm_pivot['Ticker'].unique(),
                 key=lambda t: _hm_pivot[_hm_pivot['Ticker']==t]['Net P/L'].sum(), reverse=True)
-
-            # Build matrix
-            import numpy as np
-            _z  = []
-            _text = []
+            _z = []; _text = []
             for tkr in _tickers_sorted:
                 row_z, row_t = [], []
                 for ms in _months_sorted:
                     val = _hm_pivot[(_hm_pivot['Ticker']==tkr) & (_hm_pivot['MonthSort']==ms)]['Net P/L'].sum()
                     row_z.append(val if val != 0 else None)
                     row_t.append('$%.0f' % val if val != 0 else '')
-                _z.append(row_z)
-                _text.append(row_t)
-
+                _z.append(row_z); _text.append(row_t)
             _fig_hm = go.Figure(data=go.Heatmap(
                 z=_z, x=_month_labels, y=_tickers_sorted,
-                text=_text, texttemplate='%{text}',
+                text=_text, texttemplate='%{text}', textfont=dict(size=10, family='IBM Plex Mono'),
                 colorscale=[
                     [0.0,  '#7f1d1d'], [0.35, '#ef553b'],
-                    [0.5,  '#1a1a2e'],
+                    [0.5,  '#141c2e'],
                     [0.65, '#00cc96'], [1.0,  '#004d3a'],
                 ],
-                zmid=0,
-                showscale=True,
-                colorbar=dict(title='P/L ($)', tickformat='$,.0f'),
+                zmid=0, showscale=True,
+                colorbar=dict(title=dict(text='P/L', side='right'), tickformat='$,.0f',
+                    tickfont=dict(size=10, family='IBM Plex Mono'), len=0.9),
                 hoverongaps=False,
-                hovertemplate='%{y} — %{x}<br>P/L: $%{z:,.2f}<extra></extra>',
+                hovertemplate='<b>%{y}</b> — %{x}<br>P/L: <b>$%{z:,.2f}</b><extra></extra>',
             ))
-            _fig_hm.update_layout(
-                template='plotly_dark',
-                height=max(280, len(_tickers_sorted) * 28),
-                margin=dict(l=0, r=0, t=10, b=0),
-                xaxis=dict(side='top'),
-                yaxis=dict(autorange='reversed'),
-            )
+            _hm_lay = chart_layout(height=max(300, len(_tickers_sorted) * 32 + 60), margin_t=16)
+            _hm_lay['xaxis'] = dict(side='top', gridcolor='rgba(0,0,0,0)', tickfont=dict(size=11))
+            _hm_lay['yaxis'] = dict(autorange='reversed', gridcolor='rgba(0,0,0,0)',
+                tickfont=dict(size=11, family='IBM Plex Mono'))
+            _fig_hm.update_layout(**_hm_lay)
             st.plotly_chart(_fig_hm, width='stretch', config={'displayModeBar': False})
 
             st.markdown('---')
             cum_df = all_cdf.sort_values('Close Date').copy()
             cum_df['Cumulative P/L'] = cum_df['Net P/L'].cumsum()
-            fig_eq = px.line(cum_df, x='Close Date', y='Cumulative P/L',
-                title='Cumulative Realized P/L', height=260)
-            fig_eq.update_traces(line_color='#00cc96', fill='tozeroy')
-            fig_eq.update_layout(template='plotly_dark')
+            final_pnl = cum_df['Cumulative P/L'].iloc[-1]
+            eq_color = '#00cc96' if final_pnl >= 0 else '#ef553b'
+            eq_fill  = 'rgba(0,204,150,0.12)' if final_pnl >= 0 else 'rgba(239,85,59,0.12)'
+            fig_eq = go.Figure()
+            fig_eq.add_trace(go.Scatter(
+                x=cum_df['Close Date'], y=cum_df['Cumulative P/L'],
+                mode='lines', line=dict(color=eq_color, width=2),
+                fill='tozeroy', fillcolor=eq_fill,
+                hovertemplate='%{x|%d/%m/%y}<br><b>$%{y:,.2f}</b><extra></extra>'
+            ))
+            fig_eq.add_hline(y=0, line_color='rgba(255,255,255,0.1)', line_width=1)
+            _eq_lay = chart_layout('Cumulative Realized P/L', height=300, margin_t=40)
+            _eq_lay['yaxis']['tickprefix'] = '$'
+            _eq_lay['yaxis']['tickformat'] = ',.0f'
+            fig_eq.update_layout(**_eq_lay)
             st.plotly_chart(fig_eq, width='stretch', config={'displayModeBar': False})
 
             if has_credit:
                 roll_df = credit_cdf.sort_values('Close Date').copy()
                 roll_df['Rolling Capture'] = roll_df['Capture %'].rolling(10, min_periods=1).mean()
-                fig_cap2 = px.line(roll_df, x='Close Date', y='Rolling Capture',
-                    title='Rolling Avg Capture % (10-trade window)', height=220)
-                fig_cap2.update_traces(line_color='#58a6ff')
-                fig_cap2.add_hline(y=50, line_dash='dash', line_color='#ffa421')
-                fig_cap2.update_layout(template='plotly_dark')
+                fig_cap2 = go.Figure()
+                fig_cap2.add_trace(go.Scatter(
+                    x=roll_df['Close Date'], y=roll_df['Rolling Capture'],
+                    mode='lines', line=dict(color='#58a6ff', width=2),
+                    fill='tozeroy', fillcolor='rgba(88,166,255,0.08)',
+                    hovertemplate='%{x|%d/%m/%y}<br>Capture: <b>%{y:.1f}%</b><extra></extra>'
+                ))
+                fig_cap2.add_hline(y=50, line_dash='dash', line_color='#ffa421', line_width=1.5,
+                    annotation_text='50% target', annotation_position='bottom right',
+                    annotation_font=dict(color='#ffa421', size=11))
+                _cap2_lay = chart_layout('Rolling Avg Capture % · 10-trade window', height=260, margin_t=40)
+                _cap2_lay['yaxis']['ticksuffix'] = '%'
+                fig_cap2.update_layout(**_cap2_lay)
                 st.plotly_chart(fig_cap2, width='stretch', config={'displayModeBar': False})
 
             st.markdown('---')
-            st.markdown('##### 📊 Win / Loss Distribution')
-            st.caption(
-                'Each bar is one trade — green bars are winners, red are losers. '
-                'A healthy theta engine shows many small green bars clustered near zero and at the 50% capture target, '
-                'with losses contained and not wider than the win cluster. '
-                'Fat red tails mean losses are outsized relative to wins — the key risk to manage.'
-            )
+            st.markdown('<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">📊 Win / Loss Distribution</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;">Each bar is one trade. A healthy theta engine shows many small green bars near zero with losses contained — fat red tails mean outsized losses relative to wins.</div>', unsafe_allow_html=True)
             _hist_df = all_cdf.copy()
             _hist_df['Colour'] = _hist_df['Net P/L'].apply(lambda x: 'Win' if x >= 0 else 'Loss')
             _fig_hist = px.histogram(
                 _hist_df, x='Net P/L', color='Colour',
                 color_discrete_map={'Win': '#00cc96', 'Loss': '#ef553b'},
-                nbins=40, height=280,
+                nbins=40,
                 labels={'Net P/L': 'Trade P/L ($)', 'count': 'Trades'},
-                barmode='overlay', opacity=0.85
+                barmode='overlay', opacity=0.8
             )
-            _fig_hist.add_vline(x=0, line_color='rgba(255,255,255,0.3)', line_width=1)
+            _fig_hist.add_vline(x=0, line_color='rgba(255,255,255,0.2)', line_width=1)
             _fig_hist.add_vline(
                 x=all_cdf['Net P/L'].median(),
-                line_dash='dash', line_color='#ffa421', line_width=1.5,
+                line_dash='dot', line_color='#ffa421', line_width=1.5,
                 annotation_text='median $%.0f' % all_cdf['Net P/L'].median(),
-                annotation_position='top right', annotation_font_color='#ffa421'
+                annotation_position='top right',
+                annotation_font=dict(color='#ffa421', size=11)
             )
-            _fig_hist.update_layout(
-                template='plotly_dark', showlegend=True,
-                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
-                margin=dict(t=30, b=0)
-            )
+            _hist_lay = chart_layout(height=300, margin_t=20)
+            _hist_lay['legend'] = dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1,
+                bgcolor='rgba(0,0,0,0)', borderwidth=0, font=dict(size=11))
+            _hist_lay['xaxis']['tickprefix'] = '$'
+            _hist_lay['xaxis']['tickformat'] = ',.0f'
+            _fig_hist.update_layout(**_hist_lay)
             st.plotly_chart(_fig_hist, width='stretch', config={'displayModeBar': False})
 
             st.markdown('---')
@@ -1025,35 +1564,42 @@ with tab1:
             with bcol:
                 st.markdown('##### 🏆 Best 5 Trades')
                 best = all_cdf.nlargest(5, 'Net P/L')[['Ticker','Trade Type','Type','Days Held','Premium Rcvd','Net P/L']].copy()
+                best.columns = ['Ticker','Strategy','C/P','Days','Credit','P/L']
                 st.dataframe(best.style.format({
-                    'Premium Rcvd': lambda x: '${:.2f}'.format(x),
-                    'Net P/L': lambda x: '${:.2f}'.format(x)
-                }), width='stretch', hide_index=True)
+                    'Credit': lambda x: '${:.2f}'.format(x),
+                    'P/L': lambda x: '${:.2f}'.format(x)
+                }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
             with wcol:
                 st.markdown('##### 💀 Worst 5 Trades')
                 worst = all_cdf.nsmallest(5, 'Net P/L')[['Ticker','Trade Type','Type','Days Held','Premium Rcvd','Net P/L']].copy()
+                worst.columns = ['Ticker','Strategy','C/P','Days','Credit','P/L']
                 st.dataframe(worst.style.format({
-                    'Premium Rcvd': lambda x: '${:.2f}'.format(x),
-                    'Net P/L': lambda x: '${:.2f}'.format(x)
-                }), width='stretch', hide_index=True)
+                    'Credit': lambda x: '${:.2f}'.format(x),
+                    'P/L': lambda x: '${:.2f}'.format(x)
+                }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
 
             with st.expander('📋 Full Closed Trade Log', expanded=False):
                 log = all_cdf[['Ticker','Trade Type','Type','Open Date','Close Date',
                                'Days Held','Premium Rcvd','Net P/L','Capture %',
-                               'Capital Risk','Ann Return %','Won']].copy()
+                               'Capital Risk','Ann Return %']].copy()
                 log['Open Date']  = pd.to_datetime(log['Open Date']).dt.strftime('%d/%m/%y')
                 log['Close Date'] = pd.to_datetime(log['Close Date']).dt.strftime('%d/%m/%y')
-                log = log.sort_values('Close Date', ascending=False)
+                log.rename(columns={
+                    'Trade Type':'Strategy','Type':'C/P','Open Date':'Open','Close Date':'Close',
+                    'Days Held':'Days','Premium Rcvd':'Credit','Net P/L':'P/L',
+                    'Capital Risk':'Risk','Ann Return %':'Ann Ret %'
+                }, inplace=True)
+                log = log.sort_values('Close', ascending=False)
                 st.dataframe(log.style.format({
-                    'Premium Rcvd': lambda x: '${:.2f}'.format(x),
-                    'Net P/L':      lambda x: '${:.2f}'.format(x),
-                    'Capital Risk': lambda x: '${:,.0f}'.format(x),
-                    'Capture %':    lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
-                    'Ann Return %': lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
-                }).map(color_pnl_cell, subset=['Net P/L']),
+                    'Credit':     lambda x: '${:.2f}'.format(x),
+                    'P/L':        lambda x: '${:.2f}'.format(x),
+                    'Risk':       lambda x: '${:,.0f}'.format(x),
+                    'Capture %':  lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
+                    'Ann Ret %':  lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
+                }).map(color_pnl_cell, subset=['P/L']),
                 width='stretch', hide_index=True)
 
-# ── Tab 2: Wheel Campaigns ─────────────────────────────────────────────────
+# ── Tab 2: Wheel Campaigns ─────────────────────────────────────────────────────
 with tab2:
     st.subheader('🎯 Wheel Campaign Tracker')
     if use_lifetime:
@@ -1066,7 +1612,6 @@ with tab2:
             'the covered call) shows naturally as separate call/put chains below. '
             'Campaigns reset when shares hit zero — toggle Lifetime mode to see your full history as one continuous position.'
         )
-
     if not all_campaigns:
         st.info('No wheel campaigns found.')
     else:
@@ -1076,24 +1621,25 @@ with tab2:
                 rpnl = realized_pnl(c, use_lifetime); effb = effective_basis(c, use_lifetime)
                 dur  = (c['end_date'] or latest_date) - c['start_date']
                 rows.append({'Ticker': ticker, 'Status': '✅ Closed' if c['status']=='closed' else '🟢 Open',
-                    'Shares': int(c['total_shares']), 'Entry Basis': c['blended_basis'],
-                    'Eff. Basis/sh': effb, 'Premiums Banked': c['premiums'],
-                    'Dividends': c['dividends'], 'Exit Proceeds': c['exit_proceeds'],
-                    'Realized P/L': rpnl, 'Days Active': dur.days,
-                    'Started': c['start_date'].strftime('%d/%m/%y')})
+                    'Qty': int(c['total_shares']), 'Avg Price': c['blended_basis'],
+                    'Eff. Basis': effb, 'Premiums': c['premiums'],
+                    'Divs': c['dividends'], 'Exit': c['exit_proceeds'],
+                    'P/L': rpnl, 'Days': dur.days,
+                    'Opened': c['start_date'].strftime('%d/%m/%y')})
         summary_df = pd.DataFrame(rows)
         def color_pnl(val):
             if not isinstance(val, float): return ''
             return 'color: #00cc96' if val > 0 else 'color: #ef553b' if val < 0 else ''
         st.dataframe(summary_df.style.format({
-            'Entry Basis': lambda x: '${:,.2f}'.format(x),
-            'Eff. Basis/sh': lambda x: '${:,.2f}'.format(x),
-            'Premiums Banked': lambda x: '${:,.2f}'.format(x),
-            'Dividends': lambda x: '${:,.2f}'.format(x),
-            'Exit Proceeds': lambda x: '${:,.2f}'.format(x),
-            'Realized P/L': lambda x: '${:,.2f}'.format(x)
-        }).map(color_pnl, subset=['Realized P/L']), width='stretch', hide_index=True)
+            'Avg Price': lambda x: '${:,.2f}'.format(x),
+            'Eff. Basis': lambda x: '${:,.2f}'.format(x),
+            'Premiums': lambda x: '${:,.2f}'.format(x),
+            'Divs': lambda x: '${:,.2f}'.format(x),
+            'Exit': lambda x: '${:,.2f}'.format(x),
+            'P/L': lambda x: '${:,.2f}'.format(x)
+        }).map(color_pnl, subset=['P/L']), width='stretch', hide_index=True)
         st.markdown('---')
+
         for ticker, camps in sorted(all_campaigns.items()):
             for i, c in enumerate(camps):
                 rpnl = realized_pnl(c, use_lifetime); effb = effective_basis(c, use_lifetime)
@@ -1136,11 +1682,8 @@ with tab2:
                 )
                 st.markdown(card_html, unsafe_allow_html=True)
                 with st.expander('📊 Detail — Chains & Events', expanded=is_open):
-                    
-                    # ── Option Roll Chains ──────────────────────────────────────
-                    ticker_opts = df[(df['Ticker']==ticker) & 
+                    ticker_opts = df[(df['Ticker']==ticker) &
                         df['Instrument Type'].str.contains('Option', na=False)].copy()
-                    # Filter to campaign window only
                     camp_start = c['start_date']
                     camp_end   = c['end_date'] or latest_date
                     ticker_opts = ticker_opts[
@@ -1156,53 +1699,42 @@ with tab2:
                             'Rolls within ~3 days stay in the same chain; longer gaps start a new one. '
                             '⚠️ Complex structures inside a campaign (PMCC, Diagonals, Jade Lizards, Iron Condors, Butterflies) '
                             'are not fully decomposed here — their P/L is correct in the campaign total, '
-                            'but the chain view may show fragments. The Strategy table in Derivatives Performance '
-                            'may also approximate these — campaign P/L is always the source of truth.'
+                            'but the chain view may show fragments.'
                         )
                         for ci, chain in enumerate(chains):
                             cp      = chain[0]['cp']
                             ch_pnl  = sum(l['total'] for l in chain)
                             last    = chain[-1]
-                            is_open = 'to open' in str(last['sub_type']).lower()
+                            is_open_chain = 'to open' in str(last['sub_type']).lower()
                             n_rolls = sum(1 for l in chain if 'to close' in str(l['sub_type']).lower())
-                            status_icon = '🟢' if is_open else '✅'
+                            status_icon = '🟢' if is_open_chain else '✅'
                             cp_icon = '📞' if cp == 'CALL' else '📉'
                             chain_label = '%s %s %s Chain %d — %d roll(s) | Net: $%.2f' % (
                                 status_icon, cp_icon, cp.title(), ci+1, n_rolls, ch_pnl)
-                            with st.expander(chain_label, expanded=is_open):
+                            with st.expander(chain_label, expanded=is_open_chain):
                                 chain_rows = []
                                 for leg_i, leg in enumerate(chain):
                                     sub = str(leg['sub_type']).lower()
-                                    if 'to open' in sub:
-                                        action = '↪️ Sell to Open'
-                                    elif 'to close' in sub:
-                                        action = '↩️ Buy to Close'
-                                    elif 'expir' in sub:
-                                        action = '⏹️ Expired'
-                                    elif 'assign' in sub:
-                                        action = '📋 Assigned'
-                                    else:
-                                        action = leg['sub_type']
-                                    # DTE at open — only meaningful for STO legs
+                                    if 'to open' in sub:       action = '↪️ Sell to Open'
+                                    elif 'to close' in sub:    action = '↩️ Buy to Close'
+                                    elif 'expir' in sub:       action = '⏹️ Expired'
+                                    elif 'assign' in sub:      action = '📋 Assigned'
+                                    else:                      action = leg['sub_type']
                                     dte_str = ''
                                     if 'to open' in sub:
                                         try:
                                             exp_dt = pd.to_datetime(leg['exp'], dayfirst=True)
                                             dte_str = '%dd' % max((exp_dt - leg['date'].replace(tzinfo=None)).days, 0)
                                         except: dte_str = ''
-                                    # Mark the open leg — last STO with no following BTC
-                                    is_open_leg = is_open and leg_i == len(chain) - 1
+                                    is_open_leg = is_open_chain and leg_i == len(chain) - 1
                                     chain_rows.append({
                                         'Action': ('🟢 ' + action) if is_open_leg else action,
                                         'Date': leg['date'].strftime('%d/%m/%y'),
                                         'Strike': '%.1f%s' % (leg['strike'], cp[0]),
-                                        'Exp': leg['exp'],
-                                        'DTE': dte_str,
-                                        'Cash': leg['total'],
-                                        '_open': is_open_leg,
+                                        'Exp': leg['exp'], 'DTE': dte_str,
+                                        'Cash': leg['total'], '_open': is_open_leg,
                                     })
                                 ch_df = pd.DataFrame(chain_rows)
-                                # Add total row
                                 ch_df = pd.concat([ch_df, pd.DataFrame([{
                                     'Action': '━━ Chain Total', 'Date': '',
                                     'Strike': '', 'Exp': '', 'DTE': '', 'Cash': ch_pnl, '_open': False
@@ -1211,9 +1743,8 @@ with tab2:
                                     if row.get('_open', False):
                                         return ['background-color: rgba(0,204,150,0.12); font-weight:600'] * len(row)
                                     return [''] * len(row)
-                                _display_cols = ['Action','Date','Strike','Exp','DTE','Cash']
                                 st.dataframe(
-                                    ch_df[_display_cols + ['_open']].style
+                                    ch_df[['Action','Date','Strike','Exp','DTE','Cash','_open']].style
                                         .apply(_style_chain_row, axis=1)
                                         .format({'Cash': lambda x: '${:.2f}'.format(x)})
                                         .map(lambda v: 'color: #00cc96' if isinstance(v,float) and v>0
@@ -1223,26 +1754,24 @@ with tab2:
                                     column_config={'_open': None}
                                 )
 
-                    # ── Share + Dividend events ──────────────────────────────
                     st.markdown('**📋 Share & Dividend Events**')
                     ev_df = pd.DataFrame(c['events'])
                     ev_share = ev_df[~ev_df['type'].str.lower().str.contains('to open|to close|expir|assign', na=False)]
                     if not ev_share.empty:
                         ev_share = ev_share.copy()
                         ev_share['date'] = pd.to_datetime(ev_share['date']).dt.strftime('%d/%m/%y %H:%M')
-                        ev_share.columns = ['Date','Type','Detail','Cash']
-                        st.dataframe(ev_share.style.format({'Cash': lambda x: '${:,.2f}'.format(x)})
+                        ev_share.columns = ['Date','Type','Detail','Amount']
+                        st.dataframe(ev_share.style.format({'Amount': lambda x: '${:,.2f}'.format(x)})
                             .map(lambda v: 'color: #00cc96' if isinstance(v,float) and v>0
                                 else ('color: #ef553b' if isinstance(v,float) and v<0 else ''),
-                                subset=['Cash']),
+                                subset=['Amount']),
                             width='stretch', hide_index=True)
                     else:
                         st.caption('No share/dividend events.')
 
-# ── Tab 3: All Trades ──────────────────────────────────────────────────────
+# ── Tab 3: All Trades ──────────────────────────────────────────────────────────
 with tab3:
     st.subheader('🔍 Realized P/L — All Tickers')
-    st.info(window_label)
     rows = []
     for ticker, camps in sorted(all_campaigns.items()):
         tr = sum(realized_pnl(c, use_lifetime) for c in camps)
@@ -1254,51 +1783,112 @@ with tab3:
         cc = sum(1 for c in camps if c['status']=='closed')
         rows.append({'Ticker': ticker, 'Type': '🎡 Wheel',
             'Campaigns': '%d open, %d closed'%(oc,cc),
-            'Premiums Banked': tp, 'Dividends': tv,
-            'Standalone Trades': po, 'Capital Deployed': td, 'Realized P/L': tr+po})
+            'Premiums': tp, 'Divs': tv,
+            'Options P/L': po, 'Deployed': td, 'P/L': tr+po})
     for ticker in sorted(pure_options_tickers):
-        # Recalculate pure P/L logic here too for display consistency
         mask = (df['Ticker']==ticker) & (df['Type'].isin(['Trade','Receive Deliver']))
         total_val = df.loc[mask,'Total'].sum()
-        
-        # Check for share holding to display Capital Deployed correctly in table
         t_df = df[df['Ticker'] == ticker]
-        s_mask = t_df['Instrument Type'].str.contains('Equity', na=False) & ~t_df['Instrument Type'].str.contains('Option', na=False)
+        s_mask = t_df['Instrument Type'].str.contains('Equity', na=False) & \
+                 ~t_df['Instrument Type'].str.contains('Option', na=False)
         net_shares = t_df[s_mask]['Net_Qty_Row'].sum()
-        
-        cap_dep = 0.0
-        pnl = total_val
-        
+        cap_dep = 0.0; pnl = total_val
         if net_shares > 0.0001:
-             eq_flow = t_df[(t_df['Instrument Type'].str.contains('Equity', na=False)) & (t_df['Type'].isin(['Trade','Receive Deliver']))]['Total'].sum()
-             if eq_flow < 0:
-                 cap_dep = abs(eq_flow)
-                 pnl = total_val + cap_dep
-        
+            eq_flow = t_df[(t_df['Instrument Type'].str.contains('Equity', na=False)) &
+                           (t_df['Type'].isin(['Trade','Receive Deliver']))]['Total'].sum()
+            if eq_flow < 0:
+                cap_dep = abs(eq_flow)
+                pnl = total_val + cap_dep
         rows.append({'Ticker': ticker, 'Type': '📊 Standalone',
-            'Campaigns': '—', 'Premiums Banked': pnl, 'Dividends': 0.0,
-            'Standalone Trades': 0.0, 'Capital Deployed': cap_dep, 'Realized P/L': pnl})
+            'Campaigns': '—', 'Premiums': pnl, 'Divs': 0.0,
+            'Options P/L': 0.0, 'Deployed': cap_dep, 'P/L': pnl})
     if rows:
         deep_df = pd.DataFrame(rows)
         total_row = {'Ticker': 'TOTAL', 'Type': '', 'Campaigns': '',
-            'Premiums Banked': deep_df['Premiums Banked'].sum(),
-            'Dividends': deep_df['Dividends'].sum(),
-            'Standalone Trades': deep_df['Standalone Trades'].sum(),
-            'Capital Deployed': deep_df['Capital Deployed'].sum(),
-            'Realized P/L': deep_df['Realized P/L'].sum()}
+            'Premiums': deep_df['Premiums'].sum(),
+            'Divs': deep_df['Divs'].sum(),
+            'Options P/L': deep_df['Options P/L'].sum(),
+            'Deployed': deep_df['Deployed'].sum(),
+            'P/L': deep_df['P/L'].sum()}
         deep_df = pd.concat([deep_df, pd.DataFrame([total_row])], ignore_index=True)
         def color_pnl2(val):
             if not isinstance(val, (int, float)): return ''
             return 'color: #00cc96' if val > 0 else 'color: #ef553b' if val < 0 else ''
         st.dataframe(deep_df.style.format({
-            'Premiums Banked': lambda x: '${:,.2f}'.format(x),
-            'Dividends': lambda x: '${:,.2f}'.format(x),
-            'Standalone Trades': lambda x: '${:,.2f}'.format(x),
-            'Capital Deployed': lambda x: '${:,.2f}'.format(x),
-            'Realized P/L': lambda x: '${:,.2f}'.format(x)
-        }).map(color_pnl2, subset=['Realized P/L']), width='stretch', hide_index=True)
+            'Premiums': lambda x: '${:,.2f}'.format(x),
+            'Divs': lambda x: '${:,.2f}'.format(x),
+            'Options P/L': lambda x: '${:,.2f}'.format(x),
+            'Deployed': lambda x: '${:,.2f}'.format(x),
+            'P/L': lambda x: '${:,.2f}'.format(x)
+        }).map(color_pnl2, subset=['P/L']), width='stretch', hide_index=True)
 
-# ── Tab 4: Income & Fees ───────────────────────────────────────────────────
+    # ── Total Portfolio P/L by Week & Month ───────────────────────────────────
+    st.markdown('---')
+    st.markdown('<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">📅 Total Realized P/L by Week &amp; Month</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;">'
+        '<b style="color:#00cc96;">Whole portfolio — realized flows only</b>: '
+        'options credits &amp; debits, share <em>sales</em> (FIFO gains/losses), dividends, and interest. '
+        '<b>Share purchases are excluded</b> — they are capital deployment, not realized losses. '
+        'This matches the <b>Realized P/L</b> top-line metric. Filtered to selected time window.'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+    # Build daily realized P/L using same FIFO logic as top-line metric
+    _daily_pnl = calculate_daily_realized_pnl(df, start_date)
+    _daily_pnl['Week']  = _daily_pnl['Date'].dt.to_period('W').apply(lambda p: p.start_time)
+    _daily_pnl['Month'] = _daily_pnl['Date'].dt.to_period('M').apply(lambda p: p.start_time)
+    _port_df = _daily_pnl  # alias for the if-check below
+
+    if not _port_df.empty:
+        _p_col1, _p_col2 = st.columns(2)
+
+        with _p_col1:
+            _p_weekly = _daily_pnl.groupby('Week')['PnL'].sum().reset_index()
+            _p_weekly['Week'] = pd.to_datetime(_p_weekly['Week'])
+            _p_weekly['Colour'] = _p_weekly['PnL'].apply(lambda x: '#00cc96' if x >= 0 else '#ef553b')
+            _fig_pw = go.Figure()
+            _fig_pw.add_trace(go.Bar(
+                x=_p_weekly['Week'], y=_p_weekly['PnL'],
+                marker_color=_p_weekly['Colour'],
+                marker_line_width=0,
+                hovertemplate='Week of %{x|%d %b}<br><b>$%{y:,.2f}</b><extra></extra>'
+            ))
+            _fig_pw.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
+            _pw_lay = chart_layout('Weekly Total P/L', height=280, margin_t=36)
+            _pw_lay['yaxis']['tickprefix'] = '$'
+            _pw_lay['yaxis']['tickformat'] = ',.0f'
+            _pw_lay['bargap'] = 0.25
+            _fig_pw.update_layout(**_pw_lay)
+            st.plotly_chart(_fig_pw, width='stretch', config={'displayModeBar': False})
+
+        with _p_col2:
+            _p_monthly = _daily_pnl.groupby('Month')['PnL'].sum().reset_index()
+            _p_monthly['Month'] = pd.to_datetime(_p_monthly['Month'])
+            _p_monthly['Colour'] = _p_monthly['PnL'].apply(lambda x: '#00cc96' if x >= 0 else '#ef553b')
+            _p_monthly['Label'] = _p_monthly['Month'].dt.strftime('%b %Y')
+            _fig_pm = go.Figure()
+            _fig_pm.add_trace(go.Bar(
+                x=_p_monthly['Label'], y=_p_monthly['PnL'],
+                marker_color=_p_monthly['Colour'],
+                marker_line_width=0,
+                text=[f'${v:,.0f}' if v >= 0 else f'-${abs(v):,.0f}' for v in _p_monthly['PnL']],
+                textposition='outside',
+                textfont=dict(size=10, family='IBM Plex Mono', color='#8b949e'),
+                hovertemplate='%{x}<br><b>$%{y:,.2f}</b><extra></extra>'
+            ))
+            _fig_pm.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
+            _pm_lay = chart_layout('Monthly Total P/L', height=280, margin_t=36)
+            _pm_lay['yaxis']['tickprefix'] = '$'
+            _pm_lay['yaxis']['tickformat'] = ',.0f'
+            _pm_lay['bargap'] = 0.35
+            _fig_pm.update_layout(**_pm_lay)
+            st.plotly_chart(_fig_pm, width='stretch', config={'displayModeBar': False})
+    else:
+        st.info('No cash flow data in the selected window.')
+
+# ── Tab 4: Income & Fees ───────────────────────────────────────────────────────
 with tab4:
     st.subheader('💰 Non-Trade Cash Flows')
     ic1, ic2, ic3, ic4 = st.columns(4)
