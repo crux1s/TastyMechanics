@@ -6,89 +6,94 @@ from datetime import datetime, timedelta
 from collections import defaultdict, deque
 
 # ==========================================
-# TastyMechanics v25.3
+# TastyMechanics v25.4
 # ==========================================
 # Changelog:
+#
+# v25.4 (2026-02-24)
+#   Bug Fixes:
+#   - FIXED: Campaign premiums date guard — options traded before the share
+#     purchase date are no longer credited against campaign effective basis.
+#     Pre-purchase options now correctly flow to pure_options_pnl (standalone).
+#     Applies to both windowed and lifetime campaign modes.
+#     Real-world impact: SMR eff. basis corrected from $16.72 → $20.25/share.
+#   - FIXED: calculate_windowed_equity_pnl() gains end_date parameter —
+#     prior period P/L comparison was double-counting equity sales that fell
+#     in the current window. Boundary uses strict < to match _df_prior filter.
+#   - FIXED: CSV validation — wrong file now shows a friendly error listing
+#     missing columns rather than crashing. Also catches empty files and
+#     parse errors.
+#   - FIXED: Negative currency formatting — bar chart labels and period
+#     comparison card now render -$308 not $-308 throughout.
+#   - FIXED: Timezone-safe DTE calculation — tz_localize(None) before
+#     re-localizing prevents crash when TastyTrade exports expiry as full
+#     timestamp rather than plain date string.
+#   - FIXED: Full Closed Trade Log date sorting — dates kept as datetime +
+#     DateColumn config so clicking Open/Close sorts chronologically not
+#     alphabetically.
+#
+#   New Features:
+#   - How Closed column in Full Closed Trade Log: ⏹️ Expired / 📋 Assigned /
+#     🏋️ Exercised / ✂️ Closed — derived from TastyTrade Sub Type field.
+#   - Total Realized P/L by Week & Month charts (All Trades tab) — FIFO-correct
+#     whole-portfolio view using new calculate_daily_realized_pnl() engine.
+#     Share purchases excluded; equity sells counted at net FIFO gain/loss.
+#   - calculate_daily_realized_pnl() — daily bucketed version of FIFO engine
+#     returning a per-day series for charting.
+#   - Window date label on all window-sensitive section headers — small blue
+#     inline text showing e.g. "24/01/2026 → 23/02/2026 (Last Month)".
+#     Applied to: Portfolio Overview, Scorecard, Performance by Ticker,
+#     Options P/L charts, All Trades, Income & Fees.
+#
+#   Layout & Polish:
+#   - Realized P/L Breakdown expander replaced with inline chip line directly
+#     below the metrics row. All Time: Closed Wheel Campaigns · Open Wheel
+#     Premiums · General Standalone Trading. Windowed: Wheel & Options Trading
+#     · Equity Sales · Div + Interest.
+#   - Sparkline moved from above tabs to top of All Trades tab.
+#   - P/L by Ticker & Month heatmap moved to below Win/Loss Distribution.
+#   - Defined vs Undefined Risk table pulled out of col2 into full-width row.
+#   - Options P/L by Week & Month labelled clearly as options-only with
+#     pointer to All Trades tab for whole-portfolio view.
 #
 # v25.3 (2026-02-23)
 #   Weekly Review Features:
 #   - Expiry Alert Strip: inline chip strip below metrics showing all options
 #     expiring within 21 days. Green (>14d) → amber (≤14d) → red (≤5d).
-#     Only shown when open option positions exist.
-#   - Period Comparison Card: "this period vs last period" inline summary card
-#     showing Realized P/L, Trades Closed, Win Rate, and Dividends — each with
-#     a delta vs the prior equivalent window. Shown for all windows except All Time.
-#   - Weekly / Monthly P/L bar chart (Derivatives Performance tab): side-by-side
-#     colour-coded bar charts (green = positive week/month, red = negative).
-#     Monthly bars include value labels. Sits above the ticker heatmap.
+#   - Period Comparison Card: current vs prior equivalent window showing
+#     Realized P/L, Trades Closed, Win Rate, Dividends with deltas.
+#   - Weekly / Monthly P/L bar charts (Derivatives Performance tab).
 #
 #   Open Positions tab:
 #   - Replaced cramped 3-column expanders with 2-column card grid
-#   - Each card has: ticker + strategy badge (colour-coded by bias),
-#     per-leg breakdown with basis chip, DTE progress bar (green→amber→red)
-#   - Summary strip at top: ticker count, option legs, share positions,
-#     strategy pills showing active strategies at a glance
-#   - Cards use CSS hover effect and gradient backgrounds
+#   - Strategy badges colour-coded by bias, DTE progress bar per leg
+#   - Summary strip: ticker count, option legs, share positions, strategy pills
 #
 #   Charts & Visualisations:
-#   - New chart_layout() helper: consistent dark background, IBM Plex font,
-#     subtle grid, proper margins across all charts
-#   - Cumulative P/L: upgraded to go.Scatter for fill colour control,
-#     $-formatted y-axis, cleaner hover tooltips
-#   - Rolling Capture %: gradient fill under line, styled 50% target annotation
-#   - Win/Loss histogram: dot-style median line, $-formatted x-axis
-#   - Heatmap: IBM Plex Mono cell font, improved colorbar, per-cell hover
-#   - Capture % distribution: outside text labels, axis labels added
-#   - Sparkline: slightly taller, transparent background
+#   - chart_layout() helper for consistent dark theme across all charts
+#   - Cumulative P/L, Rolling Capture %, Win/Loss histogram, Heatmap upgraded
+#   - Sparkline: taller, transparent background
 #
 #   Styling:
-#   - New CSS: IBM Plex Sans + IBM Plex Mono typography throughout
+#   - IBM Plex Sans + IBM Plex Mono typography
 #   - Deeper background (#0a0e17), refined metric label styling
-#   - chart-section-title / chart-section-sub classes for consistent
-#     section headings without relying on markdown headers
-#
 #
 # v25.1 (2026-02-22)
-#   - FIXED: Windowed equity P/L now uses true FIFO cost basis via deque —
-#     oldest lot consumed first, partial lot splits handled correctly.
-#     Our v25 used .iloc[-1] (most recent buy = LIFO-like), which gave
-#     correct results for single-lot positions but would diverge on partial
-#     sales of multi-lot positions (e.g. selling 50 of 200 SOFI shares).
-#     Extracted into named function: calculate_windowed_equity_pnl().
+#   - FIXED: Windowed equity P/L now uses true FIFO cost basis via deque.
+#     Extracted into calculate_windowed_equity_pnl().
 #
 # v25 (2026-02-22)
-#   UI & Charts:
-#   - Win/Loss distribution histogram (Derivatives Performance tab)
-#   - P/L heatmap by ticker and month (Derivatives Performance tab)
-#   - Open chain leg highlighted in roll chains (green row + 🟢 prefix)
-#   - Time window selector moved from sidebar to top-right of main area
-#   - Window start capped at first transaction date (fixes 1 Year = All Time
-#     when account is less than 12 months old)
-#
-#   Metrics:
-#   - Portfolio Overview Realized P/L now respects selected time window
-#   - Breakdown expander shows Options/Equity/Div split for windowed views
-#   - "Actual $/Day (gross)" removed — replaced by "Banked $/Day" (net P/L/day)
-#     with gross as delta for context
-#   - Short window warning added (Last 5 Days / Month / 3 Months) explaining
-#     cross-window trade distortion
-#
-#   Code quality:
-#   - .applymap() → .map() throughout (pandas 2.1+ compatibility)
-#   - use_container_width= → width= throughout (Streamlit deprecation)
-#   - st.plotly_chart config={'displayModeBar': False} on all charts
-#   - strat_df column count fixed (was 6, now correctly 7 with medians)
+#   - Win/Loss histogram, P/L heatmap by ticker & month
+#   - Time window selector moved to top-right, capped at first transaction
+#   - Banked $/Day metric, short window warning
+#   - pandas 2.1+ and Streamlit deprecation fixes
 #
 # v24 (prior)
-#   - TastyMechanics branding
-#   - Sparkline equity curve (window-aware)
-#   - Win % colour coding across all performance tables
-#   - Campaign cards replacing outer expanders
-#   - Banked $/Day metric (window-aware)
-#   - Window labels on filtered tabs
+#   - TastyMechanics branding, sparkline, win % colour coding
+#   - Campaign cards, Banked $/Day, window labels
 # ==========================================
 
-st.set_page_config(page_title="TastyMechanics v25.3", layout="wide")
+st.set_page_config(page_title="TastyMechanics v25.4", layout="wide")
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
@@ -486,8 +491,9 @@ def build_campaigns(df, ticker, use_lifetime=False):
                         total_cost -= abs(total)
                         events.append({'date': row['Date'], 'type': 'Exit', 'detail': f"Sold {abs(row['Net_Qty_Row'])} shares", 'cash': total})
                 elif is_option_row(inst):
-                    premiums += total
-                    events.append({'date': row['Date'], 'type': sub_type, 'detail': str(row['Description'])[:60], 'cash': total})
+                    if row['Date'] >= start_date:  # only count options from first share purchase
+                        premiums += total
+                        events.append({'date': row['Date'], 'type': sub_type, 'detail': str(row['Description'])[:60], 'cash': total})
                 elif sub_type == 'Dividend':
                     dividends += total
                     events.append({'date': row['Date'], 'type': 'Dividend', 'detail': 'Dividend', 'cash': total})
@@ -530,9 +536,10 @@ def build_campaigns(df, ticker, use_lifetime=False):
                     current['end_date'] = row['Date']; current['status'] = 'closed'
                     campaigns.append(current); current = None; running_shares = 0.0
         elif is_option_row(inst) and current is not None:
-            current['premiums'] += total
-            current['events'].append({'date': row['Date'], 'type': sub_type,
-                'detail': str(row['Description'])[:60], 'cash': total})
+            if row['Date'] >= current['start_date']:  # only count options from campaign start
+                current['premiums'] += total
+                current['events'].append({'date': row['Date'], 'type': sub_type,
+                    'detail': str(row['Description'])[:60], 'cash': total})
         elif sub_type == 'Dividend' and current is not None:
             current['dividends'] += total
             current['events'].append({'date': row['Date'], 'type': 'Dividend',
@@ -697,6 +704,17 @@ def build_closed_trades(df, campaign_windows=None):
                 dte_open = None
         except: dte_open = None
 
+        closes = grp[~grp['Sub Type'].str.lower().str.contains('to open', na=False)]
+        _close_sub_types = closes['Sub Type'].dropna().str.lower().unique().tolist()
+        if any('expir' in s for s in _close_sub_types):
+            close_type = '⏹️ Expired'
+        elif any('assign' in s for s in _close_sub_types):
+            close_type = '📋 Assigned'
+        elif any('exercise' in s for s in _close_sub_types):
+            close_type = '🏋️ Exercised'
+        else:
+            close_type = '✂️ Closed'
+
         closed_list.append({
             'Ticker': ticker, 'Trade Type': trade_type,
             'Type': 'Call' if 'CALL' in cp else 'Put' if 'PUT' in cp else 'Mixed',
@@ -707,7 +725,7 @@ def build_closed_trades(df, campaign_windows=None):
             'Ann Return %': max(min(net_pnl / capital_risk * 365 / days_held * 100, 500), -500)
                 if (is_credit and capital_risk > 0) else None,
             'Prem/Day': open_credit / days_held if is_credit else None,
-            'Won': net_pnl > 0, 'DTE Open': dte_open,
+            'Won': net_pnl > 0, 'DTE Open': dte_open, 'Close Type': close_type,
         })
     return pd.DataFrame(closed_list)
 
@@ -761,7 +779,7 @@ def build_option_chains(ticker_opts):
 
 # ── MAIN APP ───────────────────────────────────────────────────────────────────
 
-st.title('📟 TastyMechanics v25.3')
+st.title('📟 TastyMechanics v25.4')
 
 with st.sidebar:
     st.header('⚙️ Data Control')
@@ -777,12 +795,45 @@ if not uploaded_file:
 
 # ── load ───────────────────────────────────────────────────────────────────────
 
-df = pd.read_csv(uploaded_file)
-df['Date'] = pd.to_datetime(df['Date'], utc=True)
-for col in ['Total', 'Quantity', 'Commissions', 'Fees']: df[col] = df[col].apply(clean_val)
-df['Ticker']      = df['Underlying Symbol'].fillna(df['Symbol'].str.split().str[0]).fillna('CASH')
-df['Net_Qty_Row'] = df.apply(get_signed_qty, axis=1)
-df = df.sort_values('Date').reset_index(drop=True)
+REQUIRED_COLUMNS = {
+    'Date', 'Action', 'Description', 'Type', 'Sub Type',
+    'Instrument Type', 'Symbol', 'Underlying Symbol',
+    'Quantity', 'Total', 'Commissions', 'Fees',
+    'Strike Price', 'Call or Put', 'Expiration Date', 'Root Symbol', 'Order #',
+}
+
+try:
+    df = pd.read_csv(uploaded_file)
+except Exception as e:
+    st.error(f'❌ Could not read the file: `{e}`')
+    st.stop()
+
+missing = REQUIRED_COLUMNS - set(df.columns)
+if missing:
+    st.error(
+        '❌ **This doesn\'t look like a TastyTrade history CSV.**\n\n'
+        f'Missing columns: `{", ".join(sorted(missing))}`\n\n'
+        'Export your history from **TastyTrade → History → Transactions → Download CSV** '
+        'and make sure the date range covers all your trades.'
+    )
+    st.stop()
+
+if df.empty:
+    st.error('❌ The uploaded CSV is empty — no transactions found.')
+    st.stop()
+
+try:
+    df['Date'] = pd.to_datetime(df['Date'], utc=True)
+    for col in ['Total', 'Quantity', 'Commissions', 'Fees']: df[col] = df[col].apply(clean_val)
+    df['Ticker']      = df['Underlying Symbol'].fillna(df['Symbol'].str.split().str[0]).fillna('CASH')
+    df['Net_Qty_Row'] = df.apply(get_signed_qty, axis=1)
+    df = df.sort_values('Date').reset_index(drop=True)
+except Exception as e:
+    st.error(
+        f'❌ **File loaded but could not be parsed:** `{e}`\n\n'
+        'The file structure looks unusual — make sure you\'re uploading an unmodified TastyTrade CSV export.'
+    )
+    st.stop()
 
 latest_date = df['Date'].max()
 
@@ -969,9 +1020,16 @@ cash_balance    = df['Total'].cumsum().iloc[-1]
 margin_loan     = abs(cash_balance) if cash_balance < 0 else 0.0
 realized_ror    = total_realized_pnl / net_deposited * 100 if net_deposited > 0 else 0.0
 
+# ── Window label helper — used in section titles throughout ───────────────────
+_win_start_str = start_date.strftime('%d/%m/%Y')
+_win_end_str   = latest_date.strftime('%d/%m/%Y')
+_win_label     = (f'<span style="font-size:0.75rem;font-weight:400;color:#58a6ff;'
+                  f'letter-spacing:0.02em;margin-left:8px;">'
+                  f'{_win_start_str} → {_win_end_str} ({selected_period})</span>')
+
 # ── TOP METRICS ────────────────────────────────────────────────────────────────
 
-st.markdown('### 📊 Portfolio Overview')
+st.markdown(f'### 📊 Portfolio Overview {_win_label}', unsafe_allow_html=True)
 _is_all_time    = selected_period == 'All Time'
 _is_short_window = selected_period in ['Last 5 Days', 'Last Month', 'Last 3 Months']
 _pnl_display    = total_realized_pnl if _is_all_time else window_realized_pnl
@@ -1007,27 +1065,44 @@ m6.caption('Dividends received plus net interest (credit earned minus debit char
 m7.metric('Account Age',     '%d days' % account_days)
 m7.caption('Days since your first transaction. Useful context for how long your track record covers.')
 
-with st.expander('💡 Realized P/L Breakdown', expanded=False):
-    b1, b2, b3, b4 = st.columns(4)
-    if _is_all_time:
-        b1.metric('Closed Campaign P/L',    '$%.2f' % closed_camp_pnl)
-        b1.caption('P/L from fully closed wheel campaigns — shares bought, options traded, shares sold. Complete cycles only.')
-        b2.metric('Open Campaign Premiums', '$%.2f' % open_premiums_banked)
-        b2.caption('Premiums banked so far in campaigns still running. Shares not yet sold so overall campaign P/L not finalised.')
-        b3.metric('Standalone Trades P/L', '$%.2f' % pure_opts_pnl)
-        b3.caption('Everything outside wheel campaigns — standalone options, futures options, index trades, pre/post-campaign options on wheel tickers.')
-        b4.metric('Total Realized',         '$%.2f' % total_realized_pnl)
-        b4.caption('Sum of all three above. The single number that matters — real cash generated by your trading.')
-    else:
-        _w_opts_only = _w_opts['Total'].sum()
-        b1.metric('Options P/L',      '$%.2f' % _w_opts_only)
-        b1.caption('Net cash from all option transactions in the window — credits received minus buyback costs, expirations, assignments.')
-        b2.metric('Equity Sales P/L', '$%.2f' % _eq_pnl)
-        b2.caption('Net profit from share sales in the window (FIFO cost basis applied). Purchases excluded — unrealised until sold.')
-        b3.metric('Div + Interest',   '$%.2f' % (div_income + int_net))
-        b3.caption('Dividends received plus net interest in the window.')
-        b4.metric('Total',            '$%.2f' % _pnl_display)
-        b4.caption('Sum of options and equity P/L in the selected window.')
+
+# ── Realized P/L Breakdown — inline chip line ─────────────────────────────────
+def _pnl_chip(label, val):
+    col = '#00cc96' if val >= 0 else '#ef553b'
+    sign = '+' if val >= 0 else ''
+    return (
+        f'<span style="display:inline-flex;align-items:center;gap:5px;'
+        f'background:rgba(255,255,255,0.04);border:1px solid #1f2937;'
+        f'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
+        f'<span style="color:#6b7280;">{label}</span>'
+        f'<span style="color:{col};font-family:monospace;font-weight:600;">'
+        f'{sign}${abs(val):,.2f}</span>'
+        f'</span>'
+    )
+
+if _is_all_time:
+    _breakdown_html = (
+        _pnl_chip('Closed Wheel Campaigns', closed_camp_pnl) +
+        _pnl_chip('Open Wheel Premiums', open_premiums_banked) +
+        _pnl_chip('General Standalone Trading', pure_opts_pnl) +
+        f'<span style="color:#4b5563;margin:0 6px;font-size:0.78rem;">·</span>'
+        f'<span style="color:#8b949e;font-size:0.78rem;font-style:italic;">All Time</span>'
+    )
+else:
+    _w_opts_only = _w_opts['Total'].sum()
+    _breakdown_html = (
+        _pnl_chip('Wheel & Options Trading', _w_opts_only) +
+        _pnl_chip('Equity Sales', _eq_pnl) +
+        _pnl_chip('Div + Interest', div_income + int_net)
+    )
+
+st.markdown(
+    f'<div style="margin:-6px 0 10px 0;display:flex;flex-wrap:wrap;align-items:center;">'
+    f'{_breakdown_html}</div>',
+    unsafe_allow_html=True
+)
+
+
 
 # ── Expiry Alert Strip ─────────────────────────────────────────────────────────
 if _expiry_alerts:
@@ -1118,30 +1193,6 @@ if selected_period != 'All Time' and not _df_prior.empty:
         f'</div>',
         unsafe_allow_html=True
     )
-if not closed_trades_df.empty:
-    _spark_df = closed_trades_df[closed_trades_df['Close Date'] >= start_date].sort_values('Close Date').copy()
-    if _spark_df.empty:
-        _spark_df = closed_trades_df.sort_values('Close Date').copy()
-    _spark_df['Cum P/L'] = _spark_df['Net P/L'].cumsum()
-    _spark_color = '#00cc96' if _spark_df['Cum P/L'].iloc[-1] >= 0 else '#ef553b'
-    _fill_color  = 'rgba(0,204,150,0.15)' if _spark_color == '#00cc96' else 'rgba(239,85,59,0.15)'
-    _fig_spark = go.Figure()
-    _fig_spark.add_trace(go.Scatter(
-        x=_spark_df['Close Date'], y=_spark_df['Cum P/L'],
-        mode='lines', line=dict(color=_spark_color, width=1.5),
-        fill='tozeroy', fillcolor=_fill_color,
-        hovertemplate='%{x|%d/%m/%y}<br>$%{y:,.2f}<extra></extra>'
-    ))
-    _fig_spark.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
-    _fig_spark.update_layout(
-        height=90, margin=dict(l=0, r=0, t=4, b=4),
-        paper_bgcolor='rgba(10,14,23,0)', plot_bgcolor='rgba(10,14,23,0)',
-        xaxis=dict(visible=False), yaxis=dict(visible=False),
-        showlegend=False
-    )
-    st.plotly_chart(_fig_spark, width='stretch', config={'displayModeBar': False})
-
-st.markdown('---')
 
 # ── TABS ───────────────────────────────────────────────────────────────────────
 tab0, tab1, tab2, tab3, tab4 = st.tabs([
@@ -1213,7 +1264,7 @@ with tab1:
         has_data   = not all_cdf.empty
 
         st.info(window_label)
-        st.markdown('#### 🎯 Premium Selling Scorecard')
+        st.markdown(f'#### 🎯 Premium Selling Scorecard {_win_label}', unsafe_allow_html=True)
         st.caption(
             'Credit trades only. '
             '**Win Rate** = % of trades closed positive, regardless of size. '
@@ -1323,31 +1374,32 @@ with tab1:
                         subset=['P/L']),
                     width='stretch', hide_index=True)
 
-                    strat_df = all_cdf.groupby('Trade Type').agg(
-                        Trades=('Won','count'),
-                        Win_Rate=('Won', lambda x: x.mean()*100),
-                        Total_PNL=('Net P/L','sum'),
-                        Med_Capture=('Capture %','median'),
-                        Med_Days=('Days Held','median'),
-                        Med_DTE=('DTE Open','median'),
-                    ).reset_index().sort_values('Total_PNL', ascending=False).round(1)
-                    strat_df.columns = ['Strategy','Trades','Win %','P/L','Capture %','Days','DTE']
-                    st.markdown('##### 🧩 Defined vs Undefined Risk — by Strategy')
-                    st.caption('All closed trades — credit and debit. Naked = undefined risk, higher premium. Spreads/Condors = defined max loss, less credit. Debit spreads show P/L but no capture % (not applicable). Are your defined-risk trades worth the premium you give up for the protection?')
-                    st.dataframe(strat_df.style.format({
-                        'Win %': lambda x: '{:.1f}%'.format(x),
-                        'Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
-                        'P/L': lambda x: '${:,.2f}'.format(x),
-                        'Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                        'DTE': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                    }).map(color_win_rate, subset=['Win %'])
-                    .map(lambda v: 'color: #00cc96' if isinstance(v,(int,float)) and v>0
-                        else ('color: #ef553b' if isinstance(v,(int,float)) and v<0 else ''),
-                        subset=['P/L']),
-                    width='stretch', hide_index=True)
+            if has_data and has_credit:
+                strat_df = all_cdf.groupby('Trade Type').agg(
+                    Trades=('Won','count'),
+                    Win_Rate=('Won', lambda x: x.mean()*100),
+                    Total_PNL=('Net P/L','sum'),
+                    Med_Capture=('Capture %','median'),
+                    Med_Days=('Days Held','median'),
+                    Med_DTE=('DTE Open','median'),
+                ).reset_index().sort_values('Total_PNL', ascending=False).round(1)
+                strat_df.columns = ['Strategy','Trades','Win %','P/L','Capture %','Days','DTE']
+                st.markdown('##### 🧩 Defined vs Undefined Risk — by Strategy')
+                st.caption('All closed trades — credit and debit. Naked = undefined risk, higher premium. Spreads/Condors = defined max loss, less credit. Debit spreads show P/L but no capture % (not applicable). Are your defined-risk trades worth the premium you give up for the protection?')
+                st.dataframe(strat_df.style.format({
+                    'Win %': lambda x: '{:.1f}%'.format(x),
+                    'Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
+                    'P/L': lambda x: '${:,.2f}'.format(x),
+                    'Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                    'DTE': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                }).map(color_win_rate, subset=['Win %'])
+                .map(lambda v: 'color: #00cc96' if isinstance(v,(int,float)) and v>0
+                    else ('color: #ef553b' if isinstance(v,(int,float)) and v<0 else ''),
+                    subset=['P/L']),
+                width='stretch', hide_index=True)
 
             st.markdown('---')
-            st.markdown('#### Performance by Ticker')
+            st.markdown(f'#### Performance by Ticker {_win_label}', unsafe_allow_html=True)
             st.caption(
                 'All closed trades — credit and debit — grouped by underlying. '
                 '**Win %** counts any trade that closed positive, regardless of size. '
@@ -1401,7 +1453,7 @@ with tab1:
 
             st.markdown('---')
             # ── Week-over-Week / Month-over-Month P/L bar chart ───────────────
-            st.markdown('<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">📅 Options P/L by Week &amp; Month</div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">📅 Options P/L by Week &amp; Month {_win_label}</div>', unsafe_allow_html=True)
             st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;"><b style="color:#58a6ff;">Options trades only</b> — net P/L from closed equity &amp; futures options, grouped by the date the trade closed. Excludes share sales, dividends, and interest. See the <b>All Trades</b> tab for total portfolio P/L by period.</div>', unsafe_allow_html=True)
 
             _period_df = all_cdf.copy()
@@ -1452,46 +1504,6 @@ with tab1:
                 _mo_lay['bargap'] = 0.35
                 _fig_mo.update_layout(**_mo_lay)
                 st.plotly_chart(_fig_mo, width='stretch', config={'displayModeBar': False})
-
-            st.markdown('---')
-            st.markdown('<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">🗓 P/L by Ticker &amp; Month</div>', unsafe_allow_html=True)
-            st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;">Net P/L per ticker per calendar month (by close date). Green = profitable, red = losing. Intensity shows size. Grey = no closed trades that month.</div>', unsafe_allow_html=True)
-            _hm_df = all_cdf.copy()
-            _hm_df['Month']     = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%b %Y')
-            _hm_df['MonthSort'] = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%Y-%m')
-            _hm_pivot = _hm_df.groupby(['Ticker','MonthSort','Month'])['Net P/L'].sum().reset_index()
-            _months_sorted  = sorted(_hm_pivot['MonthSort'].unique())
-            _month_labels   = [_hm_pivot[_hm_pivot['MonthSort']==m]['Month'].iloc[0] for m in _months_sorted]
-            _tickers_sorted = sorted(_hm_pivot['Ticker'].unique(),
-                key=lambda t: _hm_pivot[_hm_pivot['Ticker']==t]['Net P/L'].sum(), reverse=True)
-            _z = []; _text = []
-            for tkr in _tickers_sorted:
-                row_z, row_t = [], []
-                for ms in _months_sorted:
-                    val = _hm_pivot[(_hm_pivot['Ticker']==tkr) & (_hm_pivot['MonthSort']==ms)]['Net P/L'].sum()
-                    row_z.append(val if val != 0 else None)
-                    row_t.append('$%.0f' % val if val != 0 else '')
-                _z.append(row_z); _text.append(row_t)
-            _fig_hm = go.Figure(data=go.Heatmap(
-                z=_z, x=_month_labels, y=_tickers_sorted,
-                text=_text, texttemplate='%{text}', textfont=dict(size=10, family='IBM Plex Mono'),
-                colorscale=[
-                    [0.0,  '#7f1d1d'], [0.35, '#ef553b'],
-                    [0.5,  '#141c2e'],
-                    [0.65, '#00cc96'], [1.0,  '#004d3a'],
-                ],
-                zmid=0, showscale=True,
-                colorbar=dict(title=dict(text='P/L', side='right'), tickformat='$,.0f',
-                    tickfont=dict(size=10, family='IBM Plex Mono'), len=0.9),
-                hoverongaps=False,
-                hovertemplate='<b>%{y}</b> — %{x}<br>P/L: <b>$%{z:,.2f}</b><extra></extra>',
-            ))
-            _hm_lay = chart_layout(height=max(300, len(_tickers_sorted) * 32 + 60), margin_t=16)
-            _hm_lay['xaxis'] = dict(side='top', gridcolor='rgba(0,0,0,0)', tickfont=dict(size=11))
-            _hm_lay['yaxis'] = dict(autorange='reversed', gridcolor='rgba(0,0,0,0)',
-                tickfont=dict(size=11, family='IBM Plex Mono'))
-            _fig_hm.update_layout(**_hm_lay)
-            st.plotly_chart(_fig_hm, width='stretch', config={'displayModeBar': False})
 
             st.markdown('---')
             cum_df = all_cdf.sort_values('Close Date').copy()
@@ -1560,6 +1572,46 @@ with tab1:
             st.plotly_chart(_fig_hist, width='stretch', config={'displayModeBar': False})
 
             st.markdown('---')
+            st.markdown('<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">🗓 P/L by Ticker &amp; Month</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;">Net P/L per ticker per calendar month (by close date). Green = profitable, red = losing. Intensity shows size. Grey = no closed trades that month.</div>', unsafe_allow_html=True)
+            _hm_df = all_cdf.copy()
+            _hm_df['Month']     = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%b %Y')
+            _hm_df['MonthSort'] = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%Y-%m')
+            _hm_pivot = _hm_df.groupby(['Ticker','MonthSort','Month'])['Net P/L'].sum().reset_index()
+            _months_sorted  = sorted(_hm_pivot['MonthSort'].unique())
+            _month_labels   = [_hm_pivot[_hm_pivot['MonthSort']==m]['Month'].iloc[0] for m in _months_sorted]
+            _tickers_sorted = sorted(_hm_pivot['Ticker'].unique(),
+                key=lambda t: _hm_pivot[_hm_pivot['Ticker']==t]['Net P/L'].sum(), reverse=True)
+            _z = []; _text = []
+            for tkr in _tickers_sorted:
+                row_z, row_t = [], []
+                for ms in _months_sorted:
+                    val = _hm_pivot[(_hm_pivot['Ticker']==tkr) & (_hm_pivot['MonthSort']==ms)]['Net P/L'].sum()
+                    row_z.append(val if val != 0 else None)
+                    row_t.append('$%.0f' % val if val != 0 else '')
+                _z.append(row_z); _text.append(row_t)
+            _fig_hm = go.Figure(data=go.Heatmap(
+                z=_z, x=_month_labels, y=_tickers_sorted,
+                text=_text, texttemplate='%{text}', textfont=dict(size=10, family='IBM Plex Mono'),
+                colorscale=[
+                    [0.0,  '#7f1d1d'], [0.35, '#ef553b'],
+                    [0.5,  '#141c2e'],
+                    [0.65, '#00cc96'], [1.0,  '#004d3a'],
+                ],
+                zmid=0, showscale=True,
+                colorbar=dict(title=dict(text='P/L', side='right'), tickformat='$,.0f',
+                    tickfont=dict(size=10, family='IBM Plex Mono'), len=0.9),
+                hoverongaps=False,
+                hovertemplate='<b>%{y}</b> — %{x}<br>P/L: <b>$%{z:,.2f}</b><extra></extra>',
+            ))
+            _hm_lay = chart_layout(height=max(300, len(_tickers_sorted) * 32 + 60), margin_t=16)
+            _hm_lay['xaxis'] = dict(side='top', gridcolor='rgba(0,0,0,0)', tickfont=dict(size=11))
+            _hm_lay['yaxis'] = dict(autorange='reversed', gridcolor='rgba(0,0,0,0)',
+                tickfont=dict(size=11, family='IBM Plex Mono'))
+            _fig_hm.update_layout(**_hm_lay)
+            st.plotly_chart(_fig_hm, width='stretch', config={'displayModeBar': False})
+
+            st.markdown('---')
             bcol, wcol = st.columns(2)
             with bcol:
                 st.markdown('##### 🏆 Best 5 Trades')
@@ -1579,25 +1631,34 @@ with tab1:
                 }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
 
             with st.expander('📋 Full Closed Trade Log', expanded=False):
-                log = all_cdf[['Ticker','Trade Type','Type','Open Date','Close Date',
+                log = all_cdf[['Ticker','Trade Type','Type','Close Type','Open Date','Close Date',
                                'Days Held','Premium Rcvd','Net P/L','Capture %',
                                'Capital Risk','Ann Return %']].copy()
-                log['Open Date']  = pd.to_datetime(log['Open Date']).dt.strftime('%d/%m/%y')
-                log['Close Date'] = pd.to_datetime(log['Close Date']).dt.strftime('%d/%m/%y')
+                # Keep as datetime — do NOT strftime. Streamlit column_config renders
+                # them as dates and sorts chronologically, not alphabetically.
+                log['Open Date']  = pd.to_datetime(log['Open Date']).dt.tz_localize(None)
+                log['Close Date'] = pd.to_datetime(log['Close Date']).dt.tz_localize(None)
                 log.rename(columns={
-                    'Trade Type':'Strategy','Type':'C/P','Open Date':'Open','Close Date':'Close',
+                    'Trade Type':'Strategy','Type':'C/P','Close Type':'How Closed',
+                    'Open Date':'Open','Close Date':'Close',
                     'Days Held':'Days','Premium Rcvd':'Credit','Net P/L':'P/L',
                     'Capital Risk':'Risk','Ann Return %':'Ann Ret %'
                 }, inplace=True)
                 log = log.sort_values('Close', ascending=False)
-                st.dataframe(log.style.format({
-                    'Credit':     lambda x: '${:.2f}'.format(x),
-                    'P/L':        lambda x: '${:.2f}'.format(x),
-                    'Risk':       lambda x: '${:,.0f}'.format(x),
-                    'Capture %':  lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
-                    'Ann Ret %':  lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
-                }).map(color_pnl_cell, subset=['P/L']),
-                width='stretch', hide_index=True)
+                st.dataframe(
+                    log.style.format({
+                        'Credit':     lambda x: '${:.2f}'.format(x),
+                        'P/L':        lambda x: '${:.2f}'.format(x),
+                        'Risk':       lambda x: '${:,.0f}'.format(x),
+                        'Capture %':  lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
+                        'Ann Ret %':  lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
+                    }).map(color_pnl_cell, subset=['P/L']),
+                    width='stretch', hide_index=True,
+                    column_config={
+                        'Open':  st.column_config.DateColumn('Open',  format='DD/MM/YY'),
+                        'Close': st.column_config.DateColumn('Close', format='DD/MM/YY'),
+                    }
+                )
 
 # ── Tab 2: Wheel Campaigns ─────────────────────────────────────────────────────
 with tab2:
@@ -1771,7 +1832,32 @@ with tab2:
 
 # ── Tab 3: All Trades ──────────────────────────────────────────────────────────
 with tab3:
-    st.subheader('🔍 Realized P/L — All Tickers')
+    st.markdown(f'### 🔍 Realized P/L — All Tickers {_win_label}', unsafe_allow_html=True)
+
+    # ── Sparkline equity curve ─────────────────────────────────────────────────
+    if not closed_trades_df.empty:
+        _spark_df = closed_trades_df[closed_trades_df['Close Date'] >= start_date].sort_values('Close Date').copy()
+        if _spark_df.empty:
+            _spark_df = closed_trades_df.sort_values('Close Date').copy()
+        _spark_df['Cum P/L'] = _spark_df['Net P/L'].cumsum()
+        _spark_color = '#00cc96' if _spark_df['Cum P/L'].iloc[-1] >= 0 else '#ef553b'
+        _fill_color  = 'rgba(0,204,150,0.15)' if _spark_color == '#00cc96' else 'rgba(239,85,59,0.15)'
+        _fig_spark = go.Figure()
+        _fig_spark.add_trace(go.Scatter(
+            x=_spark_df['Close Date'], y=_spark_df['Cum P/L'],
+            mode='lines', line=dict(color=_spark_color, width=1.5),
+            fill='tozeroy', fillcolor=_fill_color,
+            hovertemplate='%{x|%d/%m/%y}<br>$%{y:,.2f}<extra></extra>'
+        ))
+        _fig_spark.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
+        _fig_spark.update_layout(
+            height=90, margin=dict(l=0, r=0, t=4, b=4),
+            paper_bgcolor='rgba(10,14,23,0)', plot_bgcolor='rgba(10,14,23,0)',
+            xaxis=dict(visible=False), yaxis=dict(visible=False),
+            showlegend=False
+        )
+        st.plotly_chart(_fig_spark, width='stretch', config={'displayModeBar': False})
+    st.markdown('---')
     rows = []
     for ticker, camps in sorted(all_campaigns.items()):
         tr = sum(realized_pnl(c, use_lifetime) for c in camps)
@@ -1824,7 +1910,7 @@ with tab3:
 
     # ── Total Portfolio P/L by Week & Month ───────────────────────────────────
     st.markdown('---')
-    st.markdown('<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">📅 Total Realized P/L by Week &amp; Month</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">📅 Total Realized P/L by Week &amp; Month {_win_label}</div>', unsafe_allow_html=True)
     st.markdown(
         '<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;">'
         '<b style="color:#00cc96;">Whole portfolio — realized flows only</b>: '
@@ -1890,7 +1976,7 @@ with tab3:
 
 # ── Tab 4: Income & Fees ───────────────────────────────────────────────────────
 with tab4:
-    st.subheader('💰 Non-Trade Cash Flows')
+    st.markdown(f'### 💰 Non-Trade Cash Flows {_win_label}', unsafe_allow_html=True)
     ic1, ic2, ic3, ic4 = st.columns(4)
     ic1.metric('Deposited',      '$%.2f' % total_deposited)
     ic2.metric('Withdrawn',      '$%.2f' % abs(total_withdrawn))
