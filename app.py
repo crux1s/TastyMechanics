@@ -2,11 +2,14 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import timedelta
 from collections import defaultdict, deque
+from dataclasses import dataclass
+import html as _html
+import io as _io
 
 # ==========================================
-# TastyMechanics v25.4
+# TastyMechanics v25.6
 # ==========================================
 # Changelog:
 #
@@ -93,7 +96,8 @@ from collections import defaultdict, deque
 #   - Campaign cards, Banked $/Day, window labels
 # ==========================================
 
-st.set_page_config(page_title="TastyMechanics v25.4", layout="wide")
+APP_VERSION = "v25.6"
+st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
@@ -206,8 +210,15 @@ PAT_CLOSING      = f'{PAT_CLOSE}|{PAT_EXPIR}|{PAT_ASSIGN}|{PAT_EXERCISE}'
 # Wheel strategy
 WHEEL_MIN_SHARES = 100
 
+# CSV validation
+REQUIRED_COLUMNS = {
+    'Date', 'Action', 'Description', 'Type', 'Sub Type',
+    'Instrument Type', 'Symbol', 'Underlying Symbol',
+    'Quantity', 'Total', 'Commissions', 'Fees',
+    'Strike Price', 'Call or Put', 'Expiration Date', 'Root Symbol', 'Order #',
+}
+
 # ── helpers ───────────────────────────────────────────────────────────────────
-import html as _html
 def xe(s):
     """Escape a string for safe HTML interpolation. Prevents XSS from CSV data."""
     return _html.escape(str(s), quote=True)
@@ -246,7 +257,7 @@ def identify_pos_type(row):
 def translate_readable(row):
     if not is_option_row(str(row['Instrument Type'])): return '%s Shares' % row['Ticker']
     try:    exp_dt = pd.to_datetime(row['Expiration Date'], format='mixed', errors='coerce').strftime('%d/%m')
-    except: exp_dt = 'N/A'
+    except (ValueError, TypeError, AttributeError): exp_dt = 'N/A'
     cp     = 'C' if 'CALL' in str(row['Call or Put']).upper() else 'P'
     action = 'STO' if row['Net_Qty'] < 0 else 'BTO'
     return '%s %d @ %.0f%s (%s)' % (action, abs(int(row['Net_Qty'])), row['Strike Price'], cp, exp_dt)
@@ -332,7 +343,7 @@ def render_position_card(ticker, t_df):
                     f'<div style="color:#6b7280;font-size:0.7rem;margin-top:3px;">{dte} to expiry</div>'
                     f'</div>'
                 )
-            except: pass
+            except (ValueError, TypeError): pass
 
         legs_html += (
             f'<div style="{leg_style}">'
@@ -750,7 +761,7 @@ def build_closed_trades(df, campaign_windows=None):
                 dte_open = max((nearest_exp - open_date.replace(tzinfo=None)).days, 0)
             else:
                 dte_open = None
-        except: dte_open = None
+        except (ValueError, TypeError, AttributeError): dte_open = None
 
         closes = grp[~grp['Sub Type'].str.lower().str.contains('to open', na=False)]
         _close_sub_types = closes['Sub Type'].dropna().str.lower().unique().tolist()
@@ -834,7 +845,7 @@ def build_option_chains(ticker_opts):
 
 # ── MAIN APP ───────────────────────────────────────────────────────────────────
 
-st.title('📟 TastyMechanics v25.4')
+st.title(f'📟 TastyMechanics {APP_VERSION}')
 
 with st.sidebar:
     st.header('⚙️ Data Control')
@@ -845,17 +856,28 @@ with st.sidebar:
         help='If ON, combines ALL history for a ticker into one campaign. If OFF, resets breakeven every time shares hit zero.')
 
 if not uploaded_file:
-    st.info('🛰️ **TastyMechanics v25 Ready.** Upload your TastyTrade CSV to begin.')
+    st.info(f'🛰️ **TastyMechanics {APP_VERSION} Ready.** Upload your TastyTrade CSV to begin.')
     st.stop()
+
+
+@dataclass
+class AppData:
+    """Typed container for all heavy-computed data from build_all_data().
+    Replaces a fragile 10-tuple — fields are named, self-documenting,
+    and safe to reorder or extend without breaking the caller."""
+    all_campaigns:          dict
+    wheel_tickers:          list
+    pure_options_tickers:   list
+    closed_trades_df:       object   # pd.DataFrame
+    df_open:                object   # pd.DataFrame
+    closed_camp_pnl:        float
+    open_premiums_banked:   float
+    capital_deployed:       float
+    pure_opts_pnl:          float
+    extra_capital_deployed: float
 
 # ── Cached data loading ────────────────────────────────────────────────────────
 
-REQUIRED_COLUMNS = {
-    'Date', 'Action', 'Description', 'Type', 'Sub Type',
-    'Instrument Type', 'Symbol', 'Underlying Symbol',
-    'Quantity', 'Total', 'Commissions', 'Fees',
-    'Strike Price', 'Call or Put', 'Expiration Date', 'Root Symbol', 'Order #',
-}
 
 @st.cache_data(show_spinner='📂 Loading CSV…')
 def load_and_parse(file_bytes: bytes) -> pd.DataFrame:
@@ -864,8 +886,7 @@ def load_and_parse(file_bytes: bytes) -> pd.DataFrame:
     Cached on raw file bytes — re-runs only when a new file is uploaded.
     Returns a fully typed, sorted DataFrame ready for all downstream logic.
     """
-    import io
-    df = pd.read_csv(io.BytesIO(file_bytes))
+    df = pd.read_csv(_io.BytesIO(file_bytes))
     df['Date']        = pd.to_datetime(df['Date'], utc=True)
     for col in ['Total', 'Quantity', 'Commissions', 'Fees']:
         df[col] = df[col].apply(clean_val)
@@ -973,10 +994,18 @@ def build_all_data(df: pd.DataFrame, use_lifetime: bool):
     for ticker, camps in all_campaigns.items():
         pure_opts_pnl += pure_options_pnl(df, ticker, camps)
 
-    return (all_campaigns, wheel_tickers, pure_options_tickers,
-            closed_trades_df, df_open,
-            closed_camp_pnl, open_premiums_banked,
-            capital_deployed, pure_opts_pnl, extra_capital_deployed)
+    return AppData(
+        all_campaigns=all_campaigns,
+        wheel_tickers=wheel_tickers,
+        pure_options_tickers=pure_options_tickers,
+        closed_trades_df=closed_trades_df,
+        df_open=df_open,
+        closed_camp_pnl=closed_camp_pnl,
+        open_premiums_banked=open_premiums_banked,
+        capital_deployed=capital_deployed,
+        pure_opts_pnl=pure_opts_pnl,
+        extra_capital_deployed=extra_capital_deployed,
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -992,7 +1021,6 @@ def get_daily_pnl(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Validate + load ────────────────────────────────────────────────────────────
 # Read raw bytes first so we can validate columns before the cached parse
-import io as _io
 _raw_bytes = uploaded_file.getvalue()
 _check_df  = pd.read_csv(_io.BytesIO(_raw_bytes), nrows=0)
 _missing   = REQUIRED_COLUMNS - set(_check_df.columns)
@@ -1017,10 +1045,17 @@ if df.empty:
 latest_date = df['Date'].max()
 
 # ── Unpack cached heavy computation ───────────────────────────────────────────
-(all_campaigns, wheel_tickers, pure_options_tickers,
- closed_trades_df, df_open,
- closed_camp_pnl, open_premiums_banked,
- capital_deployed, pure_opts_pnl, extra_capital_deployed) = build_all_data(df, use_lifetime)
+_d = build_all_data(df, use_lifetime)
+all_campaigns          = _d.all_campaigns
+wheel_tickers          = _d.wheel_tickers
+pure_options_tickers   = _d.pure_options_tickers
+closed_trades_df       = _d.closed_trades_df
+df_open                = _d.df_open
+closed_camp_pnl        = _d.closed_camp_pnl
+open_premiums_banked   = _d.open_premiums_banked
+capital_deployed       = _d.capital_deployed
+pure_opts_pnl          = _d.pure_opts_pnl
+extra_capital_deployed = _d.extra_capital_deployed
 
 total_realized_pnl = closed_camp_pnl + open_premiums_banked + pure_opts_pnl
 capital_deployed  += extra_capital_deployed
@@ -1075,7 +1110,7 @@ with _hdr_left:
     """ % (latest_date.strftime('%d/%m/%Y %H:%M'),
            start_date.strftime('%d/%m/%Y'),
            latest_date.strftime('%d/%m/%Y'),
-           selected_period), unsafe_allow_html=True)
+           xe(selected_period)), unsafe_allow_html=True)
 
 window_trades_df = closed_trades_df[closed_trades_df['Close Date'] >= start_date].copy() \
     if not closed_trades_df.empty else pd.DataFrame()
@@ -1159,7 +1194,7 @@ m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
 m1.metric('Realized P/L',    '$%.2f' % _pnl_display)
 m1.caption('All cash actually banked — options P/L, share sales, premiums collected. Filtered to selected time window. Unrealised share P/L not included.')
 m2.metric('Realized ROR',    '%.1f%%' % _ror_display)
-m2.caption('Realized P/L as a %% of net deposits. How hard your deposited capital is working.')
+m2.caption('Realized P/L as a % of net deposits. How hard your deposited capital is working.')
 
 if _is_short_window:
     st.warning(
@@ -1303,7 +1338,7 @@ with tab0:
                 today_date = latest_date.date()          # plain date, no timezone
                 exp_plain  = exp_date.date() if hasattr(exp_date, 'date') else exp_date
                 return '%dd' % max((exp_plain - today_date).days, 0)
-            except: return 'N/A'
+            except (ValueError, TypeError, AttributeError): return 'N/A'
 
         df_open['DTE'] = df_open.apply(calc_dte, axis=1)
         tickers_open = [t for t in sorted(df_open['Ticker'].unique()) if t != 'CASH']
@@ -1433,7 +1468,7 @@ with tab1:
             r4.metric('Total Fees',   '$%.2f' % _total_fees)
             r4.caption('Commissions + exchange fees on option trades in this window. The silent drag on every trade.')
             r5.metric('Fees % of P/L', '%.1f%%' % _fees_pct)
-            r5.caption('Total fees as a percentage of net realized P/L. Under 10%% is healthy. High on 0DTE or frequent small trades — fees eat a larger slice of smaller credits.')
+            r5.caption('Total fees as a percentage of net realized P/L. Under 10% is healthy. High on 0DTE or frequent small trades — fees eat a larger slice of smaller credits.')
             r6.metric('Fees/Trade',   '$%.2f' % (_total_fees / len(all_cdf) if len(all_cdf) > 0 else 0))
             r6.caption('Average fee cost per closed trade. Useful for comparing cost efficiency across strategies — defined risk spreads cost more per trade than naked puts.')
         else:
@@ -2037,7 +2072,7 @@ with tab3:
                                         try:
                                             exp_dt = pd.to_datetime(leg['exp'], dayfirst=True)
                                             dte_str = '%dd' % max((exp_dt - leg['date'].replace(tzinfo=None)).days, 0)
-                                        except: dte_str = ''
+                                        except (ValueError, TypeError): dte_str = ''
                                     is_open_leg = is_open_chain and leg_i == len(chain) - 1
                                     chain_rows.append({
                                         'Action': ('🟢 ' + action) if is_open_leg else action,
