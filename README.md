@@ -68,7 +68,7 @@ pip install streamlit pandas plotly
 ### Run
 
 ```bash
-streamlit run Tastytrade_CSV_Dashboard_v25.6.py
+streamlit run app.py
 ```
 
 Then open `http://localhost:8501` in your browser.
