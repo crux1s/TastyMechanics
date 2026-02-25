@@ -13,87 +13,85 @@ import io as _io
 # ==========================================
 # Changelog:
 #
+# v25.6 (2026-02-26)
+#   Code Quality (periodic full review):
+#   - FIXED: Timezone architecture unified — all dates are naive UTC from ingest.
+#     Single tz conversion in load_and_parse(); all downstream code uses naive
+#     datetimes. Eliminates 10 scattered tz_localize/replace calls that had
+#     accumulated across incremental development.
+#   - FIXED: Short equity positions handled correctly in FIFO engine.
+#     _iter_fifo_sells() now maintains parallel long_queues + short_queues per
+#     ticker. Previously a short-sell with an empty long queue yielded the full
+#     sale proceeds as costless gain (e.g. $5500 P/L instead of $500).
+#     Buy-to-cover now correctly matches against the originating short lot.
+#   - FIXED: Naked long options (LEAPS, outright calls/puts) mislabelled as
+#     "*Debit Spread" in build_closed_trades(). Added n_short_legs == 0 guard
+#     before spread classification; naked longs now correctly show "Long Call",
+#     "Long Put", or "Long Strangle".
+#   - FIXED: capital_risk for naked long options was $1 (fell through w_call=0
+#     branch). Now correctly set to premium paid — the actual max loss.
+#   - FIXED: ThetaGang DTE metrics no longer polluted by LEAPS. Management rate,
+#     Median DTE at Open/Close, and DTE distribution chart all filter to trades
+#     with DTE Open <= 90. LEAPS trades shown in a separate callout strip with
+#     their own P/L and win rate summary.
+#   - FIXED: Weekly bar chart hover showed $-123.45 for negative weeks. Now uses
+#     customdata pre-formatted strings (matches monthly charts). All 3 weekly
+#     charts fixed (Tab1, Tab4, volatility).
+#   - FIXED: Bare except: clauses replaced with specific exception types at all
+#     5 locations. Dead total_cost variable removed from lifetime campaign branch.
+#     Defensive else added to time window selector.
+#   - Refactor: APP_VERSION constant — single source of truth for version string.
+#   - Refactor: AppData dataclass replaces fragile 10-tuple return from
+#     build_all_data(). Fields are named and safe to extend.
+#   - Refactor: _iter_fifo_sells() extracted as shared FIFO core — previously
+#     duplicated in windowed and daily P/L functions.
+#   - Refactor: pure_options_pnl() computed once per ticker in build_all_data(),
+#     stored in AppData.pure_opts_per_ticker. Tab 4 does a dict lookup.
+#   - Refactor: calc_dte() moved to module level (was recreated inside a
+#     conditional block on every render).
+#   - Refactor: REQUIRED_COLUMNS and all imports moved to top of file.
+#   - Refactor: Dead CSS classes removed; _badge_inline_style() is the sole
+#     source of badge styling.
+#   - Security: XSS prevention via xe() helper applied to all dynamic HTML.
+#
+# v25.5 (2026-02-25)
+#   - FIXED: FIFO duplication — _iter_fifo_sells() extracted as shared core.
+#   - FIXED: calculate_windowed_equity_pnl() now cached with @st.cache_data.
+#   - UI: Open Positions cards fully inline-styled for Streamlit shadow DOM
+#     compatibility.
+#
 # v25.4 (2026-02-24)
 #   Bug Fixes:
-#   - FIXED: Campaign premiums date guard — options traded before the share
-#     purchase date are no longer credited against campaign effective basis.
-#     Pre-purchase options now correctly flow to pure_options_pnl (standalone).
-#     Applies to both windowed and lifetime campaign modes.
-#     Real-world impact: SMR eff. basis corrected from $16.72 → $20.25/share.
-#   - FIXED: calculate_windowed_equity_pnl() gains end_date parameter —
-#     prior period P/L comparison was double-counting equity sales that fell
-#     in the current window. Boundary uses strict < to match _df_prior filter.
-#   - FIXED: CSV validation — wrong file now shows a friendly error listing
-#     missing columns rather than crashing. Also catches empty files and
-#     parse errors.
-#   - FIXED: Negative currency formatting — bar chart labels and period
-#     comparison card now render -$308 not $-308 throughout.
-#   - FIXED: Timezone-safe DTE calculation — tz_localize(None) before
-#     re-localizing prevents crash when TastyTrade exports expiry as full
-#     timestamp rather than plain date string.
-#   - FIXED: Full Closed Trade Log date sorting — dates kept as datetime +
-#     DateColumn config so clicking Open/Close sorts chronologically not
-#     alphabetically.
+#   - FIXED: Campaign premiums date guard — pre-purchase options no longer
+#     credited against campaign effective basis; correctly flow to standalone.
+#     Real-world impact: SMR eff. basis corrected from $16.72 to $20.25/share.
+#   - FIXED: Prior period P/L double-counting via end_date param on
+#     calculate_windowed_equity_pnl().
+#   - FIXED: CSV validation with friendly missing-column error message.
+#   - FIXED: Negative currency formatting throughout ($-308 -> -$308).
+#   - FIXED: Full Closed Trade Log date sorting (datetime + DateColumn config).
 #
 #   New Features:
-#   - How Closed column in Full Closed Trade Log: ⏹️ Expired / 📋 Assigned /
-#     🏋️ Exercised / ✂️ Closed — derived from TastyTrade Sub Type field.
+#   - How Closed column: ⏹️ Expired / 📋 Assigned / 🏋️ Exercised / ✂️ Closed.
 #   - Total Realized P/L by Week & Month charts (All Trades tab) — FIFO-correct
-#     whole-portfolio view using new calculate_daily_realized_pnl() engine.
-#     Share purchases excluded; equity sells counted at net FIFO gain/loss.
-#   - calculate_daily_realized_pnl() — daily bucketed version of FIFO engine
-#     returning a per-day series for charting.
-#   - Window date label on all window-sensitive section headers — small blue
-#     inline text showing e.g. "24/01/2026 → 23/02/2026 (Last Month)".
-#     Applied to: Portfolio Overview, Scorecard, Performance by Ticker,
-#     Options P/L charts, All Trades, Income & Fees.
+#     whole-portfolio view via calculate_daily_realized_pnl().
+#   - Window date label on all window-sensitive section headers.
 #
-#   Layout & Polish:
-#   - Realized P/L Breakdown expander replaced with inline chip line directly
-#     below the metrics row. All Time: Closed Wheel Campaigns · Open Wheel
-#     Premiums · General Standalone Trading. Windowed: Wheel & Options Trading
-#     · Equity Sales · Div + Interest.
-#   - Sparkline moved from above tabs to top of All Trades tab.
-#   - P/L by Ticker & Month heatmap moved to below Win/Loss Distribution.
-#   - Defined vs Undefined Risk table pulled out of col2 into full-width row.
-#   - Options P/L by Week & Month labelled clearly as options-only with
-#     pointer to All Trades tab for whole-portfolio view.
+#   Layout:
+#   - Realized P/L Breakdown inline chip line (replaces expander).
+#   - Sparkline moved to All Trades tab.
+#   - Defined vs Undefined Risk table full-width.
 #
 # v25.3 (2026-02-23)
-#   Weekly Review Features:
-#   - Expiry Alert Strip: inline chip strip below metrics showing all options
-#     expiring within 21 days. Green (>14d) → amber (≤14d) → red (≤5d).
-#   - Period Comparison Card: current vs prior equivalent window showing
-#     Realized P/L, Trades Closed, Win Rate, Dividends with deltas.
+#   - Expiry Alert Strip: chips for options expiring within 21 days,
+#     colour-coded green/amber/red by urgency.
+#   - Period Comparison Card: current vs prior equivalent window (P/L,
+#     trades closed, win rate, dividends with deltas).
 #   - Weekly / Monthly P/L bar charts (Derivatives Performance tab).
-#
-#   Open Positions tab:
-#   - Replaced cramped 3-column expanders with 2-column card grid
-#   - Strategy badges colour-coded by bias, DTE progress bar per leg
-#   - Summary strip: ticker count, option legs, share positions, strategy pills
-#
-#   Charts & Visualisations:
-#   - chart_layout() helper for consistent dark theme across all charts
-#   - Cumulative P/L, Rolling Capture %, Win/Loss histogram, Heatmap upgraded
-#   - Sparkline: taller, transparent background
-#
-#   Styling:
-#   - IBM Plex Sans + IBM Plex Mono typography
-#   - Deeper background (#0a0e17), refined metric label styling
-#
-# v25.1 (2026-02-22)
-#   - FIXED: Windowed equity P/L now uses true FIFO cost basis via deque.
-#     Extracted into calculate_windowed_equity_pnl().
-#
-# v25 (2026-02-22)
-#   - Win/Loss histogram, P/L heatmap by ticker & month
-#   - Time window selector moved to top-right, capped at first transaction
-#   - Banked $/Day metric, short window warning
-#   - pandas 2.1+ and Streamlit deprecation fixes
-#
-# v24 (prior)
-#   - TastyMechanics branding, sparkline, win % colour coding
-#   - Campaign cards, Banked $/Day, window labels
+#   - Open Positions: 2-column card grid, strategy badges, DTE progress bars,
+#     summary strip.
+#   - chart_layout() helper for consistent dark theme.
+#   - IBM Plex Sans + Mono typography, deeper background (#0a0e17).
 # ==========================================
 
 APP_VERSION = "v25.6"
