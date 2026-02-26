@@ -851,7 +851,7 @@ if not uploaded_file:
 
     <p style="color:#444d56;font-size:0.78rem;margin-top:1.5rem;text-align:center;">
     TastyMechanics {APP_VERSION} · Open source · MIT licence ·
-    <a href="https://github.com/timluey/tastymechanics" style="color:#58a6ff;">GitHub</a>
+    <a href="https://github.com/crux1s/TastyMechanics" style="color:#58a6ff;">GitHub</a>
     </p>
 
     </div>
