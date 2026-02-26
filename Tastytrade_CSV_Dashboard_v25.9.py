@@ -789,14 +789,14 @@ def _find_assignment_premium(t, row):
             })
     return 0.0, events
 
-def effective_basis(c: Campaign, use_lifetime=False) -> float:
+def effective_basis(c: 'Campaign', use_lifetime=False) -> float:
     """Cost per share after netting premiums and dividends against total_cost."""
     if use_lifetime:
         return c.blended_basis
     net = c.total_cost - c.premiums - c.dividends
     return net / c.total_shares if c.total_shares > 0 else 0.0
 
-def realized_pnl(c: Campaign, use_lifetime=False) -> float:
+def realized_pnl(c: 'Campaign', use_lifetime=False) -> float:
     """Total realised profit/loss for a campaign."""
     if use_lifetime:
         return c.premiums + c.dividends
