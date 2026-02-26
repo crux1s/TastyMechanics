@@ -8,182 +8,69 @@ from dataclasses import dataclass, field
 from typing import Optional, NamedTuple
 import html as _html
 import io as _io
+import json as _json
+import os as _os
 
 # ==========================================
-# TastyMechanics v25.7
+# TastyMechanics v25.9
 # ==========================================
-# Changelog:
 #
-# v25.9 (2026-02-26) — Fix assignment STO double-count
+# Changelog
+# ---------
+# v25.9 (2026-02-26)
+#   - FIX: Assignment STO double-count — pre-purchase option that caused a
+#     put assignment was being counted in both campaign premiums AND the
+#     outside-window P/L bucket. Fixed: assignment STO stays solely in the
+#     outside-window bucket. Verified against real account data.
+#   - FIX: Windowed P/L and All Time P/L both missing dividends and interest.
+#     Income now included in both window_realized_pnl and total_realized_pnl.
+#   - FIX: Standalone ticker equity P/L replaced cash-flow approximation with
+#     proper FIFO engine — correct for accounts with open equity positions.
+#   - FIX: option_mask() typo introduced in v25.7 refactor (wrong function name
+#     and wrong DataFrame at two call sites).
+#   - TEST: 180-test suite (test_tastymechanics.py) added. All P/L figures,
+#     campaign accounting, windowed views, and edge cases verified against
+#     independently computed ground truth from raw CSV data.
 #
-#   BUG: total_realized_pnl overstated by $27.89 (confirmed against real data).
-#   Root cause: put-assignment entry for ACHR on Dec 19 2025.
-#     - Sold ACHR 8.50P (Dec 12) for $27.89 → assigned → received 100 shares Dec 19
-#     - _find_assignment_premium() traced the Dec 12 STO and added $27.89 to
-#       c.premiums (so it appeared in open_premiums_banked)
-#     - pure_options_pnl() ALSO returned $27.89 as "outside campaign window" P/L
-#       because Dec 12 < campaign start_date of Dec 19
-#     - Same $27.89 counted twice → $993.48 shown instead of $965.59
-#   Fix: _find_assignment_premium() now returns premium=0.0, keeping only the
-#   event records for display. The STO cash flow stays solely in the outside-
-#   window bucket where pure_options_pnl() correctly captures it.
-#   ACHR campaign premiums: $118.08 → $90.19 (post-assignment options only)
-#   ACHR outside-window P/L: $27.89 (unchanged — correct single owner)
-#   Verified: total_realized_pnl = $965.59 exactly. (verified against real data)
-#
-#   BUG 1 — pure_opts_pnl equity P/L: replaced cash-flow hack with FIFO engine
-#     Old code: for standalone tickers with open equity positions it used
-#     `total_flow + abs(equity_flow)` — correct only when ALL equity was fully
-#     sold. With open positions it excluded unrealized cost basis and overstated
-#     P/L. The new path calls _iter_fifo_sells() per-ticker, the same engine
-#     used by calculate_windowed_equity_pnl(). Tab 4 standalone row display
-#     updated to match. Error on real data: $0 (positions happened to be closed),
-#     but structurally wrong for any account with open standalone equity.
-#
-#   BUG 2 — window_realized_pnl missing dividends and interest
-#     Old: `_w_opts.sum() + _eq_pnl`  (no income)
-#     New: `_w_opts.sum() + _eq_pnl + _w_div_int`
-#     prior_period_pnl fixed the same way (+_prior_div_int).
-#     Error on real data: $6.55 (debit interest was never counted in windowed view).
-#
-#   BUG 3 — total_realized_pnl (All Time) missing non-wheel income
-#     Campaign accounting already includes wheel-ticker dividends via c.dividends,
-#     but interest and non-wheel dividends were never added. Fixed by computing
-#     _all_time_income and subtracting wheel dividends already in campaigns to
-#     avoid double-counting.
-#     Error on real data: $6.55 (same $-6.55 debit interest).
-#     After fix: total_realized_pnl = $965.59 (verified against ground truth).
-#
-#   BUG 4 — t_option_mask() typo (introduced in v25.7 refactor)
-#     Two call sites used `t_option_mask(df['Instrument Type'])` instead of
-#     `option_mask(t_df['Instrument Type'])` — wrong function name AND wrong
-#     DataFrame (df vs t_df). Both fixed.
-#   - REFACTOR: load_and_parse() now returns ParsedData(df, split_events, zero_cost_rows)
-#     instead of a bare DataFrame. build_all_data() accepts ParsedData and unpacks it,
-#     eliminating the second detect_corporate_actions() call that existed purely to
-#     surface the event lists in AppData. detect_corporate_actions() now runs exactly once.
-#   - REFACTOR: equity_mask() and option_mask() vectorised helpers added at module level.
-#     All DataFrame .str.strip()=='Equity' and .str.contains('Option') checks replaced
-#     with these helpers for consistency and to prevent semantic drift (str.contains('Equity')
-#     would also match 'Equity Option'; the helper uses strict equality).
-#   - REFACTOR: Campaign and AppData dataclasses were already present (v25.6); this pass
-#     confirmed all dict key accesses have been migrated to attribute access.
-#   - REFACTOR: ParsedData NamedTuple added (typing.NamedTuple). AppData already used
-#     pd.DataFrame type hints (not object). Both confirmed clean.
-#   - STYLE: identify_pos_type() and detect_strategy() multi-statement initialisation
-#     lines split onto separate lines for easier reading and diffing.
-#   - STYLE: _pnl_chip, _cmp_block, _dte_chip rendering helpers moved to module level
-#     (confirmed already done in this working copy).
-#   - STYLE: SUB_BUY_CLOSE, SUB_EXPIRATION, SUB_EXERCISE removed (were defined but never
-#     used — PAT_ pattern fragments handle all .str.contains() matching).
-#   No logic changes. All existing behaviour preserved.
+# v25.8 (2026-02-26)
+#   - REFACTOR: load_and_parse() returns ParsedData NamedTuple.
+#     detect_corporate_actions() now runs exactly once.
+#   - REFACTOR: equity_mask() / option_mask() vectorised helpers replace
+#     scattered .str.strip() comparisons throughout.
+#   - REFACTOR: AppData dataclass confirmed clean; all dict access migrated
+#     to attribute access.
 #
 # v25.6 (2026-02-26)
-#   Corporate Action Handling:
-#   - FIXED: Stock splits (forward and reverse) now handled correctly end-to-end.
-#     detect_corporate_actions() identifies split pairs (zero-Total Receive Deliver
-#     REMOVAL + addition on same ticker/date with split keyword in description).
-#     apply_split_adjustments() rescales pre-split lot Quantity and Net_Qty_Row
-#     by the split ratio so FIFO cost basis is correct post-split.
-#     get_signed_qty() now returns 0 for split REMOVAL rows (previously treated
-#     as a sale, triggering false P/L and duplicate campaign creation).
-#     build_campaigns() detects the split addition row and rescales running_shares,
-#     total_shares, and blended_basis in the live campaign without touching
-#     total_cost (the cash invested doesn't change, only the share count).
-#     A "Stock Split" event is appended to the campaign event log with ratio and
-#     new basis per share.
-#     NOTE: Adjusted option symbols (TastyTrade issues new symbols post-split)
-#     are not automatically stitched to pre-split contracts — documented in README.
-#   - ADDED: Zero-cost share delivery detection. Any Receive Deliver equity
-#     addition with Total = $0 that is not a split pair and not an assignment
-#     is flagged (spin-offs, ACATS transfers, mergers). A warning banner is shown
-#     at load time listing affected tickers, dates, and descriptions, noting that
-#     the $0 basis will overstate P/L on eventual sale.
-#   - AppData gains split_events and zero_cost_rows fields — lists passed from
-#     build_all_data() to the UI for warning display.
-#   - Warning banners shown at page load: blue info strip for each detected split
-#     (with ratio, date, and pre/post share count), amber warning for zero-cost
-#     deliveries (with per-row detail). Both are silent/hidden when not applicable.
-#
-# v25.6 (2026-02-26) — earlier entries
-#   Code Quality (periodic full review):
-#   - FIXED: Timezone architecture unified — all dates are naive UTC from ingest.
-#     Single tz conversion in load_and_parse(); all downstream code uses naive
-#     datetimes. Eliminates 10 scattered tz_localize/replace calls that had
-#     accumulated across incremental development.
-#   - FIXED: Short equity positions handled correctly in FIFO engine.
-#     _iter_fifo_sells() now maintains parallel long_queues + short_queues per
-#     ticker. Previously a short-sell with an empty long queue yielded the full
-#     sale proceeds as costless gain (e.g. $5500 P/L instead of $500).
-#     Buy-to-cover now correctly matches against the originating short lot.
-#   - FIXED: Naked long options (LEAPS, outright calls/puts) mislabelled as
-#     "*Debit Spread" in build_closed_trades(). Added n_short_legs == 0 guard
-#     before spread classification; naked longs now correctly show "Long Call",
-#     "Long Put", or "Long Strangle".
-#   - FIXED: capital_risk for naked long options was $1 (fell through w_call=0
-#     branch). Now correctly set to premium paid — the actual max loss.
-#   - FIXED: ThetaGang DTE metrics no longer polluted by LEAPS. Management rate,
-#     Median DTE at Open/Close, and DTE distribution chart all filter to trades
-#     with DTE Open <= 90. LEAPS trades shown in a separate callout strip with
-#     their own P/L and win rate summary.
-#   - FIXED: Weekly bar chart hover showed $-123.45 for negative weeks. Now uses
-#     customdata pre-formatted strings (matches monthly charts). All 3 weekly
-#     charts fixed (Tab1, Tab4, volatility).
-#   - FIXED: Bare except: clauses replaced with specific exception types at all
-#     5 locations. Dead total_cost variable removed from lifetime campaign branch.
-#     Defensive else added to time window selector.
-#   - Refactor: APP_VERSION constant — single source of truth for version string.
-#   - Refactor: AppData dataclass replaces fragile 10-tuple return from
-#     build_all_data(). Fields are named and safe to extend.
-#   - Refactor: _iter_fifo_sells() extracted as shared FIFO core — previously
-#     duplicated in windowed and daily P/L functions.
-#   - Refactor: pure_options_pnl() computed once per ticker in build_all_data(),
-#     stored in AppData.pure_opts_per_ticker. Tab 4 does a dict lookup.
-#   - Refactor: calc_dte() moved to module level (was recreated inside a
-#     conditional block on every render).
-#   - Refactor: REQUIRED_COLUMNS and all imports moved to top of file.
-#   - Refactor: Dead CSS classes removed; _badge_inline_style() is the sole
-#     source of badge styling.
-#   - Security: XSS prevention via xe() helper applied to all dynamic HTML.
-#
-# v25.5 (2026-02-25)
-#   - FIXED: FIFO duplication — _iter_fifo_sells() extracted as shared core.
-#   - FIXED: calculate_windowed_equity_pnl() now cached with @st.cache_data.
-#   - UI: Open Positions cards fully inline-styled for Streamlit shadow DOM
-#     compatibility.
+#   - FIX: Stock splits (forward and reverse) handled end-to-end. Pre-split
+#     lot sizes rescaled in FIFO engine; split REMOVAL rows no longer trigger
+#     false P/L or duplicate campaigns. Warning banner shown at load time.
+#   - FIX: Zero-cost share deliveries (spin-offs, ACATS transfers) flagged
+#     with an amber warning noting the $0 basis will overstate P/L on sale.
+#   - FIX: Timezone architecture unified — single UTC conversion in
+#     load_and_parse(), naive datetimes everywhere downstream.
+#   - FIX: Short equity FIFO — buy-to-cover now correctly matches the
+#     originating short lot instead of treating proceeds as costless gain.
+#   - FIX: Naked long options (LEAPS) no longer mislabelled as debit spreads.
+#   - FIX: LEAPS excluded from ThetaGang DTE metrics (DTE > 90 threshold).
+#   - FIX: Weekly bar chart hover negative formatting.
+#   - REFACTOR: AppData dataclass, _iter_fifo_sells() shared FIFO core,
+#     APP_VERSION constant, XSS prevention via xe() helper.
 #
 # v25.4 (2026-02-24)
-#   Bug Fixes:
-#   - FIXED: Campaign premiums date guard — pre-purchase options no longer
-#     credited against campaign effective basis; correctly flow to standalone.
-#     Real-world impact: SMR eff. basis corrected from $16.72 to $20.25/share.
-#   - FIXED: Prior period P/L double-counting via end_date param on
-#     calculate_windowed_equity_pnl().
-#   - FIXED: CSV validation with friendly missing-column error message.
-#   - FIXED: Negative currency formatting throughout ($-308 -> -$308).
-#   - FIXED: Full Closed Trade Log date sorting (datetime + DateColumn config).
-#
-#   New Features:
-#   - How Closed column: ⏹️ Expired / 📋 Assigned / 🏋️ Exercised / ✂️ Closed.
-#   - Total Realized P/L by Week & Month charts (All Trades tab) — FIFO-correct
-#     whole-portfolio view via calculate_daily_realized_pnl().
-#   - Window date label on all window-sensitive section headers.
-#
-#   Layout:
-#   - Realized P/L Breakdown inline chip line (replaces expander).
-#   - Sparkline moved to All Trades tab.
-#   - Defined vs Undefined Risk table full-width.
+#   - FIX: Pre-purchase options no longer credited to campaign effective basis.
+#     Real impact: SMR basis corrected from $16.72 → $20.25/share.
+#   - FIX: Prior period P/L double-counting.
+#   - FIX: CSV validation, negative currency formatting, trade log date sort.
+#   - NEW: How Closed column (Expired / Assigned / Exercised / Closed).
+#   - NEW: Total Realized P/L by Week & Month charts.
+#   - NEW: Window date label on all section headers.
 #
 # v25.3 (2026-02-23)
-#   - Expiry Alert Strip: chips for options expiring within 21 days,
-#     colour-coded green/amber/red by urgency.
-#   - Period Comparison Card: current vs prior equivalent window (P/L,
-#     trades closed, win rate, dividends with deltas).
-#   - Weekly / Monthly P/L bar charts (Derivatives Performance tab).
-#   - Open Positions: 2-column card grid, strategy badges, DTE progress bars,
-#     summary strip.
-#   - chart_layout() helper for consistent dark theme.
-#   - IBM Plex Sans + Mono typography, deeper background (#0a0e17).
+#   - NEW: Expiry alert strip (21-day lookahead, colour-coded urgency).
+#   - NEW: Period comparison card (current vs prior window with deltas).
+#   - NEW: Weekly / Monthly P/L bar charts.
+#   - NEW: Open Positions card grid with strategy badges and DTE progress bars.
+#   - UI: IBM Plex Sans + Mono typography, dark theme (#0a0e17).
 # ==========================================
 
 APP_VERSION = "v25.9"
@@ -1210,7 +1097,53 @@ with st.sidebar:
         help='If ON, combines ALL history for a ticker into one campaign. If OFF, resets breakeven every time shares hit zero.')
 
 if not uploaded_file:
-    st.info(f'🛰️ **TastyMechanics {APP_VERSION} Ready.** Upload your TastyTrade CSV to begin.')
+    st.markdown(f"""
+    <div style="max-width:760px;margin:2rem auto 0 auto;">
+
+    <p style="color:#8b949e;font-size:0.95rem;line-height:1.7;">
+    Upload your TastyTrade transaction history CSV using the sidebar to get started.
+    All processing happens locally in your browser — your data is never sent anywhere.
+    </p>
+
+    <h3 style="color:#c9d1d9;margin-top:2rem;">How to export from TastyTrade</h3>
+    <p style="color:#8b949e;font-size:0.95rem;line-height:1.7;">
+    <b style="color:#c9d1d9;">History → Transactions → set date range → Download CSV</b><br>
+    Export your full history for the most accurate results.
+    </p>
+
+    <h3 style="color:#c9d1d9;margin-top:2rem;">⚠️ Disclaimer</h3>
+    <div style="background:#161b22;border:1px solid #f0883e55;border-radius:8px;padding:1.2rem 1.4rem;font-size:0.88rem;color:#8b949e;line-height:1.75;">
+
+    <p style="margin:0 0 0.75rem 0;color:#c9d1d9;font-weight:600;">
+    This tool is for personal record-keeping only. It is not financial advice.
+    </p>
+
+    <b style="color:#c9d1d9;">Known limitations — verify these manually:</b>
+    <ul style="margin:0.5rem 0 0.75rem 0;padding-left:1.2rem;">
+    <li><b style="color:#c9d1d9;">Covered calls assigned away</b> — if your shares are called away by assignment, verify the campaign closes and P/L is recorded correctly.</li>
+    <li><b style="color:#c9d1d9;">Multiple assignments on the same ticker</b> — each new buy-in starts a new campaign. Blended basis across campaigns is not currently combined.</li>
+    <li><b style="color:#c9d1d9;">Long options exercised by you</b> — exercising a long call or put into shares is untested. Check the resulting position and cost basis.</li>
+    <li><b style="color:#c9d1d9;">Futures options delivery</b> — cash-settled futures options (like /MES, /ZS) are included in P/L totals, but in-the-money expiry into a futures contract is not handled.</li>
+    <li><b style="color:#c9d1d9;">Stock splits</b> — forward and reverse splits are detected and adjusted, but TastyTrade-issued post-split option symbols are not automatically stitched to pre-split contracts.</li>
+    <li><b style="color:#c9d1d9;">Spin-offs and zero-cost deliveries</b> — shares received at $0 cost (spin-offs, ACATS transfers) will show a warning. The $0 basis means P/L on sale will be overstated until corrected.</li>
+    <li><b style="color:#c9d1d9;">Complex multi-leg structures</b> — PMCC, diagonals, calendars, and ratio spreads may not be classified correctly in the trade log.</li>
+    <li><b style="color:#c9d1d9;">Non-US accounts</b> — built and tested on a US TastyTrade account. Currency, tax treatment, and CSV format differences for other regions are unknown.</li>
+    </ul>
+
+    <p style="margin:0;color:#6e7681;">
+    P/L figures are cash-flow based (what actually hit your account) and use FIFO cost basis
+    for equity. They do not account for unrealised gains/losses, wash sale rules, or tax adjustments.
+    Always reconcile against your official TastyTrade statements for tax purposes.
+    </p>
+    </div>
+
+    <p style="color:#444d56;font-size:0.78rem;margin-top:1.5rem;text-align:center;">
+    TastyMechanics {APP_VERSION} · Open source · MIT licence ·
+    <a href="https://github.com/timluey/tastymechanics" style="color:#58a6ff;">GitHub</a>
+    </p>
+
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 
@@ -1768,6 +1701,75 @@ _win_label     = (f'<span style="font-size:0.75rem;font-weight:400;color:#58a6ff
                   f'{_win_start_str} → {_win_end_str} ({selected_period})</span>')
 # Plain text version for plotly chart titles (no HTML)
 _win_suffix    = f'  ·  {_win_start_str} → {_win_end_str}'
+
+# ── Debug export (for test suite comparison) ──────────────────────────────────
+# Only runs when the environment variable TASTYMECHANICS_TEST=1 is set.
+# Writes app_snapshot.json to the same folder as the running script.
+# Normal users never see this — it is a no-op in production.
+if _os.environ.get('TASTYMECHANICS_TEST') == '1':
+    def _campaign_snapshot(camps):
+        return [dict(
+            ticker=c.ticker, status=c.status,
+            shares=c.total_shares, cost=round(c.total_cost, 4),
+            basis=round(c.blended_basis, 4),
+            premiums=round(c.premiums, 4),
+            dividends=round(c.dividends, 4),
+            exit_proceeds=round(c.exit_proceeds, 4),
+            pnl=round(realized_pnl(c), 4),
+        ) for c in camps]
+
+    _snapshot = {
+        # ── Headline P/L figures ──
+        'total_realized_pnl':    round(total_realized_pnl, 4),
+        'window_realized_pnl':   round(window_realized_pnl, 4),
+        'prior_period_pnl':      round(prior_period_pnl, 4),
+        'selected_period':       selected_period,
+        # ── Components ──
+        'closed_camp_pnl':       round(closed_camp_pnl, 4),
+        'open_premiums_banked':  round(open_premiums_banked, 4),
+        'pure_opts_pnl':         round(pure_opts_pnl, 4),
+        'all_time_income':       round(_all_time_income, 4),
+        'wheel_divs_in_camps':   round(_wheel_divs_in_camps, 4),
+        # ── Window components ──
+        'w_opts_total':          round(_w_opts['Total'].sum(), 4),
+        'w_eq_pnl':              round(_eq_pnl, 4),
+        'w_div_int':             round(_w_div_int, 4),
+        # ── Portfolio stats ──
+        'total_deposited':       round(total_deposited, 4),
+        'total_withdrawn':       round(total_withdrawn, 4),
+        'net_deposited':         round(net_deposited, 4),
+        'capital_deployed':      round(capital_deployed, 4),
+        'realized_ror':          round(realized_ror, 4),
+        'div_income':            round(div_income, 4),
+        'int_net':               round(int_net, 4),
+        # ── Campaigns ──
+        'campaigns':             {t: _campaign_snapshot(c) for t, c in all_campaigns.items()},
+        # ── Per-ticker options P/L ──
+        'pure_opts_per_ticker':  {t: round(v, 4) for t, v in pure_opts_per_ticker.items()},
+        'wheel_tickers':         wheel_tickers,
+        'pure_options_tickers':  pure_options_tickers,
+        # ── Open positions ──
+        'open_positions': {
+            t: {
+                'net_qty': round(
+                    df[(df['Ticker']==t) & (df['Instrument Type'].str.strip()=='Equity')]['Net_Qty_Row'].sum(), 4
+                )
+            }
+            for t in (wheel_tickers + [
+                t for t in df['Ticker'].unique()
+                if t not in wheel_tickers + ['CASH']
+                and df[(df['Ticker']==t) & (df['Instrument Type'].str.strip()=='Equity')]['Net_Qty_Row'].sum() > 0.001
+            ])
+        },
+        # ── Metadata ──
+        'csv_rows':    len(df),
+        'latest_date': latest_date.strftime('%Y-%m-%d'),
+        'app_version': APP_VERSION,
+    }
+    _out = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'app_snapshot.json')
+    with open(_out, 'w') as _f:
+        _json.dump(_snapshot, _f, indent=2)
+    st.info(f'🧪 Test snapshot written → `{_out}`')
 
 # ── TOP METRICS ────────────────────────────────────────────────────────────────
 
