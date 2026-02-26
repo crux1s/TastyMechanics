@@ -60,6 +60,22 @@ def format_cost_basis(val):
     """Format a cost-basis value as '$12.34 Cr' or '$12.34 Db'."""
     return '$%.2f %s' % (abs(val), 'Cr' if val < 0 else 'Db')
 
+def fmt_dollar(val, decimals=2):
+    """
+    Format a dollar value with sign, commas, and configurable decimal places.
+    Negative values render as '-$1,234.56' (not '$-1,234.56').
+    Use decimals=0 for whole-dollar chart labels.
+
+    Examples:
+        fmt_dollar(1234.56)   → '$1,234.56'
+        fmt_dollar(-99.5)     → '-$99.50'
+        fmt_dollar(1500, 0)   → '$1,500'
+    """
+    fmt = f'{{:,.{decimals}f}}'
+    if val >= 0:
+        return f'${fmt.format(val)}'
+    return f'-${fmt.format(abs(val))}'
+
 def detect_strategy(ticker_df):
     """Infer the current strategy name for an open-position ticker DataFrame."""
     types = ticker_df.apply(identify_pos_type, axis=1)

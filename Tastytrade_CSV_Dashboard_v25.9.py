@@ -4,9 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import timedelta
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
-from typing import Optional, NamedTuple
-import io as _io
+from models import Campaign, AppData, ParsedData
 import json as _json
 import os as _os
 
@@ -116,6 +114,7 @@ from ui_components import (
     xe,
     is_share_row, is_option_row,
     identify_pos_type, translate_readable, format_cost_basis, detect_strategy,
+    fmt_dollar,
     color_win_rate, color_pnl_cell,
     _pnl_chip, _cmp_block, _dte_chip,
     _fmt_ann_ret, _style_ann_ret, _style_chain_row,
@@ -123,678 +122,109 @@ from ui_components import (
     chart_layout, _badge_inline_style, render_position_card,
 )
 
-# ── Data helpers (used by load_and_parse — stay in main app) ──────────────────
+# ── Ingestion (pure Python — no Streamlit dependency) ─────────────────────────
+from ingestion import (
+    clean_val, get_signed_qty,
+    equity_mask, option_mask,
+    detect_corporate_actions, apply_split_adjustments,
+    validate_columns, parse_csv,
+)
 
-def clean_val(val):
-    """Parse a TastyTrade currency string like '$1,234.56' to float."""
-    if pd.isna(val) or val == '--': return 0.0
-    return float(str(val).replace('$', '').replace(',', ''))
 
-def get_signed_qty(row):
-    """Return signed share/contract quantity: positive = buy, negative = sell."""
-    act = str(row['Action']).upper()
-    dsc = str(row['Description']).upper()
-    qty = row['Quantity']
-    if 'BUY' in act or 'BOUGHT' in dsc:  return  qty
-    if 'SELL' in act or 'SOLD' in dsc:   return -qty
-    if 'REMOVAL' in dsc:
-        if 'ASSIGNMENT' in dsc: return qty
-        # Split removals must NOT be treated as sales — the quantity change
-        # is handled by apply_split_adjustments() in load_and_parse().
-        if any(p in dsc for p in SPLIT_DSC_PATTERNS): return 0
-        return -qty
-    return 0
+# ── Analytics engine (pure Python — no Streamlit dependency) ──────────────────
+from mechanics import (
+    _iter_fifo_sells,
+    calculate_windowed_equity_pnl,
+    calculate_daily_realized_pnl,
+    build_campaigns,
+    effective_basis, realized_pnl, pure_options_pnl,
+    build_closed_trades,
+    build_option_chains,
+    calc_dte,
+    compute_app_data,
+)
 
-def equity_mask(series: pd.Series) -> pd.Series:
-    """Vectorised is_share_row: True for plain 'Equity' rows, not options."""
-    return series.str.strip() == 'Equity'
+# ── Test snapshot (diagnostic only — never runs in production) ────────────────
 
-def option_mask(series: pd.Series) -> pd.Series:
-    """Vectorised is_option_row: True for 'Equity Option' or 'Future Option' rows."""
-    return series.str.contains('Option', na=False)
-
-# ── FIFO CORE ─────────────────────────────────────────────────────────────────
-def _iter_fifo_sells(equity_rows):
+def _write_test_snapshot(df, all_campaigns, wheel_tickers, pure_options_tickers,
+                         pure_opts_per_ticker, total_realized_pnl, window_realized_pnl,
+                         prior_period_pnl, selected_period, closed_camp_pnl,
+                         open_premiums_banked, pure_opts_pnl, _all_time_income,
+                         _wheel_divs_in_camps, _w_opts, _eq_pnl, _w_div_int,
+                         total_deposited, total_withdrawn, net_deposited,
+                         capital_deployed, realized_ror, div_income, int_net,
+                         latest_date):
     """
-    Shared FIFO engine — single source of truth for equity cost-basis logic.
-
-    Handles both long and short equity positions:
-
-      Long side  (long_queues):
-        BUY  → push (qty, cost_per_share) onto long_queue
-        SELL → if long_queue has shares, pop FIFO lots and yield realised P/L
-               (proceeds - cost_basis).  This is a normal long sale.
-
-      Short side  (short_queues):
-        SELL → if long_queue is empty, this is a short-sell: push (qty, proceeds_per_share)
-               onto short_queue.  Nothing yielded yet — P/L realises on the cover.
-        BUY  → if short_queue has shares, pop FIFO lots and yield realised P/L
-               (short_proceeds - cover_cost).  Positive when you shorted higher than you covered.
-
-    Routing rule: a SELL routes to the long side first; only if the long queue is empty
-    (no long inventory to close) does it open a short.  A BUY routes to the short side
-    first; only if no short inventory exists does it open a long.
-
-    Yields (date, proceeds, cost_basis) — callers apply their own window/bucketing.
+    Write app_snapshot.json for the test suite to compare against ground truth.
+    Only called when TASTYMECHANICS_TEST=1 is set in the environment.
+    Normal users never trigger this path.
     """
-    long_queues  = {}   # ticker -> deque of (qty, cost_per_share)   [long lots]
-    short_queues = {}   # ticker -> deque of (qty, proceeds_per_share) [short lots]
+    def _campaign_snapshot(camps):
+        return [dict(
+            ticker=c.ticker, status=c.status,
+            shares=c.total_shares, cost=round(c.total_cost, 4),
+            basis=round(c.blended_basis, 4),
+            premiums=round(c.premiums, 4),
+            dividends=round(c.dividends, 4),
+            exit_proceeds=round(c.exit_proceeds, 4),
+            pnl=round(realized_pnl(c), 4),
+        ) for c in camps]
 
-    for row in equity_rows.itertuples(index=False):
-        ticker = row.Ticker
-        if ticker not in long_queues:
-            long_queues[ticker]  = deque()
-            short_queues[ticker] = deque()
-
-        qty   = row.Net_Qty_Row
-        total = row.Total                        # signed: negative on buys, positive on sells
-        lq    = long_queues[ticker]
-        sq    = short_queues[ticker]
-
-        if qty > 0:
-            # ── BUY row ───────────────────────────────────────────────────────
-            # Cover shorts first (FIFO); any residual qty opens/adds to a long.
-            remaining = qty
-            pps = abs(total) / qty               # cost per share on this buy
-
-            while remaining > 1e-9 and sq:
-                s_qty, s_pps = sq[0]
-                use      = min(remaining, s_qty)
-                # P/L on covering a short = what we shorted it for minus cover cost
-                short_proceeds = use * s_pps
-                cover_cost     = use * pps
-                yield row.Date, short_proceeds, cover_cost
-                remaining = round(remaining - use, 9)
-                leftover  = round(s_qty - use, 9)
-                if leftover < 1e-9:
-                    sq.popleft()
-                else:
-                    sq[0] = (leftover, s_pps)
-
-            if remaining > 1e-9:
-                # Residual qty is a new long position (or adding to existing)
-                lq.append((remaining, pps))
-
-        elif qty < 0:
-            # ── SELL row ──────────────────────────────────────────────────────
-            # Close longs first (FIFO); any residual qty opens/adds to a short.
-            remaining       = abs(qty)
-            pps             = abs(total) / remaining   # proceeds per share on this sell
-            sale_cost_basis = 0.0
-
-            while remaining > 1e-9 and lq:
-                b_qty, b_cost = lq[0]
-                use = min(remaining, b_qty)
-                sale_cost_basis += use * b_cost
-                remaining = round(remaining - use, 9)
-                leftover  = round(b_qty - use, 9)
-                if leftover < 1e-9:
-                    lq.popleft()
-                else:
-                    lq[0] = (leftover, b_cost)
-
-            if sale_cost_basis > 0 or remaining < abs(qty) - 1e-9:
-                # We closed at least some long lots — yield that realised P/L
-                long_qty_closed = abs(qty) - remaining
-                yield row.Date, long_qty_closed * pps, sale_cost_basis
-
-            if remaining > 1e-9:
-                # Residual qty is a new short position (or adding to existing)
-                sq.append((remaining, pps))
-
-
-# ── TRUE FIFO EQUITY P/L ───────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
-def calculate_windowed_equity_pnl(df_full, start_date, end_date=None):
-    """
-    Calculates net equity P/L for sales on or after start_date and (optionally)
-    before end_date. Cached on (df, start_date, end_date) — a window change
-    re-runs once then hits cache on every subsequent interaction. The prior-period
-    call is also independently cached.
-    end_date is used for prior-period comparisons to prevent double-counting.
-    """
-    equity_rows = df_full[
-        equity_mask(df_full['Instrument Type'])
-    ].sort_values('Date')
-    _eq_pnl = 0.0
-    for date, proceeds, cost_basis in _iter_fifo_sells(equity_rows):
-        in_window = date >= start_date
-        if end_date is not None:
-            in_window = in_window and date < end_date
-        if in_window:
-            _eq_pnl += (proceeds - cost_basis)
-    return _eq_pnl
-
-
-# ── DAILY REALIZED P/L (for period charts) ────────────────────────────────────
-def calculate_daily_realized_pnl(df_full, start_date):
-    """
-    Returns a DataFrame with columns [Date, PnL] representing realized P/L
-    by settlement date across the full portfolio:
-      - Options: full cash flow on the day (already realized at close/expiry)
-      - Equity sells: net gain/loss vs FIFO cost basis on the sale date
-      - Dividends + interest: cash received on the day
-    Share purchases are excluded — they are capital deployment, not P/L.
-    Only rows with Date >= start_date are returned, but ALL equity history
-    is processed so FIFO cost basis is always correct.
-    """
-    equity_rows = df_full[
-        equity_mask(df_full['Instrument Type'])
-    ].sort_values('Date')
-    records = [
-        {'Date': date, 'PnL': proceeds - cost_basis}
-        for date, proceeds, cost_basis in _iter_fifo_sells(equity_rows)
-        if date >= start_date
-    ]
-
-    # Options flows — vectorized: just select [Date, Total] columns directly
-    opt_rows = df_full[
-        df_full['Instrument Type'].isin(OPT_TYPES) &
-        df_full['Type'].isin(TRADE_TYPES) &
-        (df_full['Date'] >= start_date)
-    ][['Date', 'Total']].rename(columns={'Total': 'PnL'})
-
-    # Dividends + interest — vectorized
-    income_rows = df_full[
-        df_full['Sub Type'].isin(INCOME_SUB_TYPES) &
-        (df_full['Date'] >= start_date)
-    ][['Date', 'Total']].rename(columns={'Total': 'PnL'})
-
-    if not records and opt_rows.empty and income_rows.empty:
-        return pd.DataFrame(columns=['Date', 'PnL'])
-
-    daily = pd.concat(
-        [pd.DataFrame(records)] + ([opt_rows] if not opt_rows.empty else [])
-                                 + ([income_rows] if not income_rows.empty else []),
-        ignore_index=True
-    )
-    daily['Date'] = pd.to_datetime(daily['Date'])
-    return daily.groupby('Date')['PnL'].sum().reset_index()
-
-
-def build_campaigns(df, ticker, use_lifetime=False) -> list:
-    """
-    Build a list of Campaign objects for a ticker that has been wheeled.
-    Each Campaign covers one continuous share-holding period.
-
-    use_lifetime=True: collapses all history into a single campaign (no resets).
-    use_lifetime=False: each buy-in starts a new campaign; exits close it.
-
-    Returns a list of Campaign objects (may be empty).
-    """
-    t = df[df['Ticker'] == ticker].copy()
-    t['Sort_Inst'] = t['Instrument Type'].apply(
-        lambda x: 0 if 'Equity' in str(x) and 'Option' not in str(x) else 1
-    )
-    t = t.sort_values(['Date', 'Sort_Inst'])
-    # Rename spaced columns so itertuples attribute access works cleanly
-    t = t.rename(columns={
-        'Instrument Type': 'Instrument_Type',
-        'Sub Type':        'Sub_Type',
-    })
-
-    if use_lifetime:
-        net_shares = t[t['Instrument_Type'].apply(is_share_row)]['Net_Qty_Row'].sum()
-        if net_shares >= WHEEL_MIN_SHARES:
-            premiums   = 0.0
-            dividends  = 0.0
-            events     = []
-            start_date = t['Date'].iloc[0]
-            for row in t.itertuples(index=False):
-                inst     = str(row.Instrument_Type)
-                total    = row.Total
-                sub_type = str(row.Sub_Type)
-                if is_share_row(inst):
-                    if row.Net_Qty_Row > 0:
-                        events.append({'date': row.Date, 'type': 'Entry/Add',
-                            'detail': f'Bought {row.Net_Qty_Row} shares', 'cash': total})
-                    else:
-                        events.append({'date': row.Date, 'type': 'Exit',
-                            'detail': f'Sold {abs(row.Net_Qty_Row)} shares', 'cash': total})
-                elif is_option_row(inst):
-                    if row.Date >= start_date:
-                        premiums += total
-                        events.append({'date': row.Date, 'type': sub_type,
-                            'detail': str(row.Description)[:60], 'cash': total})
-                elif sub_type == SUB_DIVIDEND:
-                    dividends += total
-                    events.append({'date': row.Date, 'type': SUB_DIVIDEND,
-                        'detail': SUB_DIVIDEND, 'cash': total})
-            net_lifetime_cash = t[t['Type'].isin(MONEY_TYPES)]['Total'].sum()
-            total_cost = abs(net_lifetime_cash) if net_lifetime_cash < 0 else 0.0
-            return [Campaign(
-                ticker=ticker, total_shares=net_shares,
-                total_cost=total_cost,
-                blended_basis=total_cost / net_shares if net_shares > 0 else 0.0,
-                premiums=premiums, dividends=dividends,
-                exit_proceeds=0.0, start_date=start_date, end_date=None,
-                status='open', events=events,
-            )]
-
-    campaigns: list      = []
-    current:   Campaign  = None
-    running_shares       = 0.0
-
-    for row in t.itertuples(index=False):
-        inst     = str(row.Instrument_Type)
-        qty      = row.Net_Qty_Row
-        total    = row.Total
-        sub_type = str(row.Sub_Type)
-        dsc_up   = str(row.Description).upper()
-
-        # ── Stock split: rescale campaign quantities and basis ─────────────
-        # Split rows have Net_Qty_Row == 0 (set in get_signed_qty).
-        # We detect the addition row (no REMOVAL keyword) to compute the ratio
-        # and rescale the live campaign. total_cost is unchanged — the same
-        # cash was invested, there are just more shares now.
-        if (is_share_row(inst) and qty == 0 and total == 0
-                and any(p in dsc_up for p in SPLIT_DSC_PATTERNS)
-                and 'REMOVAL' not in dsc_up
-                and current is not None):
-            split_qty = row.Quantity   # raw CSV quantity (always positive)
-            if running_shares > 0.001 and split_qty > 0:
-                ratio = split_qty / running_shares
-                running_shares        = split_qty
-                current.total_shares  = split_qty
-                current.blended_basis = current.total_cost / split_qty
-                current.events.append({
-                    'date':   row.Date,
-                    'type':   'Stock Split',
-                    'detail': '%.6gx split: %.0f → %.0f shares @ $%.4f/sh basis' % (
-                        ratio, split_qty / ratio, split_qty, current.blended_basis),
-                    'cash':   0.0,
-                })
-            continue
-
-        # ── Share buy / add ────────────────────────────────────────────────
-        if is_share_row(inst) and qty >= WHEEL_MIN_SHARES:
-            pps = abs(total) / qty
-            if running_shares < 0.001:
-                # New campaign entry — check if arrival was via put assignment
-                assignment_premium, assignment_events = _find_assignment_premium(t, row)
-                entry_label = 'Bought %.0f @ $%.2f/sh%s' % (
-                    qty, pps, ' (Assigned)' if assignment_events else '')
-                current = Campaign(
-                    ticker=ticker, total_shares=qty, total_cost=abs(total),
-                    blended_basis=pps, premiums=assignment_premium, dividends=0.0,
-                    exit_proceeds=0.0, start_date=row.Date, end_date=None,
-                    status='open',
-                    events=assignment_events + [
-                        {'date': row.Date, 'type': 'Entry', 'detail': entry_label, 'cash': total}
-                    ],
+    snapshot = {
+        # ── Headline P/L figures ──
+        'total_realized_pnl':    round(total_realized_pnl, 4),
+        'window_realized_pnl':   round(window_realized_pnl, 4),
+        'prior_period_pnl':      round(prior_period_pnl, 4),
+        'selected_period':       selected_period,
+        # ── Components ──
+        'closed_camp_pnl':       round(closed_camp_pnl, 4),
+        'open_premiums_banked':  round(open_premiums_banked, 4),
+        'pure_opts_pnl':         round(pure_opts_pnl, 4),
+        'all_time_income':       round(_all_time_income, 4),
+        'wheel_divs_in_camps':   round(_wheel_divs_in_camps, 4),
+        # ── Window components ──
+        'w_opts_total':          round(_w_opts['Total'].sum(), 4),
+        'w_eq_pnl':              round(_eq_pnl, 4),
+        'w_div_int':             round(_w_div_int, 4),
+        # ── Portfolio stats ──
+        'total_deposited':       round(total_deposited, 4),
+        'total_withdrawn':       round(total_withdrawn, 4),
+        'net_deposited':         round(net_deposited, 4),
+        'capital_deployed':      round(capital_deployed, 4),
+        'realized_ror':          round(realized_ror, 4),
+        'div_income':            round(div_income, 4),
+        'int_net':               round(int_net, 4),
+        # ── Campaigns ──
+        'campaigns':             {t: _campaign_snapshot(c) for t, c in all_campaigns.items()},
+        # ── Per-ticker options P/L ──
+        'pure_opts_per_ticker':  {t: round(v, 4) for t, v in pure_opts_per_ticker.items()},
+        'wheel_tickers':         wheel_tickers,
+        'pure_options_tickers':  pure_options_tickers,
+        # ── Open positions ──
+        'open_positions': {
+            t: {
+                'net_qty': round(
+                    df[(df['Ticker'] == t) &
+                       (df['Instrument Type'].str.strip() == 'Equity')]['Net_Qty_Row'].sum(), 4
                 )
-                running_shares = qty
-            else:
-                # Adding to an existing position — recalculate blended basis
-                new_shares        = running_shares + qty
-                new_cost          = current.total_cost + abs(total)
-                new_basis         = new_cost / new_shares
-                current.total_shares  = new_shares
-                current.total_cost    = new_cost
-                current.blended_basis = new_basis
-                running_shares        = new_shares
-                current.events.append({'date': row.Date, 'type': 'Add',
-                    'detail': 'Added %.0f @ $%.2f → blended $%.2f/sh' % (qty, pps, new_basis),
-                    'cash': total})
-
-        # ── Share sale / partial exit ──────────────────────────────────────
-        elif is_share_row(inst) and qty < 0:
-            if current and running_shares > 0.001:
-                current.exit_proceeds += total
-                running_shares        += qty
-                pps = abs(total) / abs(qty) if qty != 0 else 0
-                current.events.append({'date': row.Date, 'type': 'Exit',
-                    'detail': 'Sold %.0f @ $%.2f/sh' % (abs(qty), pps), 'cash': total})
-                if running_shares < 0.001:
-                    current.end_date = row.Date
-                    current.status   = 'closed'
-                    campaigns.append(current)
-                    current        = None
-                    running_shares = 0.0
-
-        # ── Option premium ─────────────────────────────────────────────────
-        elif is_option_row(inst) and current is not None:
-            if row.Date >= current.start_date:
-                current.premiums += total
-                current.events.append({'date': row.Date, 'type': sub_type,
-                    'detail': str(row.Description)[:60], 'cash': total})
-
-        # ── Dividend ───────────────────────────────────────────────────────
-        elif sub_type == SUB_DIVIDEND and current is not None:
-            current.dividends += total
-            current.events.append({'date': row.Date, 'type': SUB_DIVIDEND,
-                'detail': 'Dividend received', 'cash': total})
-
-    if current is not None:
-        campaigns.append(current)
-    return campaigns
-
-
-def _find_assignment_premium(t, row):
-    """
-    Look for a put assignment at the same timestamp as a share delivery row.
-    If found, trace back to the originating STO and record it in the campaign
-    event log so the timeline shows "arrived via assignment".
-
-    Returns (0.0, list_of_event_dicts).
-
-    Why premium=0.0: the STO that caused assignment was traded *before* the
-    campaign start date, so pure_options_pnl() already counts it as outside-
-    window P/L. Adding it to c.premiums here would double-count it in
-    total_realized_pnl. The event is retained for display only.
-    """
-    events  = []
-    same_dt = t[t['Date'] == row.Date]
-    assigned_syms = same_dt[
-        same_dt['Sub_Type'].str.lower() == SUB_ASSIGNMENT
-    ]['Symbol'].dropna().unique()
-    for sym in assigned_syms:
-        sto = t[
-            (t['Symbol'] == sym) &
-            (t['Sub_Type'].str.lower() == SUB_SELL_OPEN) &
-            (t['Date'] < row.Date)
-        ]
-        for s in sto.itertuples(index=False):
-            events.append({
-                'date': s.Date, 'type': 'Assignment Put (STO)',
-                'detail': str(s.Description)[:60], 'cash': s.Total,
-            })
-    return 0.0, events
-
-def effective_basis(c: 'Campaign', use_lifetime=False) -> float:
-    """Cost per share after netting premiums and dividends against total_cost."""
-    if use_lifetime:
-        return c.blended_basis
-    net = c.total_cost - c.premiums - c.dividends
-    return net / c.total_shares if c.total_shares > 0 else 0.0
-
-def realized_pnl(c: 'Campaign', use_lifetime=False) -> float:
-    """Total realised profit/loss for a campaign."""
-    if use_lifetime:
-        return c.premiums + c.dividends
-    if c.status == 'closed':
-        return c.exit_proceeds + c.premiums + c.dividends - c.total_cost
-    return c.premiums + c.dividends
-
-def pure_options_pnl(df, ticker, campaigns: list) -> float:
-    """Options P/L for a ticker that falls *outside* all campaign windows."""
-    windows = [(c.start_date, c.end_date or df['Date'].max()) for c in campaigns]
-    t = df[(df['Ticker'] == ticker) & option_mask(df['Instrument Type'])]
-    dates = t['Date']
-    in_any_window = pd.Series(False, index=t.index)
-    for s, e in windows:
-        in_any_window |= (dates >= s) & (dates <= e)
-    return t.loc[~in_any_window, 'Total'].sum()
-
-# ── DERIVATIVES METRICS ENGINE ─────────────────────────────────────────────────
-
-def build_closed_trades(df, campaign_windows=None):
-    if campaign_windows is None: campaign_windows = {}
-    equity_opts = df[df['Instrument Type'].isin(OPT_TYPES)].copy()
-    sym_open_orders = {}
-    for sym, grp in equity_opts.groupby('Symbol', dropna=False):
-        opens = grp[grp['Sub Type'].str.lower().str.contains('to open', na=False)]
-        if not opens.empty:
-            sym_open_orders[sym] = opens['Order #'].dropna().unique().tolist()
-
-    order_to_syms = defaultdict(set)
-    for sym, orders in sym_open_orders.items():
-        for oid in orders: order_to_syms[oid].add(sym)
-
-    parent = {}
-    def find(x):
-        parent.setdefault(x, x)
-        if parent[x] != x: parent[x] = find(parent[x])
-        return parent[x]
-    def union(a, b): parent[find(a)] = find(b)
-
-    for oid, syms in order_to_syms.items():
-        syms = list(syms)
-        for i in range(1, len(syms)): union(syms[0], syms[i])
-
-    trade_groups = defaultdict(list)
-    for sym in sym_open_orders: trade_groups[find(sym)].append(sym)
-
-    closed_list = []
-    for root, syms in trade_groups.items():
-        grp = equity_opts[equity_opts['Symbol'].isin(syms)].sort_values('Date')
-        all_closed = all(abs(equity_opts[equity_opts['Symbol'] == s]['Net_Qty_Row'].sum()) < 0.001 for s in syms)
-        if not all_closed: continue
-
-        opens = grp[grp['Sub Type'].str.lower().str.contains('to open', na=False)]
-        if opens.empty: continue
-
-        open_credit = opens['Total'].sum()
-        net_pnl     = grp['Total'].sum()
-        open_date   = opens['Date'].min()
-        close_date  = grp['Date'].max()
-        days_held   = max((close_date - open_date).days, 1)
-        ticker      = grp['Ticker'].iloc[0]
-        cp_vals     = grp['Call or Put'].dropna().str.upper().unique().tolist()
-        cp          = cp_vals[0] if len(cp_vals) == 1 else 'Mixed'
-        n_long      = (opens['Net_Qty_Row'] > 0).sum()
-        is_credit   = open_credit > 0
-
-        if n_long > 0:
-            call_strikes = grp[grp['Call or Put'].str.upper().str.contains('CALL', na=False)]['Strike Price'].dropna().sort_values()
-            put_strikes  = grp[grp['Call or Put'].str.upper().str.contains('PUT',  na=False)]['Strike Price'].dropna().sort_values()
-            w_call = (call_strikes.max() - call_strikes.min()) * 100 if len(call_strikes) >= 2 else 0
-            w_put  = (put_strikes.max()  - put_strikes.min())  * 100 if len(put_strikes)  >= 2 else 0
-
-            expirations = grp['Expiration Date'].dropna().unique()
-            strikes_all = grp['Strike Price'].dropna().unique()
-            is_calendar = len(expirations) >= 2 and len(strikes_all) == 1
-
-            short_opens_sp  = opens[opens['Net_Qty_Row'] < 0]
-            long_opens_sp   = opens[opens['Net_Qty_Row'] > 0]
-            n_short_legs    = len(short_opens_sp)
-            n_long_legs     = len(long_opens_sp)
-            short_qty_total = abs(short_opens_sp['Net_Qty_Row'].sum())
-            long_qty_total  = long_opens_sp['Net_Qty_Row'].sum()
-            is_butterfly = (n_long_legs == 2 and n_short_legs == 1 and
-                            short_qty_total == 2 and long_qty_total == 2 and
-                            len(strikes_all) == 3 and len(expirations) == 1)
-
-            short_cp = short_opens_sp['Call or Put'].dropna().str.upper().tolist()
-            long_cp  = long_opens_sp['Call or Put'].dropna().str.upper().tolist()
-            has_short_put_only  = any('PUT'  in c for c in short_cp) and not any('PUT'  in c for c in long_cp)
-            has_call_spread_leg = any('CALL' in c for c in short_cp) and any('CALL' in c for c in long_cp)
-            is_jade_lizard = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1
-
-            # ── Naked long: no short legs at all (e.g. LEAPS, long call/put outright) ──
-            # Must be checked before spread logic — w_call/w_put are both 0 for a
-            # single-strike long, which would otherwise fall into the Put Credit Spread
-            # branch and produce a capital_risk of $1.
-            if n_short_legs == 0:
-                long_cp_types = long_opens_sp['Call or Put'].dropna().str.upper().unique().tolist()
-                has_lc = any('CALL' in c for c in long_cp_types)
-                has_lp = any('PUT'  in c for c in long_cp_types)
-                if has_lc and not has_lp:   trade_type = 'Long Call'
-                elif has_lp and not has_lc: trade_type = 'Long Put'
-                else:                       trade_type = 'Long Strangle'
-                # Capital at risk for a long option = premium paid (max loss if expires worthless)
-                capital_risk = max(abs(open_credit), 1)
-            elif is_butterfly:
-                trade_type = 'Call Butterfly' if len(call_strikes.unique()) == 3 else 'Put Butterfly'
-                wing_width = (strikes_all.max() - strikes_all.min()) * 100 / 2
-                capital_risk = max(abs(open_credit), wing_width, 1)
-            elif is_jade_lizard:
-                trade_type   = 'Jade Lizard'
-                capital_risk = max(w_call - abs(open_credit), 1)
-            elif is_calendar:
-                trade_type   = 'Calendar Spread'
-                capital_risk = max(abs(open_credit), 1)
-            elif w_call > 0 and w_put > 0:
-                trade_type   = 'Iron Condor'
-                capital_risk = max(max(w_call, w_put) - abs(open_credit), 1)
-            elif w_call > 0:
-                trade_type   = 'Call Credit Spread' if is_credit else 'Call Debit Spread'
-                # Credit spread: risk = wing_width - credit_received (net outlay if assigned)
-                # Debit spread:  risk = debit_paid (max loss if expires worthless) = abs(open_credit)
-                capital_risk = max(w_call - abs(open_credit), 1) if is_credit else max(abs(open_credit), 1)
-            else:
-                trade_type   = 'Put Credit Spread' if is_credit else 'Put Debit Spread'
-                capital_risk = max(w_put - abs(open_credit), 1) if is_credit else max(abs(open_credit), 1)
-        else:
-            strikes      = grp['Strike Price'].dropna().tolist()
-            # For naked shorts the theoretical max loss is strike × 100 (underlying → 0).
-            # This is a reasonable proxy for equity options (strike typically < $500),
-            # but produces meaningless Ann Return % for index options where strikes are
-            # in the hundreds or thousands (SPX ~5000, NDX ~20000, RUT ~2000).
-            # Heuristic: if the highest strike exceeds INDEX_STRIKE_THRESHOLD we treat
-            # this as an index underlying and use premium received as the capital_risk
-            # proxy instead — consistent with how traders actually manage index risk
-            # (margin-based, not theoretical zero-underlying loss).
-            max_strike   = max(strikes) if strikes else 0
-            if max_strike >= INDEX_STRIKE_THRESHOLD:
-                capital_risk = max(abs(open_credit), 1)   # index: use premium as risk
-            else:
-                capital_risk = max(max_strike * 100, 1)   # equity: theoretical max loss
-            short_opens  = opens[opens['Net_Qty_Row'] < 0]
-            long_opens   = opens[opens['Net_Qty_Row'] > 0]
-            cp_shorts = short_opens['Call or Put'].dropna().str.upper().unique().tolist()
-            cp_longs  = long_opens['Call or Put'].dropna().str.upper().unique().tolist()
-            has_sc = any('CALL' in c for c in cp_shorts)
-            has_sp = any('PUT'  in c for c in cp_shorts)
-            has_lc = any('CALL' in c for c in cp_longs)
-            has_lp = any('PUT'  in c for c in cp_longs)
-            n_contracts = int(abs(opens['Net_Qty_Row'].sum()))
-            if not is_credit:
-                if has_lc and not has_lp: trade_type = 'Long Call'
-                elif has_lp and not has_lc: trade_type = 'Long Put'
-                else: trade_type = 'Long Strangle'
-            else:
-                if has_sc and has_sp:
-                    all_strikes = grp['Strike Price'].dropna().unique()
-                    trade_type = 'Short Straddle' if len(all_strikes) == 1 else 'Short Strangle'
-                    windows = campaign_windows.get(ticker, [])
-                    in_campaign = any(s <= open_date <= e for s, e in windows)
-                    if in_campaign:
-                        trade_type = 'Covered Straddle' if 'Straddle' in trade_type else 'Covered Strangle'
-                elif has_sc:
-                    windows = campaign_windows.get(ticker, [])
-                    in_campaign = any(s <= open_date <= e for s, e in windows)
-                    trade_type = 'Covered Call' if in_campaign else (
-                        'Short Call' if n_contracts == 1 else 'Short Call (x%d)' % n_contracts)
-                elif has_sp:
-                    trade_type = 'Short Put' if n_contracts == 1 else 'Short Put (x%d)' % n_contracts
-                else:
-                    trade_type = 'Short (other)'
-
-        try:
-            exp_dates = opens['Expiration Date'].dropna()
-            if not exp_dates.empty:
-                nearest_exp = pd.to_datetime(exp_dates.iloc[0])
-                dte_open = max((nearest_exp - open_date).days, 0)
-            else:
-                dte_open = None
-        except (ValueError, TypeError, AttributeError): dte_open = None
-
-        closes = grp[~grp['Sub Type'].str.lower().str.contains('to open', na=False)]
-        _close_sub_types = closes['Sub Type'].dropna().str.lower().unique().tolist()
-        if any(PAT_EXPIR in s for s in _close_sub_types):
-            close_type = '⏹️ Expired'
-        elif any(PAT_ASSIGN in s for s in _close_sub_types):
-            close_type = '📋 Assigned'
-        elif any('exercise' in s for s in _close_sub_types):
-            close_type = '🏋️ Exercised'
-        else:
-            close_type = '✂️ Closed'
-
-        closed_list.append({
-            'Ticker': ticker, 'Trade Type': trade_type,
-            'Type': 'Call' if 'CALL' in cp else 'Put' if 'PUT' in cp else 'Mixed',
-            'Spread': n_long > 0, 'Is Credit': is_credit, 'Days Held': days_held,
-            'Open Date': open_date, 'Close Date': close_date, 'Premium Rcvd': open_credit,
-            'Net P/L': net_pnl,
-            # Capture %: for credit trades = P/L as % of premium collected (how much of the
-            # credit did you keep). For debit trades = P/L as % of premium paid (return on
-            # the capital deployed into the trade). Sign-safe: uses abs(open_credit).
-            'Capture %': net_pnl / abs(open_credit) * 100 if abs(open_credit) > 0 else None,
-            'Capital Risk': capital_risk,
-            # Ann Return %: enabled for ALL trades (credit and debit) — the formula is
-            # the same: P/L / capital_at_risk * annualisation factor.
-            # Previously gated to is_credit only, leaving debit trades always None.
-            'Ann Return %': max(min(net_pnl / capital_risk * 365 / days_held * 100, 500), -500)
-                if capital_risk > 0 else None,
-            'Prem/Day': open_credit / days_held if is_credit else None,
-            'Won': net_pnl > 0, 'DTE Open': dte_open, 'Close Type': close_type,
-        })
-    return pd.DataFrame(closed_list)
-
-
-# ── ROLL CHAIN ENGINE ──────────────────────────────────────────────────────────
-
-def build_option_chains(ticker_opts):
-    """
-    Groups option events into roll chains by call/put type.
-    A chain = one continuous short position, rolled multiple times.
-    Chain ends when position goes flat AND next STO is > 3 days later.
-    """
-    chains = []
-    for cp_type in ['CALL', 'PUT']:
-        legs = ticker_opts[
-            ticker_opts['Call or Put'].str.upper().str.contains(cp_type, na=False)
-        ].copy().sort_values('Date').reset_index(drop=True)
-        if legs.empty: continue
-        # Rename spaced columns so itertuples attribute access works
-        legs = legs.rename(columns={
-            'Sub Type':       'Sub_Type',
-            'Strike Price':   'Strike_Price',
-            'Expiration Date':'Expiration_Date',
-        })
-
-        current_chain = []
-        net_qty = 0
-        last_close_date = None
-
-        for row in legs.itertuples(index=False):
-            sub = str(row.Sub_Type).lower()
-            qty = row.Net_Qty_Row
-            exp_dt = row.Expiration_Date
-            event = {
-                'date': row.Date, 'sub_type': row.Sub_Type,
-                'strike': row.Strike_Price,
-                'exp': pd.to_datetime(exp_dt).strftime('%d/%m/%y') if pd.notna(exp_dt) else '',
-                'qty': qty, 'total': row.Total, 'cp': cp_type,
-                'desc': str(row.Description)[:55],
             }
-            if 'to open' in sub and qty < 0:
-                if last_close_date is not None and net_qty == 0:
-                    if (row.Date - last_close_date).days > ROLL_CHAIN_GAP_DAYS and current_chain:
-                        chains.append(current_chain)
-                        current_chain = []
-                net_qty += abs(qty)
-                current_chain.append(event)
-                last_close_date = None
-            elif net_qty > 0 and (PAT_CLOSE in sub or 'expiration' in sub or 'assignment' in sub):
-                net_qty = max(net_qty - abs(qty), 0)
-                current_chain.append(event)
-                if net_qty == 0:
-                    last_close_date = row.Date
+            for t in (wheel_tickers + [
+                t for t in df['Ticker'].unique()
+                if t not in wheel_tickers + ['CASH']
+                and df[(df['Ticker'] == t) &
+                       (df['Instrument Type'].str.strip() == 'Equity')]['Net_Qty_Row'].sum() > 0.001
+            ])
+        },
+        # ── Metadata ──
+        'csv_rows':    len(df),
+        'latest_date': latest_date.strftime('%Y-%m-%d'),
+        'app_version': APP_VERSION,
+    }
+    out_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'app_snapshot.json')
+    with open(out_path, 'w') as f:
+        _json.dump(snapshot, f, indent=2)
+    st.info(f'🧪 Test snapshot written → `{out_path}`')
 
-        if current_chain:
-            chains.append(current_chain)
-    return chains
-
-def calc_dte(row, reference_date: pd.Timestamp) -> str:
-    """
-    Compute days-to-expiry for an open option row.
-    Returns e.g. '21d' or 'N/A'.
-
-    reference_date is passed explicitly (was previously an implicit module global,
-    which made the function impossible to call correctly before the CSV was loaded).
-    """
-    if not is_option_row(str(row['Instrument Type'])) or pd.isna(row['Expiration Date']):
-        return 'N/A'
-    try:
-        exp_date  = pd.to_datetime(row['Expiration Date'], format='mixed', errors='coerce')
-        if pd.isna(exp_date):
-            return 'N/A'
-        exp_plain = exp_date.date() if hasattr(exp_date, 'date') else exp_date
-        return '%dd' % max((exp_plain - reference_date.date()).days, 0)
-    except (ValueError, TypeError, AttributeError):
-        return 'N/A'
 
 # ── MAIN APP ───────────────────────────────────────────────────────────────────
 
@@ -851,7 +281,7 @@ if not uploaded_file:
 
     <p style="color:#444d56;font-size:0.78rem;margin-top:1.5rem;text-align:center;">
     TastyMechanics {APP_VERSION} · Open source · MIT licence ·
-    <a href="https://github.com/crux1s/TastyMechanics" style="color:#58a6ff;">GitHub</a>
+    <a href="https://github.com/timluey/tastymechanics" style="color:#58a6ff;">GitHub</a>
     </p>
 
     </div>
@@ -859,349 +289,46 @@ if not uploaded_file:
     st.stop()
 
 
-@dataclass
-class Campaign:
-    """
-    A single wheel campaign — one continuous share-holding period for a ticker.
-
-    Created in build_campaigns() when shares >= WHEEL_MIN_SHARES are bought,
-    closed when shares reach zero. Multiple campaigns per ticker are possible
-    (e.g. bought, fully exited, then re-entered).
-
-    Fields:
-        ticker         Underlying symbol, e.g. 'NVDA'
-        total_shares   Current share count (updated on adds, exits, splits)
-        total_cost     Cash paid to acquire shares (absolute value, always >= 0)
-        blended_basis  total_cost / total_shares — average cost per share
-        premiums       Net option premium collected while campaign is open (can be negative)
-        dividends      Dividends received during the campaign
-        exit_proceeds  Cash received from share sales (positive when sold)
-        start_date     Date of first share purchase / assignment entry
-        end_date       Date shares hit zero (None while still open)
-        status         'open' or 'closed'
-        events         Ordered list of dicts — {date, type, detail, cash} for the UI log
-    """
-    ticker:         str
-    total_shares:   float
-    total_cost:     float
-    blended_basis:  float
-    premiums:       float
-    dividends:      float
-    exit_proceeds:  float
-    start_date:     pd.Timestamp
-    end_date:       Optional[pd.Timestamp]
-    status:         str                    # 'open' | 'closed'
-    events:         list = field(default_factory=list)
-
-
-@dataclass
-class AppData:
-    """Typed container for all heavy-computed data from build_all_data().
-    Replaces a fragile 10-tuple — fields are named, self-documenting,
-    and safe to reorder or extend without breaking the caller."""
-    all_campaigns:          dict                # {ticker: list[Campaign]}
-    wheel_tickers:          list
-    pure_options_tickers:   list
-    closed_trades_df:       pd.DataFrame
-    df_open:                pd.DataFrame
-    closed_camp_pnl:        float
-    open_premiums_banked:   float
-    capital_deployed:       float
-    pure_opts_pnl:          float
-    extra_capital_deployed: float
-    pure_opts_per_ticker:   dict   # {ticker: float} options P/L outside campaign windows
-    split_events:           list   # [{ticker,date,ratio,...}] detected stock splits
-    zero_cost_rows:         list   # [{ticker,date,qty,...}] zero-cost deliveries with unknown basis
-
-
-
 # ── Cached data loading ────────────────────────────────────────────────────────
-
-class ParsedData(NamedTuple):
-    """Return type of load_and_parse() — bundles the cleaned DataFrame with
-    the corporate action lists so build_all_data() can use them without
-    re-running detect_corporate_actions() a second time."""
-    df:             pd.DataFrame
-    split_events:   list   # [{ticker, date, ratio, pre_qty, post_qty}]
-    zero_cost_rows: list   # [{ticker, date, qty, description}]
-
-
-def detect_corporate_actions(df):
-    """
-    Scan the DataFrame for corporate actions that affect cost-basis correctness.
-    Returns two lists for UI warnings:
-
-      split_events  -- list of dicts: {ticker, date, ratio, pre_qty, post_qty}
-                       Detected by pairing a zero-Total Receive Deliver REMOVAL
-                       containing a split keyword with a zero-Total addition on
-                       the same ticker+date.  ratio = post_qty / pre_qty.
-
-      zero_cost_rows -- list of dicts: {ticker, date, qty, description}
-                       Any zero-Total Receive Deliver share addition that is not
-                       part of a detected split pair and is not an assignment.
-                       Includes spin-offs, ACATS transfers, and mergers whose
-                       cost basis defaults to $0 in the FIFO queue.
-
-    Called from load_and_parse() after Net_Qty_Row is set.
-    Results are also stored in AppData so the UI can show a warning banner.
-    """
-    split_events   = []
-    zero_cost_rows = []
-
-    rd = df[
-        (df['Type'] == 'Receive Deliver') &
-        (equity_mask(df['Instrument Type'])) &
-        (df['Total'] == 0.0)
-    ].copy()
-    if rd.empty:
-        return split_events, zero_cost_rows
-
-    rd['_dsc'] = rd['Description'].fillna('').str.upper()
-
-    def _is_split_row(dsc):
-        return any(p in dsc for p in SPLIT_DSC_PATTERNS)
-
-    processed_indices = set()
-    for (ticker, date), grp in rd.groupby(['Ticker', 'Date']):
-        removals  = grp[grp['_dsc'].apply(lambda d: 'REMOVAL' in d and _is_split_row(d))]
-        additions = grp[grp['_dsc'].apply(lambda d: 'REMOVAL' not in d and _is_split_row(d))]
-        if not removals.empty and not additions.empty:
-            pre_qty  = removals['Quantity'].sum()
-            post_qty = additions['Quantity'].sum()
-            if pre_qty > 0:
-                split_events.append({
-                    'ticker':   ticker,
-                    'date':     date,
-                    'ratio':    round(post_qty / pre_qty, 6),
-                    'pre_qty':  pre_qty,
-                    'post_qty': post_qty,
-                })
-                processed_indices.update(removals.index)
-                processed_indices.update(additions.index)
-
-    # Zero-cost additions not matched to a split pair
-    for row in rd[~rd.index.isin(processed_indices)].itertuples(index=False):
-        # Note: itertuples renames columns starting with _ (e.g. _dsc -> _3),
-        # so we read Description directly and uppercase it ourselves.
-        dsc = str(row.Description).upper()
-        if 'ASSIGNMENT' in dsc:
-            continue
-        if row.Quantity > 0:
-            zero_cost_rows.append({
-                'ticker':      row.Ticker,
-                'date':        row.Date,
-                'qty':         row.Quantity,
-                'description': str(row.Description)[:80],
-            })
-
-    return split_events, zero_cost_rows
-
-
-def apply_split_adjustments(df, split_events):
-    """
-    Rescale pre-split equity lot quantities in-place so the FIFO engine
-    sees the correct post-split share counts and per-share cost basis.
-
-    For each split event (ratio = post/pre, e.g. 2.0 for a 2:1 forward split):
-      - Equity rows for that ticker with Date < split_date have their
-        Quantity and Net_Qty_Row multiplied by ratio.
-      - Total (cash paid/received) is unchanged — basis per share halves.
-      - The split rows themselves (Total=0, Net_Qty_Row=0) are untouched.
-
-    NOTE: Option strikes are NOT adjusted here.  TastyTrade issues new symbols
-    for adjusted options — those are a known limitation (see README).
-    """
-    if not split_events:
-        return df
-    df = df.copy()
-    for ev in split_events:
-        mask = (
-            (df['Ticker'] == ev['ticker']) &
-            (equity_mask(df['Instrument Type'])) &
-            (df['Date'] < ev['date']) &
-            (df['Net_Qty_Row'] != 0)
-        )
-        df.loc[mask, 'Quantity']    = (df.loc[mask, 'Quantity']    * ev['ratio']).round(9)
-        df.loc[mask, 'Net_Qty_Row'] = (df.loc[mask, 'Net_Qty_Row'] * ev['ratio']).round(9)
-    return df
-
 
 @st.cache_data(show_spinner='📂 Loading CSV…')
 def load_and_parse(file_bytes: bytes) -> ParsedData:
     """
-    Read and clean the TastyTrade CSV.
+    Thin Streamlit cache wrapper around ingestion.parse_csv().
     Cached on raw file bytes — re-runs only when a new file is uploaded.
-
-    Returns ParsedData(df, split_events, zero_cost_rows) so that
-    build_all_data() can surface the corporate action lists in AppData
-    without running detect_corporate_actions() a second time.
+    The actual parsing logic lives in ingestion.py and is independently
+    importable and testable without a running Streamlit server.
     """
-    df = pd.read_csv(_io.BytesIO(file_bytes))
-    # Parse as UTC (handles TastyTrade's +00:00 suffix), then strip tz.
-    # All dates in the app are naive UTC from this point forward — no mixing.
-    df['Date']        = pd.to_datetime(df['Date'], utc=True).dt.tz_localize(None)
-    for col in ['Total', 'Quantity', 'Commissions', 'Fees']:
-        df[col] = df[col].apply(clean_val)
-    df['Ticker']      = df['Underlying Symbol'].fillna(
-                            df['Symbol'].str.split().str[0]).fillna('CASH')
-    df['Net_Qty_Row'] = df.apply(get_signed_qty, axis=1)
-    df = df.sort_values('Date').reset_index(drop=True)
-    # Detect corporate actions and apply split quantity adjustments.
-    # Must run after Net_Qty_Row is assigned and df is date-sorted.
-    # Both lists are returned in ParsedData so build_all_data() doesn't
-    # need to re-run this scan.
-    split_events, zero_cost_rows = detect_corporate_actions(df)
-    df = apply_split_adjustments(df, split_events)
-    return ParsedData(df=df, split_events=split_events, zero_cost_rows=zero_cost_rows)
+    return parse_csv(file_bytes)
 
 
 @st.cache_data(show_spinner='⚙️ Building campaigns…')
-def build_all_data(parsed: ParsedData, use_lifetime: bool):
+def build_all_data(_parsed: ParsedData, use_lifetime: bool) -> AppData:
     """
-    All heavy computation that depends only on the full DataFrame and
-    lifetime toggle — not on the selected time window.
-
-    Accepts a ParsedData so it can include split_events and zero_cost_rows
-    in AppData without re-running detect_corporate_actions().
-
+    Thin Streamlit cache wrapper around mechanics.compute_app_data().
     Cached separately from load_and_parse so that toggling Lifetime mode
     only re-runs campaign logic, not the CSV parse.
-
-    Returns: AppData dataclass -- see AppData definition for field descriptions.
+    _parsed is prefixed with _ so Streamlit skips hashing the full DataFrame
+    (only the tiny use_lifetime bool is hashed). Hashing a 50k-row DataFrame
+    on every rerun would cost more CPU than just running the math cold.
     """
-    df, split_events, zero_cost_rows = parsed
-    # ── Open positions ledger ──────────────────────────────────────────────
-    trade_df = df[df['Type'].isin(TRADE_TYPES)].copy()
-    groups   = trade_df.groupby(
-        ['Ticker', 'Symbol', 'Instrument Type', 'Call or Put',
-         'Expiration Date', 'Strike Price', 'Root Symbol'], dropna=False)
-    open_records = []
-    for name, group in groups:
-        net_qty = group['Net_Qty_Row'].sum()
-        if abs(net_qty) > 0.001:
-            open_records.append({
-                'Ticker': name[0], 'Symbol': name[1],
-                'Instrument Type': name[2], 'Call or Put': name[3],
-                'Expiration Date': name[4], 'Strike Price': name[5],
-                'Root Symbol': name[6], 'Net_Qty': net_qty,
-                'Cost Basis': group['Total'].sum() * -1,
-            })
-    df_open = pd.DataFrame(open_records)
-
-    # ── Wheel campaigns ────────────────────────────────────────────────────
-    wheel_tickers = []
-    for t in df['Ticker'].unique():
-        if t == 'CASH': continue
-        if not df[(df['Ticker'] == t) &
-                  (equity_mask(df['Instrument Type'])) &
-                  (df['Net_Qty_Row'] >= WHEEL_MIN_SHARES)].empty:
-            wheel_tickers.append(t)
-
-    all_campaigns = {}
-    for ticker in wheel_tickers:
-        camps = build_campaigns(df, ticker, use_lifetime=use_lifetime)
-        if camps:
-            all_campaigns[ticker] = camps
-
-    all_tickers          = [t for t in df['Ticker'].unique() if t != 'CASH']
-    pure_options_tickers = [t for t in all_tickers if t not in wheel_tickers]
-
-    # ── Closed trades ──────────────────────────────────────────────────────
-    latest_date  = df['Date'].max()
-    _camp_windows = {
-        _t: [(_c.start_date, _c.end_date or latest_date) for _c in _camps]
-        for _t, _camps in all_campaigns.items()
-    }
-    closed_trades_df = build_closed_trades(df, campaign_windows=_camp_windows)
-
-    # ── All-time P/L accounting ────────────────────────────────────────────
-    closed_camp_pnl      = sum(realized_pnl(c, use_lifetime)
-                               for camps in all_campaigns.values()
-                               for c in camps if c.status == 'closed')
-    open_premiums_banked = sum(realized_pnl(c, use_lifetime)
-                               for camps in all_campaigns.values()
-                               for c in camps if c.status == 'open')
-    capital_deployed     = sum(c.total_shares * c.blended_basis
-                               for camps in all_campaigns.values()
-                               for c in camps if c.status == 'open')
-
-    # ── P/L for pure-options tickers (not part of a 100-share wheel) ─────────
-    # Two components per ticker:
-    #   1. Options cash flow — already realized at open/close, no basis tracking needed
-    #   2. Equity realized P/L — FIFO via _iter_fifo_sells(), same engine as the
-    #      windowed view. This replaces the old cash-flow hack that was correct only
-    #      when all standalone equity positions happened to be fully closed.
-    # Shares still held are capital deployment, not realized P/L — their cost basis
-    # stays in the FIFO queue and contributes to extra_capital_deployed instead.
-    pure_opts_pnl          = 0.0
-    extra_capital_deployed = 0.0
-
-    for t in pure_options_tickers:
-        t_df = df[df['Ticker'] == t]
-
-        # 1. Options cash flow
-        opt_flow = t_df[
-            t_df['Instrument Type'].isin(OPT_TYPES) &
-            t_df['Type'].isin(TRADE_TYPES)
-        ]['Total'].sum()
-
-        # 2. Equity realized P/L via FIFO (correct for any mix of buys, partial sells,
-        #    and full exits — not just the fully-closed case the old hack handled)
-        t_eq_rows  = t_df[equity_mask(t_df['Instrument Type'])].sort_values('Date')
-        eq_fifo_pnl = sum(p - c for _, p, c in _iter_fifo_sells(t_eq_rows))
-
-        pure_opts_pnl += opt_flow + eq_fifo_pnl
-
-        # 3. Shares still open → capital deployed (not realized P/L)
-        net_shares = t_eq_rows['Net_Qty_Row'].sum()
-        if net_shares > 0.0001:
-            bought_rows    = t_eq_rows[t_eq_rows['Net_Qty_Row'] > 0]
-            total_bought   = bought_rows['Net_Qty_Row'].sum()
-            total_buy_cost = bought_rows['Total'].apply(abs).sum()
-            avg_cost       = total_buy_cost / total_bought if total_bought > 0 else 0
-            extra_capital_deployed += net_shares * avg_cost
-
-    # Also include options P/L from wheel tickers that fell outside campaign windows
-    # (e.g. options written before the first share purchase)
-    pure_opts_per_ticker = {}
-    for ticker, camps in all_campaigns.items():
-        pot = pure_options_pnl(df, ticker, camps)
-        pure_opts_per_ticker[ticker] = pot
-        pure_opts_pnl += pot
-
-    return AppData(
-        all_campaigns=all_campaigns,
-        wheel_tickers=wheel_tickers,
-        pure_options_tickers=pure_options_tickers,
-        closed_trades_df=closed_trades_df,
-        df_open=df_open,
-        closed_camp_pnl=closed_camp_pnl,
-        open_premiums_banked=open_premiums_banked,
-        capital_deployed=capital_deployed,
-        pure_opts_pnl=pure_opts_pnl,
-        extra_capital_deployed=extra_capital_deployed,
-        pure_opts_per_ticker=pure_opts_per_ticker,
-        split_events=split_events,
-        zero_cost_rows=zero_cost_rows,
-    )
-
+    return compute_app_data(_parsed, use_lifetime)
 
 @st.cache_data(show_spinner=False)
-def get_daily_pnl(df: pd.DataFrame) -> pd.DataFrame:
+def get_daily_pnl(_df: pd.DataFrame) -> pd.DataFrame:
     """
     Daily realized P/L series — FIFO-correct, whole portfolio.
     Cached on the full df — re-runs only when a new file is uploaded.
     Window slicing is done downstream by the caller.
+    _df is prefixed with _ so Streamlit skips hashing the full DataFrame.
     """
-    return calculate_daily_realized_pnl(df, df['Date'].min())
+    return calculate_daily_realized_pnl(_df, _df['Date'].min())
 
 
 
 # ── Validate + load ────────────────────────────────────────────────────────────
-# Read raw bytes first so we can validate columns before the cached parse
 _raw_bytes = uploaded_file.getvalue()
-_check_df  = pd.read_csv(_io.BytesIO(_raw_bytes), nrows=0)
-_missing   = REQUIRED_COLUMNS - set(_check_df.columns)
+_missing   = validate_columns(_raw_bytes)
 if _missing:
     st.error(
         '❌ **This doesn\'t look like a TastyTrade history CSV.**\n\n'
@@ -1415,73 +542,17 @@ _win_label     = (f'<span style="font-size:0.75rem;font-weight:400;color:#58a6ff
 _win_suffix    = f'  ·  {_win_start_str} → {_win_end_str}'
 
 # ── Debug export (for test suite comparison) ──────────────────────────────────
-# Only runs when the environment variable TASTYMECHANICS_TEST=1 is set.
-# Writes app_snapshot.json to the same folder as the running script.
-# Normal users never see this — it is a no-op in production.
 if _os.environ.get('TASTYMECHANICS_TEST') == '1':
-    def _campaign_snapshot(camps):
-        return [dict(
-            ticker=c.ticker, status=c.status,
-            shares=c.total_shares, cost=round(c.total_cost, 4),
-            basis=round(c.blended_basis, 4),
-            premiums=round(c.premiums, 4),
-            dividends=round(c.dividends, 4),
-            exit_proceeds=round(c.exit_proceeds, 4),
-            pnl=round(realized_pnl(c), 4),
-        ) for c in camps]
-
-    _snapshot = {
-        # ── Headline P/L figures ──
-        'total_realized_pnl':    round(total_realized_pnl, 4),
-        'window_realized_pnl':   round(window_realized_pnl, 4),
-        'prior_period_pnl':      round(prior_period_pnl, 4),
-        'selected_period':       selected_period,
-        # ── Components ──
-        'closed_camp_pnl':       round(closed_camp_pnl, 4),
-        'open_premiums_banked':  round(open_premiums_banked, 4),
-        'pure_opts_pnl':         round(pure_opts_pnl, 4),
-        'all_time_income':       round(_all_time_income, 4),
-        'wheel_divs_in_camps':   round(_wheel_divs_in_camps, 4),
-        # ── Window components ──
-        'w_opts_total':          round(_w_opts['Total'].sum(), 4),
-        'w_eq_pnl':              round(_eq_pnl, 4),
-        'w_div_int':             round(_w_div_int, 4),
-        # ── Portfolio stats ──
-        'total_deposited':       round(total_deposited, 4),
-        'total_withdrawn':       round(total_withdrawn, 4),
-        'net_deposited':         round(net_deposited, 4),
-        'capital_deployed':      round(capital_deployed, 4),
-        'realized_ror':          round(realized_ror, 4),
-        'div_income':            round(div_income, 4),
-        'int_net':               round(int_net, 4),
-        # ── Campaigns ──
-        'campaigns':             {t: _campaign_snapshot(c) for t, c in all_campaigns.items()},
-        # ── Per-ticker options P/L ──
-        'pure_opts_per_ticker':  {t: round(v, 4) for t, v in pure_opts_per_ticker.items()},
-        'wheel_tickers':         wheel_tickers,
-        'pure_options_tickers':  pure_options_tickers,
-        # ── Open positions ──
-        'open_positions': {
-            t: {
-                'net_qty': round(
-                    df[(df['Ticker']==t) & (df['Instrument Type'].str.strip()=='Equity')]['Net_Qty_Row'].sum(), 4
-                )
-            }
-            for t in (wheel_tickers + [
-                t for t in df['Ticker'].unique()
-                if t not in wheel_tickers + ['CASH']
-                and df[(df['Ticker']==t) & (df['Instrument Type'].str.strip()=='Equity')]['Net_Qty_Row'].sum() > 0.001
-            ])
-        },
-        # ── Metadata ──
-        'csv_rows':    len(df),
-        'latest_date': latest_date.strftime('%Y-%m-%d'),
-        'app_version': APP_VERSION,
-    }
-    _out = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'app_snapshot.json')
-    with open(_out, 'w') as _f:
-        _json.dump(_snapshot, _f, indent=2)
-    st.info(f'🧪 Test snapshot written → `{_out}`')
+    _write_test_snapshot(
+        df, all_campaigns, wheel_tickers, pure_options_tickers,
+        pure_opts_per_ticker, total_realized_pnl, window_realized_pnl,
+        prior_period_pnl, selected_period, closed_camp_pnl,
+        open_premiums_banked, pure_opts_pnl, _all_time_income,
+        _wheel_divs_in_camps, _w_opts, _eq_pnl, _w_div_int,
+        total_deposited, total_withdrawn, net_deposited,
+        capital_deployed, realized_ror, div_income, int_net,
+        latest_date,
+    )
 
 # ── TOP METRICS ────────────────────────────────────────────────────────────────
 
@@ -1496,7 +567,7 @@ _window_days_int = max((latest_date - start_date).days, 1)
 cap_eff_score = (_pnl_display / capital_deployed / _window_days_int * 365 * 100)     if capital_deployed > 0 else 0.0
 
 m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
-m1.metric('Realized P/L',    '$%.2f' % _pnl_display)
+m1.metric('Realized P/L',    fmt_dollar(_pnl_display))
 m1.caption('All cash actually banked — options P/L, share sales, premiums collected. Filtered to selected time window. Unrealised share P/L not included.')
 m2.metric('Realized ROR',    '%.1f%%' % _ror_display)
 m2.caption('Realized P/L as a % of net deposits. How hard your deposited capital is working.')
@@ -1512,11 +583,11 @@ if _is_short_window:
     )
 m3.metric('Cap Efficiency',  '%.1f%%' % cap_eff_score)
 m3.caption('Annualised return on capital deployed in shares — (Realized P/L ÷ Capital Deployed) × 365. Benchmark: S&P ~10%/yr. Shows if your wheel is outperforming simple buy-and-hold on the same capital.')
-m4.metric('Capital Deployed','$%.2f' % capital_deployed)
+m4.metric('Capital Deployed',fmt_dollar(capital_deployed))
 m4.caption('Cash tied up in open share positions (wheel campaigns + any fractional holdings). Options margin not included.')
-m5.metric('Margin Loan',     '$%.2f' % margin_loan)
+m5.metric('Margin Loan',     fmt_dollar(margin_loan))
 m5.caption('Negative cash balance — what you currently owe the broker. Zero is ideal unless deliberately leveraging.')
-m6.metric('Div + Interest',  '$%.2f' % (div_income + int_net))
+m6.metric('Div + Interest',  fmt_dollar(div_income + int_net))
 m6.caption('Dividends received plus net interest (credit earned minus debit charged on margin). Filtered to selected time window.')
 m7.metric('Account Age',     '%d days' % account_days)
 m7.caption('Days since your first transaction. Useful context for how long your track record covers.')
@@ -1684,8 +755,8 @@ with tab1:
             dm2.metric('Median Capture %',   '%.1f%%' % credit_cdf['Capture %'].median())
             dm3.metric('Median Days Held',   '%.0f'   % credit_cdf['Days Held'].median())
             dm4.metric('Median Ann. Return', '%.0f%%' % credit_cdf['Ann Return %'].median())
-            dm5.metric('Med Premium/Day',    '$%.2f'  % credit_cdf['Prem/Day'].median())
-            dm6.metric('Banked $/Day', '$%.2f' % (total_net_pnl_closed / window_days),
+            dm5.metric('Med Premium/Day',    fmt_dollar(credit_cdf['Prem/Day'].median()))
+            dm6.metric('Banked $/Day', fmt_dollar(total_net_pnl_closed / window_days),
                 delta='vs $%.2f gross' % (total_credit_rcvd / window_days),
                 delta_color='normal')
 
@@ -1708,17 +779,17 @@ with tab1:
 
             st.markdown('---')
             r1, r2, r3, r4, r5, r6 = st.columns(6)
-            r1.metric('Avg Winner',   '$%.2f' % _avg_win)
+            r1.metric('Avg Winner',   fmt_dollar(_avg_win))
             r1.caption('Mean P/L of all winning trades. Compare to Avg Loser — you want this number meaningfully larger.')
-            r2.metric('Avg Loser',    '$%.2f' % _avg_loss)
+            r2.metric('Avg Loser',    fmt_dollar(_avg_loss))
             r2.caption('Mean P/L of all losing trades. A healthy system has avg loss smaller than avg win, even at high win rates.')
             r3.metric('Win/Loss Ratio', '%.2fx' % _ratio)
             r3.caption('Avg Winner ÷ Avg Loser. Above 1.0 means your wins are larger than your losses on average. TastyTrade targets >1.0 at lower win rates, or compensates with high win rate if below 1.0.')
-            r4.metric('Total Fees',   '$%.2f' % _total_fees)
+            r4.metric('Total Fees',   fmt_dollar(_total_fees))
             r4.caption('Commissions + exchange fees on option trades in this window. The silent drag on every trade.')
             r5.metric('Fees % of P/L', '%.1f%%' % _fees_pct)
             r5.caption('Total fees as a percentage of net realized P/L. Under 10% is healthy. High on 0DTE or frequent small trades — fees eat a larger slice of smaller credits.')
-            r6.metric('Fees/Trade',   '$%.2f' % (_total_fees / len(all_cdf) if len(all_cdf) > 0 else 0))
+            r6.metric('Fees/Trade',   fmt_dollar(_total_fees / len(all_cdf) if len(all_cdf) > 0 else 0))
             r6.caption('Average fee cost per closed trade. Useful for comparing cost efficiency across strategies — defined risk spreads cost more per trade than naked puts.')
         else:
             st.info('No closed credit trades in this window.')
@@ -1761,7 +832,7 @@ with tab1:
                     st.dataframe(type_df.style.format({
                         'Win %': lambda x: '{:.1f}%'.format(x),
                         'Capture %': lambda x: '{:.1f}%'.format(x),
-                        'P/L': lambda x: '${:,.2f}'.format(x),
+                        'P/L': fmt_dollar,
                         'Prem/Day': lambda x: '${:.2f}'.format(x),
                         'Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                         'DTE': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
@@ -1786,7 +857,7 @@ with tab1:
                 st.dataframe(strat_df.style.format({
                     'Win %': lambda x: '{:.1f}%'.format(x),
                     'Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
-                    'P/L': lambda x: '${:,.2f}'.format(x),
+                    'P/L': fmt_dollar,
                     'Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                     'DTE': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                 }).map(color_win_rate, subset=['Win %'])
@@ -1834,7 +905,7 @@ with tab1:
             st.dataframe(
                 ticker_df.style.format({
                     'Win %': lambda x: '{:.1f}%'.format(x),
-                    'P/L': lambda x: '${:,.2f}'.format(x),
+                    'P/L': fmt_dollar,
                     'Days': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                     'Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
                     'Ann Ret %': lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
@@ -1929,7 +1000,7 @@ with tab2:
                 _leaps_count  = len(_leaps_cdf)
                 _leaps_tickers = ', '.join(sorted(_leaps_cdf['Ticker'].unique().tolist()))
                 _lc = '#00cc96' if _leaps_pnl >= 0 else '#ef553b'
-                _lpnl_str = ('$%.2f' % _leaps_pnl) if _leaps_pnl >= 0 else ('-$%.2f' % abs(_leaps_pnl))
+                _lpnl_str = fmt_dollar(_leaps_pnl)
                 st.markdown(
                     f'<div style="background:rgba(88,166,255,0.06);border:1px solid rgba(88,166,255,0.2);'
                     f'border-radius:8px;padding:10px 16px;margin:12px 0 0 0;font-size:0.82rem;color:#8b949e;">'
@@ -2015,7 +1086,7 @@ with tab2:
                 x=_weekly['Week'], y=_weekly['Net P/L'],
                 marker_color=_weekly['Colour'],
                 marker_line_width=0,
-                customdata=[f'${v:,.2f}' if v >= 0 else f'-${abs(v):,.2f}' for v in _weekly['Net P/L']],
+                customdata=[fmt_dollar(v) for v in _weekly['Net P/L']],
                 hovertemplate='Week of %{x|%d %b}<br><b>%{customdata}</b><extra></extra>'
             ))
             _fig_wk.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
@@ -2036,8 +1107,8 @@ with tab2:
                 x=_monthly['Label'], y=_monthly['Net P/L'],
                 marker_color=_monthly['Colour'],
                 marker_line_width=0,
-                text=[f'${v:,.0f}' if v >= 0 else f'-${abs(v):,.0f}' for v in _monthly['Net P/L']],
-                customdata=[f'${v:,.2f}' if v >= 0 else f'-${abs(v):,.2f}' for v in _monthly['Net P/L']],
+                text=[fmt_dollar(v, 0) for v in _monthly['Net P/L']],
+                customdata=[fmt_dollar(v) for v in _monthly['Net P/L']],
                 textposition='outside',
                 textfont=dict(size=10, family='IBM Plex Mono', color='#8b949e'),
                 hovertemplate='%{x}<br><b>%{customdata}</b><extra></extra>'
@@ -2240,12 +1311,12 @@ with tab3:
                     'Opened': c.start_date.strftime('%d/%m/%y')})
         summary_df = pd.DataFrame(rows)
         st.dataframe(summary_df.style.format({
-            'Avg Price': lambda x: '${:,.2f}'.format(x),
-            'Eff. Basis': lambda x: '${:,.2f}'.format(x),
-            'Premiums': lambda x: '${:,.2f}'.format(x),
-            'Divs': lambda x: '${:,.2f}'.format(x),
-            'Exit': lambda x: '${:,.2f}'.format(x),
-            'P/L': lambda x: '${:,.2f}'.format(x)
+            'Avg Price': fmt_dollar,
+            'Eff. Basis': fmt_dollar,
+            'Premiums': fmt_dollar,
+            'Divs': fmt_dollar,
+            'Exit': fmt_dollar,
+            'P/L': fmt_dollar
         }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
         st.markdown('---')
 
@@ -2366,7 +1437,7 @@ with tab3:
                         ev_share = ev_share.copy()
                         ev_share['date'] = pd.to_datetime(ev_share['date']).dt.strftime('%d/%m/%y %H:%M')
                         ev_share.columns = ['Date','Type','Detail','Amount']
-                        st.dataframe(ev_share.style.format({'Amount': lambda x: '${:,.2f}'.format(x)})
+                        st.dataframe(ev_share.style.format({'Amount': fmt_dollar})
                             .map(lambda v: 'color: #00cc96' if isinstance(v,float) and v>0
                                 else ('color: #ef553b' if isinstance(v,float) and v<0 else ''),
                                 subset=['Amount']),
@@ -2448,11 +1519,11 @@ with tab4:
             'P/L': deep_df['P/L'].sum()}
         deep_df = pd.concat([deep_df, pd.DataFrame([total_row])], ignore_index=True)
         st.dataframe(deep_df.style.format({
-            'Premiums': lambda x: '${:,.2f}'.format(x),
-            'Divs': lambda x: '${:,.2f}'.format(x),
-            'Options P/L': lambda x: '${:,.2f}'.format(x),
-            'Deployed': lambda x: '${:,.2f}'.format(x),
-            'P/L': lambda x: '${:,.2f}'.format(x)
+            'Premiums': fmt_dollar,
+            'Divs': fmt_dollar,
+            'Options P/L': fmt_dollar,
+            'Deployed': fmt_dollar,
+            'P/L': fmt_dollar
         }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
 
     # ── Total Portfolio P/L by Week & Month ───────────────────────────────────
@@ -2485,7 +1556,7 @@ with tab4:
                 x=_p_weekly['Week'], y=_p_weekly['PnL'],
                 marker_color=_p_weekly['Colour'],
                 marker_line_width=0,
-                customdata=[f'${v:,.2f}' if v >= 0 else f'-${abs(v):,.2f}' for v in _p_weekly['PnL']],
+                customdata=[fmt_dollar(v) for v in _p_weekly['PnL']],
                 hovertemplate='Week of %{x|%d %b}<br><b>%{customdata}</b><extra></extra>'
             ))
             _fig_pw.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
@@ -2506,8 +1577,8 @@ with tab4:
                 x=_p_monthly['Label'], y=_p_monthly['PnL'],
                 marker_color=_p_monthly['Colour'],
                 marker_line_width=0,
-                text=[f'${v:,.0f}' if v >= 0 else f'-${abs(v):,.0f}' for v in _p_monthly['PnL']],
-                customdata=[f'${v:,.2f}' if v >= 0 else f'-${abs(v):,.2f}' for v in _p_monthly['PnL']],
+                text=[fmt_dollar(v, 0) for v in _p_monthly['PnL']],
+                customdata=[fmt_dollar(v) for v in _p_monthly['PnL']],
                 textposition='outside',
                 textfont=dict(size=10, family='IBM Plex Mono', color='#8b949e'),
                 hovertemplate='%{x}<br><b>%{customdata}</b><extra></extra>'
@@ -2563,9 +1634,9 @@ with tab4:
 
             # Metrics row
             vc1, vc2, vc3, vc4, vc5 = st.columns(5)
-            vc1.metric('Avg Week P/L',      '$%.2f' % _avg_week)
+            vc1.metric('Avg Week P/L',      fmt_dollar(_avg_week))
             vc1.caption('Mean realized P/L per calendar week in the window. Your typical weekly income rate.')
-            vc2.metric('Weekly Std Dev',     '$%.2f' % _std_week)
+            vc2.metric('Weekly Std Dev',     fmt_dollar(_std_week))
             vc2.caption('Standard deviation of weekly P/L. Lower = more consistent income stream. A theta engine should have this well below avg week P/L.')
             vc3.metric('Sharpe-Equiv',       '%.2f'  % _sharpe_eq)
             vc3.caption('Avg weekly P/L ÷ std dev. Above 1.0 means your average week outweighs your typical swing. Higher is better — 0.5–1.0 is decent for options selling.')
@@ -2573,7 +1644,7 @@ with tab4:
             vc4.caption('% of calendar weeks with positive realized P/L. Complements trade win rate — a week can have winning trades but net negative if one loss dominates.')
             if _max_dd < 0:
                 _rec_str = '%dd' % _recovery_days if _recovery_days else 'Not yet'
-                vc5.metric('Max Drawdown',   '-$%.2f' % abs(_max_dd), delta='Recovery: %s' % _rec_str, delta_color='off')
+                vc5.metric('Max Drawdown',   fmt_dollar(_max_dd), delta='Recovery: %s' % _rec_str, delta_color='off')
                 vc5.caption('Largest peak-to-trough drop in cumulative daily P/L. Recovery = days from trough back to previous peak. "Not yet" means still underwater.')
             else:
                 vc5.metric('Max Drawdown', '$0.00')
@@ -2585,7 +1656,7 @@ with tab4:
                 x=_weekly_pnl['Week'], y=_weekly_pnl['PnL'],
                 marker_color=_weekly_pnl['PnL'].apply(lambda x: '#00cc96' if x >= 0 else '#ef553b'),
                 marker_line_width=0, name='Weekly P/L',
-                customdata=[f'${v:,.2f}' if v >= 0 else f'-${abs(v):,.2f}' for v in _weekly_pnl['PnL']],
+                customdata=[fmt_dollar(v) for v in _weekly_pnl['PnL']],
                 hovertemplate='Week of %{x|%d %b}<br><b>%{customdata}</b><extra></extra>'
             ))
             if _weekly_pnl['Rolling_Std'].notna().sum() >= 2:
@@ -2629,10 +1700,10 @@ with tab4:
 with tab5:
     st.markdown(f'### 💰 Deposits, Dividends & Fees {_win_label}', unsafe_allow_html=True)
     ic1, ic2, ic3, ic4 = st.columns(4)
-    ic1.metric('Deposited',      '$%.2f' % total_deposited)
-    ic2.metric('Withdrawn',      '$%.2f' % abs(total_withdrawn))
-    ic3.metric('Dividends',      '$%.2f' % div_income)
-    ic4.metric('Interest (net)', '$%.2f' % int_net)
+    ic1.metric('Deposited',      fmt_dollar(total_deposited))
+    ic2.metric('Withdrawn',      fmt_dollar(abs(total_withdrawn)))
+    ic3.metric('Dividends',      fmt_dollar(div_income))
+    ic4.metric('Interest (net)', fmt_dollar(int_net))
     income_df = df_window[df_window['Sub Type'].isin(
         DEPOSIT_SUB_TYPES
     )][['Date','Ticker','Sub Type','Description','Total']].sort_values('Date', ascending=False)
@@ -2640,7 +1711,7 @@ with tab5:
         st.dataframe(
             income_df.style
                 .apply(_color_cash_row, axis=1)
-                .format({'Total': lambda x: '${:,.2f}'.format(x)})
+                .format({'Total': fmt_dollar})
                 .map(_color_cash_total, subset=['Total']),
             width='stretch', hide_index=True
         )
