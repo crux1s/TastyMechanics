@@ -18,7 +18,11 @@ Internal helpers (also importable for use in analysis functions)
   apply_split_adjustments(df)   → df
 """
 
+from __future__ import annotations
+
 import io as _io
+from typing import Any
+
 import pandas as pd
 
 from config import (
@@ -31,14 +35,14 @@ from models import ParsedData
 
 # ── Row-level helpers ─────────────────────────────────────────────────────────
 
-def clean_val(val) -> float:
+def clean_val(val: Any) -> float:
     """Parse a TastyTrade currency string like '$1,234.56' to float."""
     if pd.isna(val) or val == '--':
         return 0.0
     return float(str(val).replace('$', '').replace(',', ''))
 
 
-def get_signed_qty(row) -> float:
+def get_signed_qty(row: pd.Series) -> float:
     """
     Return signed share/contract quantity: positive = buy, negative = sell.
 
@@ -79,7 +83,7 @@ def option_mask(series: pd.Series) -> pd.Series:
 
 # ── Corporate action detection ────────────────────────────────────────────────
 
-def detect_corporate_actions(df):
+def detect_corporate_actions(df: pd.DataFrame) -> tuple[list, list]:
     """
     Scan the DataFrame for corporate actions that affect cost-basis correctness.
     Must be called after Net_Qty_Row is assigned and the DataFrame is date-sorted.
@@ -152,7 +156,7 @@ def detect_corporate_actions(df):
     return split_events, zero_cost_rows
 
 
-def apply_split_adjustments(df, split_events):
+def apply_split_adjustments(df: pd.DataFrame, split_events: list) -> pd.DataFrame:
     """
     Rescale pre-split equity lot quantities so the FIFO engine sees correct
     post-split share counts and per-share cost basis.
@@ -185,7 +189,7 @@ def apply_split_adjustments(df, split_events):
 
 # ── Public entry points ───────────────────────────────────────────────────────
 
-def validate_columns(file_bytes: bytes) -> set:
+def validate_columns(file_bytes: bytes) -> set[str]:
     """
     Return the set of required columns missing from the CSV header.
     An empty set means the file looks like a valid TastyTrade export.
