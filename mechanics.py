@@ -20,7 +20,10 @@ Public API
   compute_app_data(parsed, use_lifetime)          → AppData
 """
 
+from __future__ import annotations
+
 from collections import deque, defaultdict
+from typing import Any, Iterator, Optional
 
 import pandas as pd
 
@@ -40,7 +43,7 @@ from ui_components import is_share_row, is_option_row
 
 
 # ── FIFO CORE ─────────────────────────────────────────────────────────────────
-def _iter_fifo_sells(equity_rows):
+def _iter_fifo_sells(equity_rows: pd.DataFrame) -> Iterator[tuple[pd.Timestamp, float, float]]:
     """
     Shared FIFO engine — single source of truth for equity cost-basis logic.
 
@@ -130,7 +133,7 @@ def _iter_fifo_sells(equity_rows):
 
 
 # ── TRUE FIFO EQUITY P/L ───────────────────────────────────────────────────────
-def calculate_windowed_equity_pnl(df_full, start_date, end_date=None):
+def calculate_windowed_equity_pnl(df_full: pd.DataFrame, start_date: pd.Timestamp, end_date: Optional[pd.Timestamp] = None) -> float:
     """
     Calculates net equity P/L for sales on or after start_date and (optionally)
     before end_date. Cached on (df, start_date, end_date) — a window change
@@ -152,7 +155,7 @@ def calculate_windowed_equity_pnl(df_full, start_date, end_date=None):
 
 
 # ── DAILY REALIZED P/L (for period charts) ────────────────────────────────────
-def calculate_daily_realized_pnl(df_full, start_date):
+def calculate_daily_realized_pnl(df_full: pd.DataFrame, start_date: pd.Timestamp) -> pd.DataFrame:
     """
     Returns a DataFrame with columns [Date, PnL] representing realized P/L
     by settlement date across the full portfolio:
@@ -197,7 +200,7 @@ def calculate_daily_realized_pnl(df_full, start_date):
     return daily.groupby('Date')['PnL'].sum().reset_index()
 
 
-def build_campaigns(df, ticker, use_lifetime=False) -> list:
+def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -> list[Campaign]:
     """
     Build a list of Campaign objects for a ticker that has been wheeled.
     Each Campaign covers one continuous share-holding period.
@@ -355,7 +358,7 @@ def build_campaigns(df, ticker, use_lifetime=False) -> list:
     return campaigns
 
 
-def _find_assignment_premium(t, row):
+def _find_assignment_premium(t: pd.DataFrame, row: Any) -> tuple[float, list]:
     """
     Look for a put assignment at the same timestamp as a share delivery row.
     If found, trace back to the originating STO and record it in the campaign
@@ -386,14 +389,14 @@ def _find_assignment_premium(t, row):
             })
     return 0.0, events
 
-def effective_basis(c: 'Campaign', use_lifetime=False) -> float:
+def effective_basis(c: Campaign, use_lifetime: bool = False) -> float:
     """Cost per share after netting premiums and dividends against total_cost."""
     if use_lifetime:
         return c.blended_basis
     net = c.total_cost - c.premiums - c.dividends
     return net / c.total_shares if c.total_shares > 0 else 0.0
 
-def realized_pnl(c: 'Campaign', use_lifetime=False) -> float:
+def realized_pnl(c: Campaign, use_lifetime: bool = False) -> float:
     """Total realised profit/loss for a campaign."""
     if use_lifetime:
         return c.premiums + c.dividends
@@ -401,7 +404,7 @@ def realized_pnl(c: 'Campaign', use_lifetime=False) -> float:
         return c.exit_proceeds + c.premiums + c.dividends - c.total_cost
     return c.premiums + c.dividends
 
-def pure_options_pnl(df, ticker, campaigns: list) -> float:
+def pure_options_pnl(df: pd.DataFrame, ticker: str, campaigns: list[Campaign]) -> float:
     """Options P/L for a ticker that falls *outside* all campaign windows."""
     windows = [(c.start_date, c.end_date or df['Date'].max()) for c in campaigns]
     t = df[(df['Ticker'] == ticker) & option_mask(df['Instrument Type'])]
@@ -413,7 +416,7 @@ def pure_options_pnl(df, ticker, campaigns: list) -> float:
 
 # ── DERIVATIVES METRICS ENGINE ─────────────────────────────────────────────────
 
-def build_closed_trades(df, campaign_windows=None):
+def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = None) -> pd.DataFrame:
     if campaign_windows is None: campaign_windows = {}
     equity_opts = df[df['Instrument Type'].isin(OPT_TYPES)].copy()
     sym_open_orders = {}
@@ -610,7 +613,7 @@ def build_closed_trades(df, campaign_windows=None):
 
 # ── ROLL CHAIN ENGINE ──────────────────────────────────────────────────────────
 
-def build_option_chains(ticker_opts):
+def build_option_chains(ticker_opts: pd.DataFrame) -> list:
     """
     Groups option events into roll chains by call/put type.
     A chain = one continuous short position, rolled multiple times.
@@ -662,7 +665,7 @@ def build_option_chains(ticker_opts):
             chains.append(current_chain)
     return chains
 
-def calc_dte(row, reference_date: pd.Timestamp) -> str:
+def calc_dte(row: pd.Series, reference_date: pd.Timestamp) -> str:
     """
     Compute days-to-expiry for an open option row.
     Returns e.g. '21d' or 'N/A'.
@@ -685,7 +688,7 @@ def calc_dte(row, reference_date: pd.Timestamp) -> str:
 
 # ── Full portfolio computation ───────────────────────────────────────────────
 
-def compute_app_data(parsed: ParsedData, use_lifetime: bool):
+def compute_app_data(parsed: ParsedData, use_lifetime: bool) -> AppData:
     """
     All heavy computation that depends only on the full DataFrame and
     lifetime toggle — not on the selected time window.
