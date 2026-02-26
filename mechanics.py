@@ -26,7 +26,7 @@ import pandas as pd
 
 from models import Campaign, AppData, ParsedData
 from config import (
-    OPT_TYPES, TRADE_TYPES,
+    OPT_TYPES, TRADE_TYPES, MONEY_TYPES,
     SUB_SELL_OPEN, SUB_ASSIGNMENT, SUB_DIVIDEND,
     INCOME_SUB_TYPES,
     PAT_CLOSE, PAT_EXPIR, PAT_ASSIGN,
