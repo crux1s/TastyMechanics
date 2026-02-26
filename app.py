@@ -4,16 +4,108 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import timedelta
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional, NamedTuple
 import html as _html
 import io as _io
 
 # ==========================================
-# TastyMechanics v25.6
+# TastyMechanics v25.7
 # ==========================================
 # Changelog:
 #
+# v25.9 (2026-02-26) — Fix assignment STO double-count
+#
+#   BUG: total_realized_pnl overstated by $27.89 (confirmed against real data).
+#   Root cause: put-assignment entry for ACHR on Dec 19 2025.
+#     - Sold ACHR 8.50P (Dec 12) for $27.89 → assigned → received 100 shares Dec 19
+#     - _find_assignment_premium() traced the Dec 12 STO and added $27.89 to
+#       c.premiums (so it appeared in open_premiums_banked)
+#     - pure_options_pnl() ALSO returned $27.89 as "outside campaign window" P/L
+#       because Dec 12 < campaign start_date of Dec 19
+#     - Same $27.89 counted twice → $993.48 shown instead of $965.59
+#   Fix: _find_assignment_premium() now returns premium=0.0, keeping only the
+#   event records for display. The STO cash flow stays solely in the outside-
+#   window bucket where pure_options_pnl() correctly captures it.
+#   ACHR campaign premiums: $118.08 → $90.19 (post-assignment options only)
+#   ACHR outside-window P/L: $27.89 (unchanged — correct single owner)
+#   Verified: total_realized_pnl = $965.59 exactly. (verified against real data)
+#
+#   BUG 1 — pure_opts_pnl equity P/L: replaced cash-flow hack with FIFO engine
+#     Old code: for standalone tickers with open equity positions it used
+#     `total_flow + abs(equity_flow)` — correct only when ALL equity was fully
+#     sold. With open positions it excluded unrealized cost basis and overstated
+#     P/L. The new path calls _iter_fifo_sells() per-ticker, the same engine
+#     used by calculate_windowed_equity_pnl(). Tab 4 standalone row display
+#     updated to match. Error on real data: $0 (positions happened to be closed),
+#     but structurally wrong for any account with open standalone equity.
+#
+#   BUG 2 — window_realized_pnl missing dividends and interest
+#     Old: `_w_opts.sum() + _eq_pnl`  (no income)
+#     New: `_w_opts.sum() + _eq_pnl + _w_div_int`
+#     prior_period_pnl fixed the same way (+_prior_div_int).
+#     Error on real data: $6.55 (debit interest was never counted in windowed view).
+#
+#   BUG 3 — total_realized_pnl (All Time) missing non-wheel income
+#     Campaign accounting already includes wheel-ticker dividends via c.dividends,
+#     but interest and non-wheel dividends were never added. Fixed by computing
+#     _all_time_income and subtracting wheel dividends already in campaigns to
+#     avoid double-counting.
+#     Error on real data: $6.55 (same $-6.55 debit interest).
+#     After fix: total_realized_pnl = $965.59 (verified against ground truth).
+#
+#   BUG 4 — t_option_mask() typo (introduced in v25.7 refactor)
+#     Two call sites used `t_option_mask(df['Instrument Type'])` instead of
+#     `option_mask(t_df['Instrument Type'])` — wrong function name AND wrong
+#     DataFrame (df vs t_df). Both fixed.
+#   - REFACTOR: load_and_parse() now returns ParsedData(df, split_events, zero_cost_rows)
+#     instead of a bare DataFrame. build_all_data() accepts ParsedData and unpacks it,
+#     eliminating the second detect_corporate_actions() call that existed purely to
+#     surface the event lists in AppData. detect_corporate_actions() now runs exactly once.
+#   - REFACTOR: equity_mask() and option_mask() vectorised helpers added at module level.
+#     All DataFrame .str.strip()=='Equity' and .str.contains('Option') checks replaced
+#     with these helpers for consistency and to prevent semantic drift (str.contains('Equity')
+#     would also match 'Equity Option'; the helper uses strict equality).
+#   - REFACTOR: Campaign and AppData dataclasses were already present (v25.6); this pass
+#     confirmed all dict key accesses have been migrated to attribute access.
+#   - REFACTOR: ParsedData NamedTuple added (typing.NamedTuple). AppData already used
+#     pd.DataFrame type hints (not object). Both confirmed clean.
+#   - STYLE: identify_pos_type() and detect_strategy() multi-statement initialisation
+#     lines split onto separate lines for easier reading and diffing.
+#   - STYLE: _pnl_chip, _cmp_block, _dte_chip rendering helpers moved to module level
+#     (confirmed already done in this working copy).
+#   - STYLE: SUB_BUY_CLOSE, SUB_EXPIRATION, SUB_EXERCISE removed (were defined but never
+#     used — PAT_ pattern fragments handle all .str.contains() matching).
+#   No logic changes. All existing behaviour preserved.
+#
 # v25.6 (2026-02-26)
+#   Corporate Action Handling:
+#   - FIXED: Stock splits (forward and reverse) now handled correctly end-to-end.
+#     detect_corporate_actions() identifies split pairs (zero-Total Receive Deliver
+#     REMOVAL + addition on same ticker/date with split keyword in description).
+#     apply_split_adjustments() rescales pre-split lot Quantity and Net_Qty_Row
+#     by the split ratio so FIFO cost basis is correct post-split.
+#     get_signed_qty() now returns 0 for split REMOVAL rows (previously treated
+#     as a sale, triggering false P/L and duplicate campaign creation).
+#     build_campaigns() detects the split addition row and rescales running_shares,
+#     total_shares, and blended_basis in the live campaign without touching
+#     total_cost (the cash invested doesn't change, only the share count).
+#     A "Stock Split" event is appended to the campaign event log with ratio and
+#     new basis per share.
+#     NOTE: Adjusted option symbols (TastyTrade issues new symbols post-split)
+#     are not automatically stitched to pre-split contracts — documented in README.
+#   - ADDED: Zero-cost share delivery detection. Any Receive Deliver equity
+#     addition with Total = $0 that is not a split pair and not an assignment
+#     is flagged (spin-offs, ACATS transfers, mergers). A warning banner is shown
+#     at load time listing affected tickers, dates, and descriptions, noting that
+#     the $0 basis will overstate P/L on eventual sale.
+#   - AppData gains split_events and zero_cost_rows fields — lists passed from
+#     build_all_data() to the UI for warning display.
+#   - Warning banners shown at page load: blue info strip for each detected split
+#     (with ratio, date, and pre/post share count), amber warning for zero-cost
+#     deliveries (with per-row detail). Both are silent/hidden when not applicable.
+#
+# v25.6 (2026-02-26) — earlier entries
 #   Code Quality (periodic full review):
 #   - FIXED: Timezone architecture unified — all dates are naive UTC from ingest.
 #     Single tz conversion in load_and_parse(); all downstream code uses naive
@@ -94,7 +186,7 @@ import io as _io
 #   - IBM Plex Sans + Mono typography, deeper background (#0a0e17).
 # ==========================================
 
-APP_VERSION = "v25.6"
+APP_VERSION = "v25.9"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 st.markdown("""
     <style>
@@ -129,12 +221,9 @@ EQUITY_TYPE      = 'Equity'
 TRADE_TYPES      = ['Trade', 'Receive Deliver']
 MONEY_TYPES      = ['Trade', 'Receive Deliver', 'Money Movement']
 
-# TastyTrade sub-type strings
+# TastyTrade sub-type strings (used as exact-match values)
 SUB_SELL_OPEN    = 'sell to open'
-SUB_BUY_CLOSE    = 'buy to close'
 SUB_ASSIGNMENT   = 'assignment'
-SUB_EXPIRATION   = 'expiration'
-SUB_EXERCISE     = 'exercise'
 SUB_DIVIDEND     = 'Dividend'
 SUB_CREDIT_INT   = 'Credit Interest'
 SUB_DEBIT_INT    = 'Debit Interest'
@@ -150,6 +239,21 @@ PAT_CLOSING      = f'{PAT_CLOSE}|{PAT_EXPIR}|{PAT_ASSIGN}|{PAT_EXERCISE}'
 
 # Wheel strategy
 WHEEL_MIN_SHARES = 100
+
+# Index option detection
+# Strikes above this threshold are treated as index underlyings (SPX, NDX, RUT, VIX etc.)
+# rather than equity options. Used in capital_risk calculation for naked shorts:
+# equity options use strike × 100 (theoretical max loss); index options use premium
+# received (margin-based, since "underlying to zero" is not a realistic scenario).
+# $500 sits safely above the highest-priced equity options (BRK.A aside) and well
+# below the lowest common index strike (RUT ~2000, SPX ~5000, NDX ~20000).
+INDEX_STRIKE_THRESHOLD = 500
+
+# Corporate action detection
+# TastyTrade Description field patterns for stock splits and zero-cost deliveries.
+SPLIT_DSC_PATTERNS   = ['FORWARD SPLIT', 'REVERSE SPLIT', 'STOCK SPLIT', 'SPLIT']
+ZERO_COST_WARN_TYPES = ['SPINOFF', 'SPIN-OFF', 'SPIN OFF', 'TRANSFER',
+                        'ACATS', 'MERGER', 'ACQUISITION', 'RIGHTS', 'WARRANT']
 
 # CSV validation
 REQUIRED_COLUMNS = {
@@ -180,15 +284,29 @@ def get_signed_qty(row):
     qty = row['Quantity']
     if 'BUY' in act or 'BOUGHT' in dsc:  return  qty
     if 'SELL' in act or 'SOLD' in dsc:   return -qty
-    if 'REMOVAL' in dsc: return qty if 'ASSIGNMENT' in dsc else -qty
+    if 'REMOVAL' in dsc:
+        if 'ASSIGNMENT' in dsc: return qty
+        # Split removals must NOT be treated as sales — the quantity change
+        # is handled by apply_split_adjustments() in load_and_parse().
+        if any(p in dsc for p in SPLIT_DSC_PATTERNS): return 0
+        return -qty
     return 0
 
 def is_share_row(inst):  return str(inst).strip() == 'Equity'
 def is_option_row(inst): return 'Option' in str(inst)
 
+def equity_mask(series: pd.Series) -> pd.Series:
+    """Vectorised is_share_row: True for plain 'Equity' rows, not options."""
+    return series.str.strip() == 'Equity'
+
+def option_mask(series: pd.Series) -> pd.Series:
+    """Vectorised is_option_row: True for 'Equity Option' or 'Future Option' rows."""
+    return series.str.contains('Option', na=False)
+
 def identify_pos_type(row):
-    qty = row['Net_Qty']; inst = str(row['Instrument Type'])
-    cp  = str(row.get('Call or Put', '')).upper()
+    qty  = row['Net_Qty']
+    inst = str(row['Instrument Type'])
+    cp   = str(row.get('Call or Put', '')).upper()
     if is_share_row(inst):   return 'Long Stock' if qty > 0 else 'Short Stock'
     if is_option_row(inst):
         if 'CALL' in cp: return 'Long Call' if qty > 0 else 'Short Call'
@@ -205,6 +323,105 @@ def translate_readable(row):
 
 def format_cost_basis(val):
     return '$%.2f %s' % (abs(val), 'Cr' if val < 0 else 'Db')
+
+# ── Styling helpers (used by DataFrame.style.map and inline HTML) ─────────────
+
+def color_pnl_cell(val):
+    """Green/red colouring for P/L columns in st.dataframe."""
+    if not isinstance(val, (int, float)) or pd.isna(val): return ''
+    return 'color: #00cc96' if val > 0 else 'color: #ef553b' if val < 0 else ''
+
+def _pnl_chip(label, val):
+    """Inline HTML chip showing a labelled P/L value with sign colour."""
+    col  = '#00cc96' if val >= 0 else '#ef553b'
+    sign = '+' if val >= 0 else ''
+    return (
+        f'<span style="display:inline-flex;align-items:center;gap:5px;'
+        f'background:rgba(255,255,255,0.04);border:1px solid #1f2937;'
+        f'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
+        f'<span style="color:#6b7280;">{label}</span>'
+        f'<span style="color:{col};font-family:monospace;font-weight:600;">'
+        f'{sign}${abs(val):,.2f}</span>'
+        f'</span>'
+    )
+
+def _cmp_block(label, curr, prev, is_pct=False):
+    """One column block in the period-comparison card."""
+    delta = curr - prev
+    dcol  = '#00cc96' if delta >= 0 else '#ef553b'
+    dsign = '+' if delta >= 0 else ''
+    if is_pct:
+        curr_str  = f'{curr:.1f}%'
+        delta_str = f'{dsign}{delta:.1f}%'
+    else:
+        curr_str  = f'${curr:,.2f}' if curr >= 0 else f'-${abs(curr):,.2f}'
+        delta_str = (f'{dsign}${delta:,.2f}' if delta >= 0 else f'-${abs(delta):,.2f}')
+    return (
+        f'<div style="flex:1;min-width:120px;padding:0 16px;border-right:1px solid #1f2937;">'
+        f'<div style="color:#6b7280;font-size:0.7rem;text-transform:uppercase;'
+        f'letter-spacing:0.05em;margin-bottom:4px;">{label}</div>'
+        f'<div style="font-family:monospace;font-size:1.05rem;color:#e6edf3;">{curr_str}</div>'
+        f'<div style="font-size:0.78rem;color:{dcol};margin-top:2px;">{delta_str} vs prior</div>'
+        f'</div>'
+    )
+
+def _dte_chip(a):
+    """Inline HTML chip for an expiry alert item."""
+    dte = a['dte']
+    fg  = '#ef553b' if dte <= 5 else '#ffa500' if dte <= 14 else '#00cc96'
+    return (
+        f'<span style="display:inline-flex;align-items:center;gap:5px;'
+        f'background:rgba(255,255,255,0.04);border:1px solid #1f2937;'
+        f'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
+        f'<span style="color:{fg};font-family:monospace;font-weight:600;">{dte}d</span>'
+        f'<span style="color:#6b7280;">{xe(a["ticker"])}</span>'
+        f'<span style="color:#8b949e;font-family:monospace;">{xe(a["label"])}</span>'
+        f'</span>'
+    )
+
+def _fmt_ann_ret(row):
+    """Format Ann Ret % cell — appends * for trades held < 4 days."""
+    v = row['Ann Ret %']
+    if pd.isna(v):
+        return '—'
+    suffix = '*' if pd.notna(row['Days']) and row['Days'] < 4 else ''
+    return '{:.0f}%{}'.format(v, suffix)
+
+def _style_ann_ret(row):
+    """Row-level style: dim Ann Ret % for very short-hold trades."""
+    styles = [''] * len(row)
+    try:
+        idx = list(row.index).index('Ann Ret %')
+        if pd.notna(row.get('Days')) and row.get('Days', 99) < 4:
+            styles[idx] = 'color: #8b7355'
+    except (ValueError, KeyError):
+        pass
+    return styles
+
+def _style_chain_row(row):
+    """Highlight open chain leg in the roll chain detail table."""
+    if row.get('_open', False):
+        return ['background-color: rgba(0,204,150,0.12); font-weight:600'] * len(row)
+    return [''] * len(row)
+
+def _color_cash_row(row):
+    """Row background tint for the Deposits/Dividends table."""
+    sub = str(row.get('Sub Type', ''))
+    tints = {
+        'Deposit':           'rgba(0,204,150,0.08)',
+        'Withdrawal':        'rgba(239,85,59,0.08)',
+        SUB_DIVIDEND:        'rgba(88,166,255,0.08)',
+        SUB_CREDIT_INT:      'rgba(88,166,255,0.05)',
+        SUB_DEBIT_INT:       'rgba(239,85,59,0.05)',
+        'Balance Adjustment':'rgba(255,165,0,0.07)',
+    }
+    c = tints.get(sub, '')
+    return [f'background-color:{c}' if c else ''] * len(row)
+
+def _color_cash_total(val):
+    """Green/red for the Total column in the cash flow table."""
+    if not isinstance(val, (int, float)): return ''
+    return 'color:#00cc96' if val > 0 else 'color:#ef553b' if val < 0 else ''
 
 def chart_layout(title='', height=300, margin_t=36, margin_b=20):
     """Consistent base layout for all plotly charts."""
@@ -223,22 +440,24 @@ def chart_layout(title='', height=300, margin_t=36, margin_b=20):
 
 def _badge_inline_style(strat):
     """Return fully inlined style string for strategy badge (no CSS classes)."""
+    _BASE = ('font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;'
+             'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;')
+    _COLORS = {
+        'bullish': 'background:rgba(0,204,150,0.1);color:#00cc96;border:1px solid rgba(0,204,150,0.25);',
+        'bearish': 'background:rgba(239,85,59,0.1);color:#ef553b;border:1px solid rgba(239,85,59,0.25);',
+        'covered': 'background:rgba(255,165,0,0.1);color:#ffa500;border:1px solid rgba(255,165,0,0.25);',
+        'default': 'background:rgba(88,166,255,0.12);color:#58a6ff;border:1px solid rgba(88,166,255,0.25);',
+    }
     s = strat.lower()
     if any(k in s for k in ['put', 'strangle', 'condor', 'lizard', 'reversal']):
-        return ('font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;'
-                'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;'
-                'background:rgba(0,204,150,0.1);color:#00cc96;border:1px solid rgba(0,204,150,0.25);')
-    if any(k in s for k in ['long call', 'bearish']):
-        return ('font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;'
-                'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;'
-                'background:rgba(239,85,59,0.1);color:#ef553b;border:1px solid rgba(239,85,59,0.25);')
-    if any(k in s for k in ['covered', 'wheel', 'stock']):
-        return ('font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;'
-                'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;'
-                'background:rgba(255,165,0,0.1);color:#ffa500;border:1px solid rgba(255,165,0,0.25);')
-    return ('font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;'
-            'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;'
-            'background:rgba(88,166,255,0.12);color:#58a6ff;border:1px solid rgba(88,166,255,0.25);')
+        theme = 'bullish'
+    elif any(k in s for k in ['long call', 'bearish']):
+        theme = 'bearish'
+    elif any(k in s for k in ['covered', 'wheel', 'stock']):
+        theme = 'covered'
+    else:
+        theme = 'default'
+    return _BASE + _COLORS[theme]
 
 def render_position_card(ticker, t_df):
     strat      = detect_strategy(t_df)
@@ -312,8 +531,10 @@ def render_position_card(ticker, t_df):
 
 def detect_strategy(ticker_df):
     types = ticker_df.apply(identify_pos_type, axis=1)
-    ls = (types == 'Long Stock').sum();  sc = (types == 'Short Call').sum()
-    lc = (types == 'Long Call').sum();   sp = (types == 'Short Put').sum()
+    ls = (types == 'Long Stock').sum()
+    sc = (types == 'Short Call').sum()
+    lc = (types == 'Long Call').sum()
+    sp = (types == 'Short Put').sum()
     lp = (types == 'Long Put').sum()
     strikes  = ticker_df['Strike Price'].dropna().unique()
     exps     = ticker_df['Expiration Date'].dropna().unique()
@@ -434,7 +655,7 @@ def calculate_windowed_equity_pnl(df_full, start_date, end_date=None):
     end_date is used for prior-period comparisons to prevent double-counting.
     """
     equity_rows = df_full[
-        df_full['Instrument Type'].str.strip() == 'Equity'
+        equity_mask(df_full['Instrument Type'])
     ].sort_values('Date')
     _eq_pnl = 0.0
     for date, proceeds, cost_basis in _iter_fifo_sells(equity_rows):
@@ -459,7 +680,7 @@ def calculate_daily_realized_pnl(df_full, start_date):
     is processed so FIFO cost basis is always correct.
     """
     equity_rows = df_full[
-        df_full['Instrument Type'].str.strip() == 'Equity'
+        equity_mask(df_full['Instrument Type'])
     ].sort_values('Date')
     records = [
         {'Date': date, 'PnL': proceeds - cost_basis}
@@ -492,21 +713,33 @@ def calculate_daily_realized_pnl(df_full, start_date):
     return daily.groupby('Date')['PnL'].sum().reset_index()
 
 
-def build_campaigns(df, ticker, use_lifetime=False):
+def build_campaigns(df, ticker, use_lifetime=False) -> list:
+    """
+    Build a list of Campaign objects for a ticker that has been wheeled.
+    Each Campaign covers one continuous share-holding period.
+
+    use_lifetime=True: collapses all history into a single campaign (no resets).
+    use_lifetime=False: each buy-in starts a new campaign; exits close it.
+
+    Returns a list of Campaign objects (may be empty).
+    """
     t = df[df['Ticker'] == ticker].copy()
-    t['Sort_Inst'] = t['Instrument Type'].apply(lambda x: 0 if 'Equity' in str(x) and 'Option' not in str(x) else 1)
+    t['Sort_Inst'] = t['Instrument Type'].apply(
+        lambda x: 0 if 'Equity' in str(x) and 'Option' not in str(x) else 1
+    )
     t = t.sort_values(['Date', 'Sort_Inst'])
     # Rename spaced columns so itertuples attribute access works cleanly
     t = t.rename(columns={
         'Instrument Type': 'Instrument_Type',
         'Sub Type':        'Sub_Type',
-        'Net_Qty_Row':     'Net_Qty_Row',
     })
 
     if use_lifetime:
         net_shares = t[t['Instrument_Type'].apply(is_share_row)]['Net_Qty_Row'].sum()
         if net_shares >= WHEEL_MIN_SHARES:
-            premiums = 0.0; dividends = 0.0; events = []
+            premiums   = 0.0
+            dividends  = 0.0
+            events     = []
             start_date = t['Date'].iloc[0]
             for row in t.itertuples(index=False):
                 inst     = str(row.Instrument_Type)
@@ -514,104 +747,180 @@ def build_campaigns(df, ticker, use_lifetime=False):
                 sub_type = str(row.Sub_Type)
                 if is_share_row(inst):
                     if row.Net_Qty_Row > 0:
-                        events.append({'date': row.Date, 'type': 'Entry/Add', 'detail': f'Bought {row.Net_Qty_Row} shares', 'cash': total})
+                        events.append({'date': row.Date, 'type': 'Entry/Add',
+                            'detail': f'Bought {row.Net_Qty_Row} shares', 'cash': total})
                     else:
-                        events.append({'date': row.Date, 'type': 'Exit', 'detail': f'Sold {abs(row.Net_Qty_Row)} shares', 'cash': total})
+                        events.append({'date': row.Date, 'type': 'Exit',
+                            'detail': f'Sold {abs(row.Net_Qty_Row)} shares', 'cash': total})
                 elif is_option_row(inst):
                     if row.Date >= start_date:
                         premiums += total
-                        events.append({'date': row.Date, 'type': sub_type, 'detail': str(row.Description)[:60], 'cash': total})
+                        events.append({'date': row.Date, 'type': sub_type,
+                            'detail': str(row.Description)[:60], 'cash': total})
                 elif sub_type == SUB_DIVIDEND:
                     dividends += total
-                    events.append({'date': row.Date, 'type': SUB_DIVIDEND, 'detail': SUB_DIVIDEND, 'cash': total})
+                    events.append({'date': row.Date, 'type': SUB_DIVIDEND,
+                        'detail': SUB_DIVIDEND, 'cash': total})
             net_lifetime_cash = t[t['Type'].isin(MONEY_TYPES)]['Total'].sum()
-            return [{
-                'ticker': ticker, 'total_shares': net_shares,
-                'total_cost': abs(net_lifetime_cash) if net_lifetime_cash < 0 else 0,
-                'blended_basis': abs(net_lifetime_cash)/net_shares if net_shares > 0 else 0,
-                'premiums': premiums, 'dividends': dividends,
-                'exit_proceeds': 0, 'start_date': start_date, 'end_date': None,
-                'status': 'open', 'events': events
-            }]
+            total_cost = abs(net_lifetime_cash) if net_lifetime_cash < 0 else 0.0
+            return [Campaign(
+                ticker=ticker, total_shares=net_shares,
+                total_cost=total_cost,
+                blended_basis=total_cost / net_shares if net_shares > 0 else 0.0,
+                premiums=premiums, dividends=dividends,
+                exit_proceeds=0.0, start_date=start_date, end_date=None,
+                status='open', events=events,
+            )]
 
-    campaigns = []; current = None; running_shares = 0.0
+    campaigns: list      = []
+    current:   Campaign  = None
+    running_shares       = 0.0
+
     for row in t.itertuples(index=False):
         inst     = str(row.Instrument_Type)
         qty      = row.Net_Qty_Row
         total    = row.Total
         sub_type = str(row.Sub_Type)
+        dsc_up   = str(row.Description).upper()
+
+        # ── Stock split: rescale campaign quantities and basis ─────────────
+        # Split rows have Net_Qty_Row == 0 (set in get_signed_qty).
+        # We detect the addition row (no REMOVAL keyword) to compute the ratio
+        # and rescale the live campaign. total_cost is unchanged — the same
+        # cash was invested, there are just more shares now.
+        if (is_share_row(inst) and qty == 0 and total == 0
+                and any(p in dsc_up for p in SPLIT_DSC_PATTERNS)
+                and 'REMOVAL' not in dsc_up
+                and current is not None):
+            split_qty = row.Quantity   # raw CSV quantity (always positive)
+            if running_shares > 0.001 and split_qty > 0:
+                ratio = split_qty / running_shares
+                running_shares        = split_qty
+                current.total_shares  = split_qty
+                current.blended_basis = current.total_cost / split_qty
+                current.events.append({
+                    'date':   row.Date,
+                    'type':   'Stock Split',
+                    'detail': '%.6gx split: %.0f → %.0f shares @ $%.4f/sh basis' % (
+                        ratio, split_qty / ratio, split_qty, current.blended_basis),
+                    'cash':   0.0,
+                })
+            continue
+
+        # ── Share buy / add ────────────────────────────────────────────────
         if is_share_row(inst) and qty >= WHEEL_MIN_SHARES:
             pps = abs(total) / qty
             if running_shares < 0.001:
-                # Check if this share entry was via assignment — look for matching
-                # Assignment option row at same timestamp, then find originating STO
-                assignment_premium = 0.0
-                assignment_events  = []
-                same_dt = t[t['Date'] == row.Date]
-                assigned_syms = same_dt[
-                    same_dt['Sub_Type'].str.lower() == SUB_ASSIGNMENT
-                ]['Symbol'].dropna().unique()
-                for sym in assigned_syms:
-                    sto = t[
-                        (t['Symbol'] == sym) &
-                        (t['Sub_Type'].str.lower() == SUB_SELL_OPEN) &
-                        (t['Date'] < row.Date)
-                    ]
-                    for s in sto.itertuples(index=False):
-                        assignment_premium += s.Total
-                        assignment_events.append({
-                            'date': s.Date, 'type': 'Assignment Put (STO)',
-                            'detail': str(s.Description)[:60], 'cash': s.Total
-                        })
-                current = {'ticker': ticker, 'total_shares': qty, 'total_cost': abs(total),
-                    'blended_basis': pps, 'premiums': assignment_premium, 'dividends': 0.0,
-                    'exit_proceeds': 0.0, 'start_date': row.Date, 'end_date': None,
-                    'status': 'open', 'events': assignment_events + [{'date': row.Date,
-                        'type': 'Entry', 'detail': 'Bought %.0f @ $%.2f/sh%s' % (
-                            qty, pps, ' (Assigned)' if assignment_events else ''), 'cash': total}]}
+                # New campaign entry — check if arrival was via put assignment
+                assignment_premium, assignment_events = _find_assignment_premium(t, row)
+                entry_label = 'Bought %.0f @ $%.2f/sh%s' % (
+                    qty, pps, ' (Assigned)' if assignment_events else '')
+                current = Campaign(
+                    ticker=ticker, total_shares=qty, total_cost=abs(total),
+                    blended_basis=pps, premiums=assignment_premium, dividends=0.0,
+                    exit_proceeds=0.0, start_date=row.Date, end_date=None,
+                    status='open',
+                    events=assignment_events + [
+                        {'date': row.Date, 'type': 'Entry', 'detail': entry_label, 'cash': total}
+                    ],
+                )
                 running_shares = qty
             else:
-                ns = running_shares + qty; nc = current['total_cost'] + abs(total); nb = nc / ns
-                current['total_shares'] = ns; current['total_cost'] = nc
-                current['blended_basis'] = nb; running_shares = ns
-                current['events'].append({'date': row.Date, 'type': 'Add',
-                    'detail': 'Added %.0f @ $%.2f → blended $%.2f/sh' % (qty, pps, nb), 'cash': total})
+                # Adding to an existing position — recalculate blended basis
+                new_shares        = running_shares + qty
+                new_cost          = current.total_cost + abs(total)
+                new_basis         = new_cost / new_shares
+                current.total_shares  = new_shares
+                current.total_cost    = new_cost
+                current.blended_basis = new_basis
+                running_shares        = new_shares
+                current.events.append({'date': row.Date, 'type': 'Add',
+                    'detail': 'Added %.0f @ $%.2f → blended $%.2f/sh' % (qty, pps, new_basis),
+                    'cash': total})
+
+        # ── Share sale / partial exit ──────────────────────────────────────
         elif is_share_row(inst) and qty < 0:
             if current and running_shares > 0.001:
-                current['exit_proceeds'] += total; running_shares += qty
+                current.exit_proceeds += total
+                running_shares        += qty
                 pps = abs(total) / abs(qty) if qty != 0 else 0
-                current['events'].append({'date': row.Date, 'type': 'Exit',
+                current.events.append({'date': row.Date, 'type': 'Exit',
                     'detail': 'Sold %.0f @ $%.2f/sh' % (abs(qty), pps), 'cash': total})
                 if running_shares < 0.001:
-                    current['end_date'] = row.Date; current['status'] = 'closed'
-                    campaigns.append(current); current = None; running_shares = 0.0
+                    current.end_date = row.Date
+                    current.status   = 'closed'
+                    campaigns.append(current)
+                    current        = None
+                    running_shares = 0.0
+
+        # ── Option premium ─────────────────────────────────────────────────
         elif is_option_row(inst) and current is not None:
-            if row.Date >= current['start_date']:
-                current['premiums'] += total
-                current['events'].append({'date': row.Date, 'type': sub_type,
+            if row.Date >= current.start_date:
+                current.premiums += total
+                current.events.append({'date': row.Date, 'type': sub_type,
                     'detail': str(row.Description)[:60], 'cash': total})
+
+        # ── Dividend ───────────────────────────────────────────────────────
         elif sub_type == SUB_DIVIDEND and current is not None:
-            current['dividends'] += total
-            current['events'].append({'date': row.Date, 'type': SUB_DIVIDEND,
+            current.dividends += total
+            current.events.append({'date': row.Date, 'type': SUB_DIVIDEND,
                 'detail': 'Dividend received', 'cash': total})
-    if current is not None: campaigns.append(current)
+
+    if current is not None:
+        campaigns.append(current)
     return campaigns
 
-def effective_basis(c, use_lifetime=False):
-    if use_lifetime: return c['blended_basis']
-    net = c['total_cost'] - c['premiums'] - c['dividends']
-    return net / c['total_shares'] if c['total_shares'] > 0 else 0.0
 
-def realized_pnl(c, use_lifetime=False):
-    if use_lifetime: return c['premiums'] + c['dividends']
-    if c['status'] == 'closed':
-        return c['exit_proceeds'] + c['premiums'] + c['dividends'] - c['total_cost']
-    return c['premiums'] + c['dividends']
+def _find_assignment_premium(t, row):
+    """
+    Look for a put assignment at the same timestamp as a share delivery row.
+    If found, trace back to the originating STO and record it in the campaign
+    event log so the timeline shows "arrived via assignment".
 
-def pure_options_pnl(df, ticker, campaigns):
-    windows = [(c['start_date'], c['end_date'] or df['Date'].max()) for c in campaigns]
-    t = df[(df['Ticker'] == ticker) & df['Instrument Type'].str.contains('Option', na=False)]
-    # Vectorized: build a boolean mask — True if the row's date falls outside all campaign windows
+    Returns (0.0, list_of_event_dicts).
+
+    Why premium=0.0: the STO that caused assignment was traded *before* the
+    campaign start date, so pure_options_pnl() already counts it as outside-
+    window P/L. Adding it to c.premiums here would double-count it in
+    total_realized_pnl. The event is retained for display only.
+    """
+    events  = []
+    same_dt = t[t['Date'] == row.Date]
+    assigned_syms = same_dt[
+        same_dt['Sub_Type'].str.lower() == SUB_ASSIGNMENT
+    ]['Symbol'].dropna().unique()
+    for sym in assigned_syms:
+        sto = t[
+            (t['Symbol'] == sym) &
+            (t['Sub_Type'].str.lower() == SUB_SELL_OPEN) &
+            (t['Date'] < row.Date)
+        ]
+        for s in sto.itertuples(index=False):
+            events.append({
+                'date': s.Date, 'type': 'Assignment Put (STO)',
+                'detail': str(s.Description)[:60], 'cash': s.Total,
+            })
+    return 0.0, events
+
+def effective_basis(c: Campaign, use_lifetime=False) -> float:
+    """Cost per share after netting premiums and dividends against total_cost."""
+    if use_lifetime:
+        return c.blended_basis
+    net = c.total_cost - c.premiums - c.dividends
+    return net / c.total_shares if c.total_shares > 0 else 0.0
+
+def realized_pnl(c: Campaign, use_lifetime=False) -> float:
+    """Total realised profit/loss for a campaign."""
+    if use_lifetime:
+        return c.premiums + c.dividends
+    if c.status == 'closed':
+        return c.exit_proceeds + c.premiums + c.dividends - c.total_cost
+    return c.premiums + c.dividends
+
+def pure_options_pnl(df, ticker, campaigns: list) -> float:
+    """Options P/L for a ticker that falls *outside* all campaign windows."""
+    windows = [(c.start_date, c.end_date or df['Date'].max()) for c in campaigns]
+    t = df[(df['Ticker'] == ticker) & option_mask(df['Instrument Type'])]
     dates = t['Date']
     in_any_window = pd.Series(False, index=t.index)
     for s, e in windows:
@@ -721,13 +1030,27 @@ def build_closed_trades(df, campaign_windows=None):
                 capital_risk = max(max(w_call, w_put) - abs(open_credit), 1)
             elif w_call > 0:
                 trade_type   = 'Call Credit Spread' if is_credit else 'Call Debit Spread'
-                capital_risk = max(w_call - abs(open_credit), 1)
+                # Credit spread: risk = wing_width - credit_received (net outlay if assigned)
+                # Debit spread:  risk = debit_paid (max loss if expires worthless) = abs(open_credit)
+                capital_risk = max(w_call - abs(open_credit), 1) if is_credit else max(abs(open_credit), 1)
             else:
                 trade_type   = 'Put Credit Spread' if is_credit else 'Put Debit Spread'
-                capital_risk = max(w_put - abs(open_credit), 1)
+                capital_risk = max(w_put - abs(open_credit), 1) if is_credit else max(abs(open_credit), 1)
         else:
             strikes      = grp['Strike Price'].dropna().tolist()
-            capital_risk = max(strikes) * 100 if strikes else 1
+            # For naked shorts the theoretical max loss is strike × 100 (underlying → 0).
+            # This is a reasonable proxy for equity options (strike typically < $500),
+            # but produces meaningless Ann Return % for index options where strikes are
+            # in the hundreds or thousands (SPX ~5000, NDX ~20000, RUT ~2000).
+            # Heuristic: if the highest strike exceeds INDEX_STRIKE_THRESHOLD we treat
+            # this as an index underlying and use premium received as the capital_risk
+            # proxy instead — consistent with how traders actually manage index risk
+            # (margin-based, not theoretical zero-underlying loss).
+            max_strike   = max(strikes) if strikes else 0
+            if max_strike >= INDEX_STRIKE_THRESHOLD:
+                capital_risk = max(abs(open_credit), 1)   # index: use premium as risk
+            else:
+                capital_risk = max(max_strike * 100, 1)   # equity: theoretical max loss
             short_opens  = opens[opens['Net_Qty_Row'] < 0]
             long_opens   = opens[opens['Net_Qty_Row'] > 0]
             cp_shorts = short_opens['Call or Put'].dropna().str.upper().unique().tolist()
@@ -784,10 +1107,17 @@ def build_closed_trades(df, campaign_windows=None):
             'Type': 'Call' if 'CALL' in cp else 'Put' if 'PUT' in cp else 'Mixed',
             'Spread': n_long > 0, 'Is Credit': is_credit, 'Days Held': days_held,
             'Open Date': open_date, 'Close Date': close_date, 'Premium Rcvd': open_credit,
-            'Net P/L': net_pnl, 'Capture %': net_pnl / open_credit * 100 if is_credit else None,
+            'Net P/L': net_pnl,
+            # Capture %: for credit trades = P/L as % of premium collected (how much of the
+            # credit did you keep). For debit trades = P/L as % of premium paid (return on
+            # the capital deployed into the trade). Sign-safe: uses abs(open_credit).
+            'Capture %': net_pnl / abs(open_credit) * 100 if abs(open_credit) > 0 else None,
             'Capital Risk': capital_risk,
+            # Ann Return %: enabled for ALL trades (credit and debit) — the formula is
+            # the same: P/L / capital_at_risk * annualisation factor.
+            # Previously gated to is_credit only, leaving debit trades always None.
             'Ann Return %': max(min(net_pnl / capital_risk * 365 / days_held * 100, 500), -500)
-                if (is_credit and capital_risk > 0) else None,
+                if capital_risk > 0 else None,
             'Prem/Day': open_credit / days_held if is_credit else None,
             'Won': net_pnl > 0, 'DTE Open': dte_open, 'Close Type': close_type,
         })
@@ -848,20 +1178,24 @@ def build_option_chains(ticker_opts):
             chains.append(current_chain)
     return chains
 
-def calc_dte(row):
-    """Compute days-to-expiry for an open option row.
-    Returns e.g. '21d' or 'N/A'. Defined at module level so it is
-    reusable and not recreated on every render. Uses latest_date which
-    is set at module level after the CSV is loaded.
+def calc_dte(row, reference_date: pd.Timestamp) -> str:
+    """
+    Compute days-to-expiry for an open option row.
+    Returns e.g. '21d' or 'N/A'.
+
+    reference_date is passed explicitly (was previously an implicit module global,
+    which made the function impossible to call correctly before the CSV was loaded).
     """
     if not is_option_row(str(row['Instrument Type'])) or pd.isna(row['Expiration Date']):
         return 'N/A'
     try:
         exp_date  = pd.to_datetime(row['Expiration Date'], format='mixed', errors='coerce')
-        if pd.isna(exp_date): return 'N/A'
+        if pd.isna(exp_date):
+            return 'N/A'
         exp_plain = exp_date.date() if hasattr(exp_date, 'date') else exp_date
-        return '%dd' % max((exp_plain - latest_date.date()).days, 0)
-    except (ValueError, TypeError, AttributeError): return 'N/A'
+        return '%dd' % max((exp_plain - reference_date.date()).days, 0)
+    except (ValueError, TypeError, AttributeError):
+        return 'N/A'
 
 # ── MAIN APP ───────────────────────────────────────────────────────────────────
 
@@ -881,33 +1215,181 @@ if not uploaded_file:
 
 
 @dataclass
+class Campaign:
+    """
+    A single wheel campaign — one continuous share-holding period for a ticker.
+
+    Created in build_campaigns() when shares >= WHEEL_MIN_SHARES are bought,
+    closed when shares reach zero. Multiple campaigns per ticker are possible
+    (e.g. bought, fully exited, then re-entered).
+
+    Fields:
+        ticker         Underlying symbol, e.g. 'NVDA'
+        total_shares   Current share count (updated on adds, exits, splits)
+        total_cost     Cash paid to acquire shares (absolute value, always >= 0)
+        blended_basis  total_cost / total_shares — average cost per share
+        premiums       Net option premium collected while campaign is open (can be negative)
+        dividends      Dividends received during the campaign
+        exit_proceeds  Cash received from share sales (positive when sold)
+        start_date     Date of first share purchase / assignment entry
+        end_date       Date shares hit zero (None while still open)
+        status         'open' or 'closed'
+        events         Ordered list of dicts — {date, type, detail, cash} for the UI log
+    """
+    ticker:         str
+    total_shares:   float
+    total_cost:     float
+    blended_basis:  float
+    premiums:       float
+    dividends:      float
+    exit_proceeds:  float
+    start_date:     pd.Timestamp
+    end_date:       Optional[pd.Timestamp]
+    status:         str                    # 'open' | 'closed'
+    events:         list = field(default_factory=list)
+
+
+@dataclass
 class AppData:
     """Typed container for all heavy-computed data from build_all_data().
     Replaces a fragile 10-tuple — fields are named, self-documenting,
     and safe to reorder or extend without breaking the caller."""
-    all_campaigns:          dict
+    all_campaigns:          dict                # {ticker: list[Campaign]}
     wheel_tickers:          list
     pure_options_tickers:   list
-    closed_trades_df:       object   # pd.DataFrame
-    df_open:                object   # pd.DataFrame
+    closed_trades_df:       pd.DataFrame
+    df_open:                pd.DataFrame
     closed_camp_pnl:        float
     open_premiums_banked:   float
     capital_deployed:       float
     pure_opts_pnl:          float
     extra_capital_deployed: float
     pure_opts_per_ticker:   dict   # {ticker: float} options P/L outside campaign windows
+    split_events:           list   # [{ticker,date,ratio,...}] detected stock splits
+    zero_cost_rows:         list   # [{ticker,date,qty,...}] zero-cost deliveries with unknown basis
 
 
 
 # ── Cached data loading ────────────────────────────────────────────────────────
 
+class ParsedData(NamedTuple):
+    """Return type of load_and_parse() — bundles the cleaned DataFrame with
+    the corporate action lists so build_all_data() can use them without
+    re-running detect_corporate_actions() a second time."""
+    df:             pd.DataFrame
+    split_events:   list   # [{ticker, date, ratio, pre_qty, post_qty}]
+    zero_cost_rows: list   # [{ticker, date, qty, description}]
+
+
+def detect_corporate_actions(df):
+    """
+    Scan the DataFrame for corporate actions that affect cost-basis correctness.
+    Returns two lists for UI warnings:
+
+      split_events  -- list of dicts: {ticker, date, ratio, pre_qty, post_qty}
+                       Detected by pairing a zero-Total Receive Deliver REMOVAL
+                       containing a split keyword with a zero-Total addition on
+                       the same ticker+date.  ratio = post_qty / pre_qty.
+
+      zero_cost_rows -- list of dicts: {ticker, date, qty, description}
+                       Any zero-Total Receive Deliver share addition that is not
+                       part of a detected split pair and is not an assignment.
+                       Includes spin-offs, ACATS transfers, and mergers whose
+                       cost basis defaults to $0 in the FIFO queue.
+
+    Called from load_and_parse() after Net_Qty_Row is set.
+    Results are also stored in AppData so the UI can show a warning banner.
+    """
+    split_events   = []
+    zero_cost_rows = []
+
+    rd = df[
+        (df['Type'] == 'Receive Deliver') &
+        (equity_mask(df['Instrument Type'])) &
+        (df['Total'] == 0.0)
+    ].copy()
+    if rd.empty:
+        return split_events, zero_cost_rows
+
+    rd['_dsc'] = rd['Description'].fillna('').str.upper()
+
+    def _is_split_row(dsc):
+        return any(p in dsc for p in SPLIT_DSC_PATTERNS)
+
+    processed_indices = set()
+    for (ticker, date), grp in rd.groupby(['Ticker', 'Date']):
+        removals  = grp[grp['_dsc'].apply(lambda d: 'REMOVAL' in d and _is_split_row(d))]
+        additions = grp[grp['_dsc'].apply(lambda d: 'REMOVAL' not in d and _is_split_row(d))]
+        if not removals.empty and not additions.empty:
+            pre_qty  = removals['Quantity'].sum()
+            post_qty = additions['Quantity'].sum()
+            if pre_qty > 0:
+                split_events.append({
+                    'ticker':   ticker,
+                    'date':     date,
+                    'ratio':    round(post_qty / pre_qty, 6),
+                    'pre_qty':  pre_qty,
+                    'post_qty': post_qty,
+                })
+                processed_indices.update(removals.index)
+                processed_indices.update(additions.index)
+
+    # Zero-cost additions not matched to a split pair
+    for row in rd[~rd.index.isin(processed_indices)].itertuples(index=False):
+        # Note: itertuples renames columns starting with _ (e.g. _dsc -> _3),
+        # so we read Description directly and uppercase it ourselves.
+        dsc = str(row.Description).upper()
+        if 'ASSIGNMENT' in dsc:
+            continue
+        if row.Quantity > 0:
+            zero_cost_rows.append({
+                'ticker':      row.Ticker,
+                'date':        row.Date,
+                'qty':         row.Quantity,
+                'description': str(row.Description)[:80],
+            })
+
+    return split_events, zero_cost_rows
+
+
+def apply_split_adjustments(df, split_events):
+    """
+    Rescale pre-split equity lot quantities in-place so the FIFO engine
+    sees the correct post-split share counts and per-share cost basis.
+
+    For each split event (ratio = post/pre, e.g. 2.0 for a 2:1 forward split):
+      - Equity rows for that ticker with Date < split_date have their
+        Quantity and Net_Qty_Row multiplied by ratio.
+      - Total (cash paid/received) is unchanged — basis per share halves.
+      - The split rows themselves (Total=0, Net_Qty_Row=0) are untouched.
+
+    NOTE: Option strikes are NOT adjusted here.  TastyTrade issues new symbols
+    for adjusted options — those are a known limitation (see README).
+    """
+    if not split_events:
+        return df
+    df = df.copy()
+    for ev in split_events:
+        mask = (
+            (df['Ticker'] == ev['ticker']) &
+            (equity_mask(df['Instrument Type'])) &
+            (df['Date'] < ev['date']) &
+            (df['Net_Qty_Row'] != 0)
+        )
+        df.loc[mask, 'Quantity']    = (df.loc[mask, 'Quantity']    * ev['ratio']).round(9)
+        df.loc[mask, 'Net_Qty_Row'] = (df.loc[mask, 'Net_Qty_Row'] * ev['ratio']).round(9)
+    return df
+
 
 @st.cache_data(show_spinner='📂 Loading CSV…')
-def load_and_parse(file_bytes: bytes) -> pd.DataFrame:
+def load_and_parse(file_bytes: bytes) -> ParsedData:
     """
     Read and clean the TastyTrade CSV.
     Cached on raw file bytes — re-runs only when a new file is uploaded.
-    Returns a fully typed, sorted DataFrame ready for all downstream logic.
+
+    Returns ParsedData(df, split_events, zero_cost_rows) so that
+    build_all_data() can surface the corporate action lists in AppData
+    without running detect_corporate_actions() a second time.
     """
     df = pd.read_csv(_io.BytesIO(file_bytes))
     # Parse as UTC (handles TastyTrade's +00:00 suffix), then strip tz.
@@ -919,20 +1401,30 @@ def load_and_parse(file_bytes: bytes) -> pd.DataFrame:
                             df['Symbol'].str.split().str[0]).fillna('CASH')
     df['Net_Qty_Row'] = df.apply(get_signed_qty, axis=1)
     df = df.sort_values('Date').reset_index(drop=True)
-    return df
+    # Detect corporate actions and apply split quantity adjustments.
+    # Must run after Net_Qty_Row is assigned and df is date-sorted.
+    # Both lists are returned in ParsedData so build_all_data() doesn't
+    # need to re-run this scan.
+    split_events, zero_cost_rows = detect_corporate_actions(df)
+    df = apply_split_adjustments(df, split_events)
+    return ParsedData(df=df, split_events=split_events, zero_cost_rows=zero_cost_rows)
 
 
 @st.cache_data(show_spinner='⚙️ Building campaigns…')
-def build_all_data(df: pd.DataFrame, use_lifetime: bool):
+def build_all_data(parsed: ParsedData, use_lifetime: bool):
     """
     All heavy computation that depends only on the full DataFrame and
     lifetime toggle — not on the selected time window.
+
+    Accepts a ParsedData so it can include split_events and zero_cost_rows
+    in AppData without re-running detect_corporate_actions().
 
     Cached separately from load_and_parse so that toggling Lifetime mode
     only re-runs campaign logic, not the CSV parse.
 
     Returns: AppData dataclass -- see AppData definition for field descriptions.
     """
+    df, split_events, zero_cost_rows = parsed
     # ── Open positions ledger ──────────────────────────────────────────────
     trade_df = df[df['Type'].isin(TRADE_TYPES)].copy()
     groups   = trade_df.groupby(
@@ -956,7 +1448,7 @@ def build_all_data(df: pd.DataFrame, use_lifetime: bool):
     for t in df['Ticker'].unique():
         if t == 'CASH': continue
         if not df[(df['Ticker'] == t) &
-                  (df['Instrument Type'].str.strip() == 'Equity') &
+                  (equity_mask(df['Instrument Type'])) &
                   (df['Net_Qty_Row'] >= WHEEL_MIN_SHARES)].empty:
             wheel_tickers.append(t)
 
@@ -972,7 +1464,7 @@ def build_all_data(df: pd.DataFrame, use_lifetime: bool):
     # ── Closed trades ──────────────────────────────────────────────────────
     latest_date  = df['Date'].max()
     _camp_windows = {
-        _t: [(_c['start_date'], _c['end_date'] or latest_date) for _c in _camps]
+        _t: [(_c.start_date, _c.end_date or latest_date) for _c in _camps]
         for _t, _camps in all_campaigns.items()
     }
     closed_trades_df = build_closed_trades(df, campaign_windows=_camp_windows)
@@ -980,39 +1472,52 @@ def build_all_data(df: pd.DataFrame, use_lifetime: bool):
     # ── All-time P/L accounting ────────────────────────────────────────────
     closed_camp_pnl      = sum(realized_pnl(c, use_lifetime)
                                for camps in all_campaigns.values()
-                               for c in camps if c['status'] == 'closed')
+                               for c in camps if c.status == 'closed')
     open_premiums_banked = sum(realized_pnl(c, use_lifetime)
                                for camps in all_campaigns.values()
-                               for c in camps if c['status'] == 'open')
-    capital_deployed     = sum(c['total_shares'] * c['blended_basis']
+                               for c in camps if c.status == 'open')
+    capital_deployed     = sum(c.total_shares * c.blended_basis
                                for camps in all_campaigns.values()
-                               for c in camps if c['status'] == 'open')
+                               for c in camps if c.status == 'open')
 
+    # ── P/L for pure-options tickers (not part of a 100-share wheel) ─────────
+    # Two components per ticker:
+    #   1. Options cash flow — already realized at open/close, no basis tracking needed
+    #   2. Equity realized P/L — FIFO via _iter_fifo_sells(), same engine as the
+    #      windowed view. This replaces the old cash-flow hack that was correct only
+    #      when all standalone equity positions happened to be fully closed.
+    # Shares still held are capital deployment, not realized P/L — their cost basis
+    # stays in the FIFO queue and contributes to extra_capital_deployed instead.
     pure_opts_pnl          = 0.0
     extra_capital_deployed = 0.0
 
     for t in pure_options_tickers:
-        t_df       = df[df['Ticker'] == t]
-        mask       = (df['Ticker'] == t) & (df['Type'].isin(TRADE_TYPES))
-        total_flow = df.loc[mask, 'Total'].sum()
-        s_mask     = (t_df['Instrument Type'].str.contains('Equity', na=False) &
-                      ~t_df['Instrument Type'].str.contains('Option', na=False))
-        eq_rows    = t_df[s_mask & t_df['Type'].isin(TRADE_TYPES)]
-        net_shares = eq_rows['Net_Qty_Row'].sum()
-        if net_shares > 0.0001:
-            total_bought   = eq_rows[eq_rows['Net_Qty_Row'] > 0]['Net_Qty_Row'].sum()
-            total_buy_cost = eq_rows[eq_rows['Net_Qty_Row'] > 0]['Total'].apply(abs).sum()
-            avg_cost       = total_buy_cost / total_bought if total_bought > 0 else 0
-            deployed       = net_shares * avg_cost
-            equity_flow    = eq_rows['Total'].sum()
-            if equity_flow < 0:
-                pure_opts_pnl          += (total_flow + abs(equity_flow))
-                extra_capital_deployed += deployed
-            else:
-                pure_opts_pnl += total_flow
-        else:
-            pure_opts_pnl += total_flow
+        t_df = df[df['Ticker'] == t]
 
+        # 1. Options cash flow
+        opt_flow = t_df[
+            t_df['Instrument Type'].isin(OPT_TYPES) &
+            t_df['Type'].isin(TRADE_TYPES)
+        ]['Total'].sum()
+
+        # 2. Equity realized P/L via FIFO (correct for any mix of buys, partial sells,
+        #    and full exits — not just the fully-closed case the old hack handled)
+        t_eq_rows  = t_df[equity_mask(t_df['Instrument Type'])].sort_values('Date')
+        eq_fifo_pnl = sum(p - c for _, p, c in _iter_fifo_sells(t_eq_rows))
+
+        pure_opts_pnl += opt_flow + eq_fifo_pnl
+
+        # 3. Shares still open → capital deployed (not realized P/L)
+        net_shares = t_eq_rows['Net_Qty_Row'].sum()
+        if net_shares > 0.0001:
+            bought_rows    = t_eq_rows[t_eq_rows['Net_Qty_Row'] > 0]
+            total_bought   = bought_rows['Net_Qty_Row'].sum()
+            total_buy_cost = bought_rows['Total'].apply(abs).sum()
+            avg_cost       = total_buy_cost / total_bought if total_bought > 0 else 0
+            extra_capital_deployed += net_shares * avg_cost
+
+    # Also include options P/L from wheel tickers that fell outside campaign windows
+    # (e.g. options written before the first share purchase)
     pure_opts_per_ticker = {}
     for ticker, camps in all_campaigns.items():
         pot = pure_options_pnl(df, ticker, camps)
@@ -1031,6 +1536,8 @@ def build_all_data(df: pd.DataFrame, use_lifetime: bool):
         pure_opts_pnl=pure_opts_pnl,
         extra_capital_deployed=extra_capital_deployed,
         pure_opts_per_ticker=pure_opts_per_ticker,
+        split_events=split_events,
+        zero_cost_rows=zero_cost_rows,
     )
 
 
@@ -1059,11 +1566,12 @@ if _missing:
     st.stop()
 
 try:
-    df = load_and_parse(_raw_bytes)
+    _parsed = load_and_parse(_raw_bytes)
 except Exception as e:
     st.error(f'❌ **File loaded but could not be parsed:** `{e}`\n\nMake sure you\'re uploading an unmodified TastyTrade CSV export.')
     st.stop()
 
+df = _parsed.df
 if df.empty:
     st.error('❌ The uploaded CSV is empty — no transactions found.')
     st.stop()
@@ -1071,7 +1579,7 @@ if df.empty:
 latest_date = df['Date'].max()
 
 # ── Unpack cached heavy computation ───────────────────────────────────────────
-_d = build_all_data(df, use_lifetime)
+_d = build_all_data(_parsed, use_lifetime)
 all_campaigns          = _d.all_campaigns
 wheel_tickers          = _d.wheel_tickers
 pure_options_tickers   = _d.pure_options_tickers
@@ -1083,14 +1591,65 @@ capital_deployed       = _d.capital_deployed
 pure_opts_pnl          = _d.pure_opts_pnl
 extra_capital_deployed = _d.extra_capital_deployed
 pure_opts_per_ticker   = _d.pure_opts_per_ticker
+corp_split_events      = _d.split_events
+corp_zero_cost_rows    = _d.zero_cost_rows
 
 total_realized_pnl = closed_camp_pnl + open_premiums_banked + pure_opts_pnl
 capital_deployed  += extra_capital_deployed
 
+# Add all-time dividends + interest so that total_realized_pnl is computed on
+# the same basis as window_realized_pnl (which now includes _w_div_int).
+# Campaign accounting already includes wheel-ticker dividends via c.dividends,
+# but interest and non-wheel-ticker income are missing without this line.
+_all_time_income = df[df['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
+# Subtract wheel-ticker dividends already counted in campaigns to avoid double-counting
+_wheel_divs_in_camps = sum(
+    c.dividends
+    for camps in all_campaigns.values()
+    for c in camps
+)
+total_realized_pnl += _all_time_income - _wheel_divs_in_camps
+
+# ── Corporate action warnings ──────────────────────────────────────────────────────────────────────────
+# Shown once at load time; both lists are empty for the vast majority of users.
+if corp_split_events:
+    for _ev in corp_split_events:
+        _ratio = _ev['ratio']
+        _fwd   = _ratio > 1
+        _label = '%.0f:1 forward split' % _ratio if _fwd else '1:%.0f reverse split' % (1/_ratio)
+        st.info(
+            f"⚠️ **Stock split detected: {xe(_ev['ticker'])}** — {_label} on "
+            f"{_ev['date'].strftime('%d/%m/%Y')} "
+            f"({_ev['pre_qty']:.0f} → {_ev['post_qty']:.0f} shares). "
+            "Pre-split lot sizes have been automatically rescaled in the FIFO engine "
+            "so cost basis and P/L should be correct. "
+            "Note: adjusted option symbols are a separate TastyTrade entry and are "
+            "not automatically stitched to pre-split contracts.",
+            icon=None
+        )
+
+if corp_zero_cost_rows:
+    _zc_tickers = sorted({r['ticker'] for r in corp_zero_cost_rows})
+    _zc_lines   = [
+        f"**{xe(r['ticker'])}** — {r['qty']:.0f} shares on "
+        f"{r['date'].strftime('%d/%m/%Y')}: _{xe(r['description'])}_"
+        for r in corp_zero_cost_rows
+    ]
+    st.warning(
+        "⚠️ **Zero-cost share delivery detected** — the following positions "
+        "were received with Total = $0, which typically means the cost basis was not "
+        "transferred (spin-off, ACATS, merger conversion). "
+        "These shares have been loaded with a $0/share cost basis, which will "
+        "**overstate P/L** on eventual sale by the full proceeds amount. "
+        "Check your broker statement for the correct allocated basis and note "
+        "this as a limitation of the current data.\n\n"
+        + "\n\n".join(_zc_lines)
+    )
+
 # ── Expiry alert data (fast — from cached df_open) ────────────────────────────
 _expiry_alerts = []
 if not df_open.empty:
-    _opts_open = df_open[df_open['Instrument Type'].str.contains('Option', na=False)].copy()
+    _opts_open = df_open[option_mask(df_open['Instrument Type'])].copy()
     if not _opts_open.empty and _opts_open['Expiration Date'].notna().any():
         _opts_open['_exp_dt'] = pd.to_datetime(_opts_open['Expiration Date'], format='mixed', errors='coerce')
         _opts_open = _opts_open.dropna(subset=['_exp_dt'])
@@ -1153,22 +1712,26 @@ _daily_pnl     = _daily_pnl_all[
 # Options: sum all option cash flows in the window (credits + debits)
 # Equity: FIFO cost basis via calculate_windowed_equity_pnl() — oldest lot first,
 #         partial lot splits handled correctly, pre-window buys tracked
+# Income: dividends and net interest are real cash P/L, included here so
+#         windowed and all-time totals are computed on the same basis.
 _w_opts = df_window[df_window['Instrument Type'].isin(OPT_TYPES) &
                     (df_window['Type'].isin(TRADE_TYPES))]
 
-_eq_pnl = calculate_windowed_equity_pnl(df, start_date)
+_eq_pnl       = calculate_windowed_equity_pnl(df, start_date)
+_w_div_int    = df_window[df_window['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
 
-window_realized_pnl = _w_opts['Total'].sum() + _eq_pnl
+window_realized_pnl = _w_opts['Total'].sum() + _eq_pnl + _w_div_int
 
 # ── Prior period P/L (for WoW / MoM comparison card) ─────────────────────────
-_window_span = latest_date - start_date
-_prior_end   = start_date
-_prior_start = _prior_end - _window_span
-_df_prior    = df[(df['Date'] >= _prior_start) & (df['Date'] < _prior_end)].copy()
-_prior_opts  = _df_prior[_df_prior['Instrument Type'].isin(OPT_TYPES) &
-                          _df_prior['Type'].isin(TRADE_TYPES)]['Total'].sum()
-_prior_eq    = calculate_windowed_equity_pnl(df, _prior_start, end_date=_prior_end)
-prior_period_pnl = _prior_opts + _prior_eq
+_window_span  = latest_date - start_date
+_prior_end    = start_date
+_prior_start  = _prior_end - _window_span
+_df_prior     = df[(df['Date'] >= _prior_start) & (df['Date'] < _prior_end)].copy()
+_prior_opts   = _df_prior[_df_prior['Instrument Type'].isin(OPT_TYPES) &
+                           _df_prior['Type'].isin(TRADE_TYPES)]['Total'].sum()
+_prior_eq     = calculate_windowed_equity_pnl(df, _prior_start, end_date=_prior_end)
+_prior_div_int = _df_prior[_df_prior['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
+prior_period_pnl = _prior_opts + _prior_eq + _prior_div_int
 prior_period_trades = 0
 if not closed_trades_df.empty:
     prior_period_trades = closed_trades_df[
@@ -1246,19 +1809,6 @@ m7.caption('Days since your first transaction. Useful context for how long your 
 
 
 # ── Realized P/L Breakdown — inline chip line ─────────────────────────────────
-def _pnl_chip(label, val):
-    col = '#00cc96' if val >= 0 else '#ef553b'
-    sign = '+' if val >= 0 else ''
-    return (
-        f'<span style="display:inline-flex;align-items:center;gap:5px;'
-        f'background:rgba(255,255,255,0.04);border:1px solid #1f2937;'
-        f'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
-        f'<span style="color:#6b7280;">{label}</span>'
-        f'<span style="color:{col};font-family:monospace;font-weight:600;">'
-        f'{sign}${abs(val):,.2f}</span>'
-        f'</span>'
-    )
-
 if _is_all_time:
     _breakdown_html = (
         _pnl_chip('Closed Wheel Campaigns', closed_camp_pnl) +
@@ -1291,25 +1841,6 @@ if selected_period != 'All Time' and not _df_prior.empty:
     _arrow      = '▲' if _pnl_delta >= 0 else '▼'
     _period_lbl = selected_period.replace('Last ','').replace('YTD','Year-to-date')
 
-    def _cmp_block(label, curr, prev, is_pct=False):
-        delta = curr - prev
-        dcol  = '#00cc96' if delta >= 0 else '#ef553b'
-        dsign = '+' if delta >= 0 else ''
-        if is_pct:
-            curr_str  = f'{curr:.1f}%'
-            delta_str = f'{dsign}{delta:.1f}%'
-        else:
-            curr_str  = f'${curr:,.2f}' if curr >= 0 else f'-${abs(curr):,.2f}'
-            delta_str = (f'{dsign}${delta:,.2f}' if delta >= 0 else f'-${abs(delta):,.2f}')
-        return (
-            f'<div style="flex:1;min-width:120px;padding:0 16px;border-right:1px solid #1f2937;">'
-            f'<div style="color:#6b7280;font-size:0.7rem;text-transform:uppercase;'
-            f'letter-spacing:0.05em;margin-bottom:4px;">{label}</div>'
-            f'<div style="font-family:monospace;font-size:1.05rem;color:#e6edf3;">{curr_str}</div>'
-            f'<div style="font-size:0.78rem;color:{dcol};margin-top:2px;">{delta_str} vs prior</div>'
-            f'</div>'
-        )
-
     _curr_wr, _prev_wr = 0.0, 0.0
     if not closed_trades_df.empty:
         _cw = closed_trades_df[closed_trades_df['Close Date'] >= start_date]
@@ -1339,6 +1870,14 @@ if selected_period != 'All Time' and not _df_prior.empty:
         unsafe_allow_html=True
     )
 
+# ── Shared derived slices — computed once, used by Tabs 1 and 2 ───────────────
+# all_cdf: closed trades filtered to current time window (falls back to all-time
+#          if the window contains no closed trades — avoids empty chart state).
+all_cdf    = window_trades_df if not window_trades_df.empty else closed_trades_df
+credit_cdf = all_cdf[all_cdf['Is Credit']].copy() if not all_cdf.empty else pd.DataFrame()
+has_credit = not credit_cdf.empty
+has_data   = not all_cdf.empty
+
 # ── TABS ───────────────────────────────────────────────────────────────────────
 tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
     '📡 Open Positions',
@@ -1358,12 +1897,12 @@ with tab0:
         df_open['Status']  = df_open.apply(identify_pos_type, axis=1)
         df_open['Details'] = df_open.apply(translate_readable, axis=1)
 
-        df_open['DTE'] = df_open.apply(calc_dte, axis=1)
+        df_open['DTE'] = df_open.apply(lambda row: calc_dte(row, latest_date), axis=1)
         tickers_open = [t for t in sorted(df_open['Ticker'].unique()) if t != 'CASH']
 
         # Summary strip — count of positions and strategies
-        n_options = df_open[df_open['Instrument Type'].str.contains('Option', na=False)].shape[0]
-        n_shares  = df_open[df_open['Instrument Type'].str.strip() == 'Equity'].shape[0]
+        n_options = df_open[option_mask(df_open['Instrument Type'])].shape[0]
+        n_shares  = df_open[equity_mask(df_open['Instrument Type'])].shape[0]
         strategies = [detect_strategy(df_open[df_open['Ticker']==t]) for t in tickers_open]
         unique_strats = list(dict.fromkeys(strategies))  # preserve order
 
@@ -1384,23 +1923,6 @@ with tab0:
 
         # ── Expiry Alert Strip ─────────────────────────────────────────────
         if _expiry_alerts:
-            def _dte_chip(a):
-                dte = a['dte']
-                if dte <= 5:
-                    fg = '#ef553b'
-                elif dte <= 14:
-                    fg = '#ffa500'
-                else:
-                    fg = '#00cc96'
-                return (
-                    f'<span style="display:inline-flex;align-items:center;gap:5px;'
-                    f'background:rgba(255,255,255,0.04);border:1px solid #1f2937;'
-                    f'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
-                    f'<span style="color:{fg};font-family:monospace;font-weight:600;">{dte}d</span>'
-                    f'<span style="color:#6b7280;">{xe(a["ticker"])}</span>'
-                    f'<span style="color:#8b949e;font-family:monospace;">{xe(a["label"])}</span>'
-                    f'</span>'
-                )
             _expiry_chips = ''.join(_dte_chip(a) for a in _expiry_alerts)
             st.markdown(
                 f'<div style="margin:-4px 0 16px 0;display:flex;flex-wrap:wrap;align-items:center;">'
@@ -1424,11 +1946,6 @@ with tab1:
     if closed_trades_df.empty:
         st.info('No closed trades found.')
     else:
-        all_cdf    = window_trades_df if not window_trades_df.empty else closed_trades_df
-        credit_cdf = all_cdf[all_cdf['Is Credit']].copy() if not all_cdf.empty else pd.DataFrame()
-        has_credit = not credit_cdf.empty
-        has_data   = not all_cdf.empty
-
         st.info(window_label)
         st.markdown(f'#### 🎯 Premium Selling Scorecard {_win_label}', unsafe_allow_html=True)
         st.caption(
@@ -1577,10 +2094,6 @@ with tab1:
                 '**Total Credit Rcvd** = gross cash received when opening credit trades.'
             )
 
-            def color_pnl_cell(val):
-                if not isinstance(val, (int, float)): return ''
-                return 'color: #00cc96' if val > 0 else 'color: #ef553b' if val < 0 else ''
-
             all_by_ticker = all_cdf.groupby('Ticker').agg(
                 Trades=('Net P/L', 'count'),
                 Win_Rate=('Won', lambda x: x.mean()*100),
@@ -1623,11 +2136,6 @@ with tab2:
     if closed_trades_df.empty:
         st.info('No closed trades found.')
     else:
-        all_cdf    = window_trades_df if not window_trades_df.empty else closed_trades_df
-        credit_cdf = all_cdf[all_cdf['Is Credit']].copy() if not all_cdf.empty else pd.DataFrame()
-        has_credit = not credit_cdf.empty
-        has_data   = not all_cdf.empty
-
         st.markdown(f'### 🔬 Trade Analysis {_win_label}', unsafe_allow_html=True)
 
         st.markdown('---')
@@ -1971,24 +2479,7 @@ with tab2:
             log = log.sort_values('Close', ascending=False)
 
             # Append * to Ann Ret % for short-hold trades before styling
-            def _fmt_ann_ret(row):
-                v = row['Ann Ret %']
-                if pd.isna(v):
-                    return '—'
-                suffix = '*' if pd.notna(row['Days']) and row['Days'] < 4 else ''
-                return '{:.0f}%{}'.format(v, suffix)
-
             log['Ann Ret %'] = log.apply(_fmt_ann_ret, axis=1)
-
-            def _style_ann_ret(row):
-                styles = [''] * len(row)
-                try:
-                    idx = list(row.index).index('Ann Ret %')
-                    if pd.notna(row.get('Days')) and row.get('Days', 99) < 4:
-                        styles[idx] = 'color: #8b7355'
-                except (ValueError, KeyError):
-                    pass
-                return styles
 
             st.dataframe(
                 log.style.format({
@@ -2027,17 +2518,14 @@ with tab3:
         for ticker, camps in sorted(all_campaigns.items()):
             for i, c in enumerate(camps):
                 rpnl = realized_pnl(c, use_lifetime); effb = effective_basis(c, use_lifetime)
-                dur  = (c['end_date'] or latest_date) - c['start_date']
-                rows.append({'Ticker': ticker, 'Status': '✅ Closed' if c['status']=='closed' else '🟢 Open',
-                    'Qty': int(c['total_shares']), 'Avg Price': c['blended_basis'],
-                    'Eff. Basis': effb, 'Premiums': c['premiums'],
-                    'Divs': c['dividends'], 'Exit': c['exit_proceeds'],
+                dur  = (c.end_date or latest_date) - c.start_date
+                rows.append({'Ticker': ticker, 'Status': '✅ Closed' if c.status=='closed' else '🟢 Open',
+                    'Qty': int(c.total_shares), 'Avg Price': c.blended_basis,
+                    'Eff. Basis': effb, 'Premiums': c.premiums,
+                    'Divs': c.dividends, 'Exit': c.exit_proceeds,
                     'P/L': rpnl, 'Days': dur.days,
-                    'Opened': c['start_date'].strftime('%d/%m/%y')})
+                    'Opened': c.start_date.strftime('%d/%m/%y')})
         summary_df = pd.DataFrame(rows)
-        def color_pnl(val):
-            if not isinstance(val, float): return ''
-            return 'color: #00cc96' if val > 0 else 'color: #ef553b' if val < 0 else ''
         st.dataframe(summary_df.style.format({
             'Avg Price': lambda x: '${:,.2f}'.format(x),
             'Eff. Basis': lambda x: '${:,.2f}'.format(x),
@@ -2045,16 +2533,16 @@ with tab3:
             'Divs': lambda x: '${:,.2f}'.format(x),
             'Exit': lambda x: '${:,.2f}'.format(x),
             'P/L': lambda x: '${:,.2f}'.format(x)
-        }).map(color_pnl, subset=['P/L']), width='stretch', hide_index=True)
+        }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
         st.markdown('---')
 
         for ticker, camps in sorted(all_campaigns.items()):
             for i, c in enumerate(camps):
                 rpnl = realized_pnl(c, use_lifetime); effb = effective_basis(c, use_lifetime)
-                is_open  = c['status'] == 'open'
+                is_open  = c.status == 'open'
                 status_badge = '🟢 OPEN' if is_open else '✅ CLOSED'
                 pnl_color    = '#00cc96' if rpnl >= 0 else '#ef553b'
-                basis_reduction = c['blended_basis'] - effb
+                basis_reduction = c.blended_basis - effb
                 card_html = """
                 <div style="border:1px solid {border}; border-radius:10px; padding:16px 20px 12px 20px;
                              margin-bottom:12px; background:rgba(255,255,255,0.03);">
@@ -2083,17 +2571,17 @@ with tab3:
                     ticker=xe(ticker), camp_n=i+1, status=xe(status_badge),
                     badge_bg='rgba(0,204,150,0.15)' if is_open else 'rgba(100,100,100,0.2)',
                     badge_col='#00cc96' if is_open else '#888',
-                    shares=int(c['total_shares']),
-                    entry_basis=c['blended_basis'], eff_basis=effb,
+                    shares=int(c.total_shares),
+                    entry_basis=c.blended_basis, eff_basis=effb,
                     reduction=basis_reduction if basis_reduction > 0 else 0,
-                    premiums=c['premiums'], pnl=rpnl, pnl_color=pnl_color
+                    premiums=c.premiums, pnl=rpnl, pnl_color=pnl_color
                 )
                 st.markdown(card_html, unsafe_allow_html=True)
                 with st.expander('📊 Detail — Chains & Events', expanded=is_open):
                     ticker_opts = df[(df['Ticker']==ticker) &
-                        df['Instrument Type'].str.contains('Option', na=False)].copy()
-                    camp_start = c['start_date']
-                    camp_end   = c['end_date'] or latest_date
+                        option_mask(df['Instrument Type'])].copy()
+                    camp_start = c.start_date
+                    camp_end   = c.end_date or latest_date
                     ticker_opts = ticker_opts[
                         (ticker_opts['Date'] >= camp_start) & (ticker_opts['Date'] <= camp_end)
                     ]
@@ -2147,10 +2635,6 @@ with tab3:
                                     'Action': '━━ Chain Total', 'Date': '',
                                     'Strike': '', 'Exp': '', 'DTE': '', 'Cash': ch_pnl, '_open': False
                                 }])], ignore_index=True)
-                                def _style_chain_row(row):
-                                    if row.get('_open', False):
-                                        return ['background-color: rgba(0,204,150,0.12); font-weight:600'] * len(row)
-                                    return [''] * len(row)
                                 st.dataframe(
                                     ch_df[['Action','Date','Strike','Exp','DTE','Cash','_open']].style
                                         .apply(_style_chain_row, axis=1)
@@ -2163,7 +2647,7 @@ with tab3:
                                 )
 
                     st.markdown('**📋 Share & Dividend Events**')
-                    ev_df = pd.DataFrame(c['events'])
+                    ev_df = pd.DataFrame(c.events)
                     ev_share = ev_df[~ev_df['type'].str.lower().str.contains('to open|to close|expir|assign', na=False)]
                     if not ev_share.empty:
                         ev_share = ev_share.copy()
@@ -2208,30 +2692,36 @@ with tab4:
     rows = []
     for ticker, camps in sorted(all_campaigns.items()):
         tr = sum(realized_pnl(c, use_lifetime) for c in camps)
-        td = sum(c['total_cost'] for c in camps if c['status']=='open')
-        tp = sum(c['premiums'] for c in camps)
-        tv = sum(c['dividends'] for c in camps)
+        td = sum(c.total_cost for c in camps if c.status=='open')
+        tp = sum(c.premiums for c in camps)
+        tv = sum(c.dividends for c in camps)
         po = pure_opts_per_ticker.get(ticker, 0.0)
-        oc = sum(1 for c in camps if c['status']=='open')
-        cc = sum(1 for c in camps if c['status']=='closed')
+        oc = sum(1 for c in camps if c.status=='open')
+        cc = sum(1 for c in camps if c.status=='closed')
         rows.append({'Ticker': ticker, 'Type': '🎡 Wheel',
             'Campaigns': '%d open, %d closed'%(oc,cc),
             'Premiums': tp, 'Divs': tv,
             'Options P/L': po, 'Deployed': td, 'P/L': tr+po})
     for ticker in sorted(pure_options_tickers):
-        mask = (df['Ticker']==ticker) & (df['Type'].isin(TRADE_TYPES))
-        total_val = df.loc[mask,'Total'].sum()
-        t_df = df[df['Ticker'] == ticker]
-        s_mask = t_df['Instrument Type'].str.contains('Equity', na=False) & \
-                 ~t_df['Instrument Type'].str.contains('Option', na=False)
-        net_shares = t_df[s_mask]['Net_Qty_Row'].sum()
-        cap_dep = 0.0; pnl = total_val
+        t_df    = df[df['Ticker'] == ticker]
+        t_eq    = t_df[equity_mask(t_df['Instrument Type'])].sort_values('Date')
+
+        opt_flow    = t_df[
+            t_df['Instrument Type'].isin(OPT_TYPES) &
+            t_df['Type'].isin(TRADE_TYPES)
+        ]['Total'].sum()
+        eq_fifo_pnl = sum(p - c for _, p, c in _iter_fifo_sells(t_eq))
+        pnl         = opt_flow + eq_fifo_pnl
+
+        net_shares  = t_eq['Net_Qty_Row'].sum()
+        cap_dep     = 0.0
         if net_shares > 0.0001:
-            eq_flow = t_df[(t_df['Instrument Type'].str.contains('Equity', na=False)) &
-                           (t_df['Type'].isin(TRADE_TYPES))]['Total'].sum()
-            if eq_flow < 0:
-                cap_dep = abs(eq_flow)
-                pnl = total_val + cap_dep
+            bought_rows    = t_eq[t_eq['Net_Qty_Row'] > 0]
+            total_bought   = bought_rows['Net_Qty_Row'].sum()
+            total_buy_cost = bought_rows['Total'].apply(abs).sum()
+            avg_cost       = total_buy_cost / total_bought if total_bought > 0 else 0
+            cap_dep        = net_shares * avg_cost
+
         rows.append({'Ticker': ticker, 'Type': '📊 Standalone',
             'Campaigns': '—', 'Premiums': pnl, 'Divs': 0.0,
             'Options P/L': 0.0, 'Deployed': cap_dep, 'P/L': pnl})
@@ -2244,16 +2734,13 @@ with tab4:
             'Deployed': deep_df['Deployed'].sum(),
             'P/L': deep_df['P/L'].sum()}
         deep_df = pd.concat([deep_df, pd.DataFrame([total_row])], ignore_index=True)
-        def color_pnl2(val):
-            if not isinstance(val, (int, float)): return ''
-            return 'color: #00cc96' if val > 0 else 'color: #ef553b' if val < 0 else ''
         st.dataframe(deep_df.style.format({
             'Premiums': lambda x: '${:,.2f}'.format(x),
             'Divs': lambda x: '${:,.2f}'.format(x),
             'Options P/L': lambda x: '${:,.2f}'.format(x),
             'Deployed': lambda x: '${:,.2f}'.format(x),
             'P/L': lambda x: '${:,.2f}'.format(x)
-        }).map(color_pnl2, subset=['P/L']), width='stretch', hide_index=True)
+        }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
 
     # ── Total Portfolio P/L by Week & Month ───────────────────────────────────
     st.markdown('---')
@@ -2437,28 +2924,6 @@ with tab5:
         DEPOSIT_SUB_TYPES
     )][['Date','Ticker','Sub Type','Description','Total']].sort_values('Date', ascending=False)
     if not income_df.empty:
-        def _color_cash_row(row):
-            sub = str(row.get('Sub Type', ''))
-            if sub == 'Deposit':
-                c = 'rgba(0,204,150,0.08)'
-            elif sub == 'Withdrawal':
-                c = 'rgba(239,85,59,0.08)'
-            elif sub == SUB_DIVIDEND:
-                c = 'rgba(88,166,255,0.08)'
-            elif sub == SUB_CREDIT_INT:
-                c = 'rgba(88,166,255,0.05)'
-            elif sub == SUB_DEBIT_INT:
-                c = 'rgba(239,85,59,0.05)'
-            elif sub == 'Balance Adjustment':
-                c = 'rgba(255,165,0,0.07)'
-            else:
-                c = ''
-            return [f'background-color:{c}' if c else ''] * len(row)
-
-        def _color_cash_total(val):
-            if not isinstance(val, (int, float)): return ''
-            return 'color:#00cc96' if val > 0 else 'color:#ef553b' if val < 0 else ''
-
         st.dataframe(
             income_df.style
                 .apply(_color_cash_row, axis=1)
