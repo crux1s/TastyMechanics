@@ -85,9 +85,11 @@ Then open `http://localhost:8501` in your browser.
 
 1. Log in to TastyTrade
 2. Go to **History → Transactions**
-3. Set your date range (export your full history for best results)
+3. Set your date range — **export your full account history, not just a recent window**
 4. Click **Download CSV**
 5. Upload the file in the dashboard sidebar
+
+> **Why full history matters:** FIFO cost basis for equity P/L requires all prior buy transactions to be present, even if the shares were purchased years ago. A partial export will produce incorrect basis and P/L figures for any position that has earlier lots outside the selected date range.
 
 ---
 
@@ -121,46 +123,74 @@ P/L figures are cash-flow based (what actually hit your account) and use FIFO co
 
 ## Architecture
 
+The codebase is split into focused modules with a strict one-way dependency chain. No module imports from the one above it.
+
+```
+config.py          Constants only — OPT_TYPES, TRADE_TYPES, thresholds, patterns
+models.py          Dataclasses — Campaign, AppData, ParsedData
+ingestion.py       CSV parsing — pure Python, no Streamlit dependency
+mechanics.py       Analytics engine — FIFO, campaigns, trade classification
+ui_components.py   Visual helpers — formatters, colour functions, chart layout
+app.py             Streamlit wiring — sidebar, tabs, cached wrappers only
+```
+
 **Data flow**
 
 ```
 CSV upload
-  └── load_and_parse()       cached on raw bytes — reruns only on new file
-        └── build_all_data() cached on (df, use_lifetime) — reruns on toggle
-              └── window slices recomputed on time window change (fast)
+  └── load_and_parse(_file_bytes)        cached on raw bytes — reruns only on new file
+        └── build_all_data(_parsed, use_lifetime)
+                                          cached on use_lifetime bool only (DataFrame unhashed)
+              └── window slices recomputed on time window change (fast, uncached)
 ```
 
 **Key design decisions**
 
+- **Pure analytics layer** — `mechanics.py` has zero Streamlit imports. Every function in it is independently importable and testable without a running server.
+
+- **Thin cache wrappers** — `@st.cache_data` lives only in the app layer. DataFrame and `ParsedData` parameters are prefixed with `_` to tell Streamlit not to hash them — hashing a 50k-row DataFrame on every rerun costs more CPU than running the math cold. Only small scalar arguments like `use_lifetime: bool` are hashed.
+
+- **`main()` entry point** — all rendering code runs inside `main()` so that figure objects, intermediate DataFrames, and local variables are freed when the function returns rather than persisting as module globals for the lifetime of the server process.
+
 - **Naive UTC everywhere** — TastyTrade exports UTC timestamps. Parsed as UTC then immediately stripped to naive. No browser-local timezone conversion.
-- **Single FIFO engine** — `_iter_fifo_sells()` is the sole source of truth for equity cost basis. Handles long and short positions via parallel deques per ticker.
+
+- **Single FIFO engine** — `_iter_fifo_sells()` in `mechanics.py` is the sole source of truth for equity cost basis. Handles long and short positions via parallel deques per ticker. Yields `(date, proceeds, cost_basis)` — callers apply their own window and bucketing.
+
 - **AppData dataclass** — `build_all_data()` returns a typed dataclass, not a positional tuple. Safe to extend without breaking callers.
+
 - **LEAPS separation** — trades with DTE > 90 at open are excluded from ThetaGang metrics and surfaced as a separate callout.
+
 - **Campaign accounting** — options traded before the first share purchase (pre-campaign) are classified as standalone P/L, not campaign premiums. Assignment STOs stay in the outside-window bucket to prevent double-counting.
 
 **Test suite**
 
-`test_tastymechanics.py` contains 180 tests covering all P/L figures, campaign accounting, windowed views, FIFO edge cases, and structural invariants. All expected values were derived independently from raw CSV data — the test suite does not use any app code. Run with:
+`test_tastymechanics.py` contains 153 tests covering all P/L figures, campaign accounting, windowed views, FIFO edge cases, and structural invariants. Tests import directly from `mechanics.py` and `ingestion.py` — no Streamlit server required, no exec hacks, no parallel reimplementations that can drift.
 
 ```bash
 python test_tastymechanics.py
 ```
 
-To also verify the app's displayed values against ground truth, generate a snapshot first:
-
-```bash
-# Windows PowerShell
-$env:TASTYMECHANICS_TEST="1"
-python -m streamlit run Tastytrade_CSV_Dashboard_v25.9.py
-# Upload your CSV, then run the tests
-python test_tastymechanics.py
-```
+Expected values were derived independently from raw CSV data using pandas. A failing test means the app's math has changed — intentionally or not.
 
 ---
 
 ## Changelog
 
-**v25.9** (2026-02-26) — Assignment STO double-count fix, windowed P/L income fix, standalone equity FIFO fix, 180-test suite added. All P/L figures verified against real account data.
+**v25.9 — Refactor** (2026-02-27)
+- Extracted pure analytics into `mechanics.py` (no Streamlit dependency)
+- Extracted data models into `models.py` (`Campaign`, `AppData`, `ParsedData`)
+- Extracted CSV parsing into `ingestion.py`
+- Extracted constants into `config.py`, UI helpers into `ui_components.py`
+- All `@st.cache_data` wrappers moved to app layer; DataFrame params prefixed with `_` to skip hashing
+- All rendering code wrapped in `main()` — figure and DataFrame locals freed on each rerun
+- Test suite updated to import directly from `mechanics.py` — exec hack removed
+- Main app reduced from ~2,940 lines to ~1,730 lines
+
+**v25.9 — Features** (2026-02-26)
+- Assignment STO double-count fix
+- Windowed P/L income fix
+- Standalone equity FIFO fix
+- 153-test suite — all P/L figures verified against real account data
 
 **v25.6** (2026-02-26) — Stock split handling, zero-cost delivery warnings, short equity FIFO fix, LEAPS separation, timezone architecture unification, full code review.
 
