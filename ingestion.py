@@ -29,6 +29,9 @@ from config import (
     SPLIT_DSC_PATTERNS,
     REQUIRED_COLUMNS,
     FIFO_ROUND,
+    TRADE_TYPES,
+    PAT_ASSIGN,
+    PAT_EXERCISE,
 )
 
 from models import ParsedData
@@ -100,6 +103,10 @@ def get_signed_qty(row: pd.Series) -> float:
         if 'ASSIGNMENT' in dsc:                          return  qty
         if any(p in dsc for p in SPLIT_DSC_PATTERNS):   return  0
         return -qty
+    if 'CASH SETTLEMENT' in dsc:
+        sub = str(row['Sub Type']).lower()
+        if PAT_ASSIGN   in sub: return  qty   # short option assigned  → closes short
+        if PAT_EXERCISE in sub: return -qty   # long option exercised  → closes long
     # If none of the known action patterns matched, raise an error instead of silently returning 0.
     # This prevents FIFO corruption from unrecognised CSV formats or TastyTrade API changes.
     raise CSVParseError(
@@ -320,7 +327,10 @@ def parse_csv(file_bytes: bytes) -> ParsedData:
         .fillna('CASH')
     )
 
-    df['Net_Qty_Row'] = df.apply(get_signed_qty, axis=1)
+    df['Net_Qty_Row'] = df.apply(
+        lambda row: get_signed_qty(row) if row['Type'] in TRADE_TYPES else 0.0,
+        axis=1,
+    )
     df = df.sort_values('Date').reset_index(drop=True)
 
     # Corporate action detection must run after Net_Qty_Row is set and the
