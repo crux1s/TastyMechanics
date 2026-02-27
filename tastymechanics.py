@@ -17,7 +17,7 @@ from config import (
     INDEX_STRIKE_THRESHOLD,
     SPLIT_DSC_PATTERNS, ZERO_COST_WARN_TYPES,
     REQUIRED_COLUMNS,
-    FIFO_EPSILON,
+    ANN_RETURN_CAP,
 )
 
 # ── UI helpers & components (all in ui_components.py) ─────────────────────────
@@ -66,6 +66,15 @@ import os as _os
 # Changelog
 # ---------
 # v25.9 (2026-02-27)
+#   - NEW: Win Rate & Avg P/L by DTE at Open charts (Trade Analysis tab).
+#     Two-column view showing win rate and avg P/L per DTE bucket (0–7d through
+#     61–90d). LEAPS excluded. Reveals where your edge is strongest by DTE.
+#   - NEW: Rolling 90-day Capital Efficiency chart (All Trades tab).
+#     13-week rolling P/L annualised against deployed capital. S&P 10% benchmark
+#     line. Rising = capital working harder; flat/falling = sizing drift.
+#   - NEW: Campaign P/L Waterfall chart (Wheel Campaigns tab, per campaign).
+#     Shows Share Cost → Premiums → Dividends → Exit Proceeds → Net P/L as a
+#     stacked waterfall. Makes the "house money" story visually obvious.
 #   - FIX: Zero-cost basis exclusion toggle — sidebar opt-in to exclude
 #     tickers with spin-off / ACATS $0-basis deliveries from all portfolio
 #     P/L metrics (ROR, Capital Efficiency, Realized P/L). FIFO engine
@@ -438,13 +447,10 @@ def main():
         if _exclude_zc:
             _zc_excluded = set(_zc_tickers_all)
 
-    # Create filtered df for P&L calculations BEFORE get_daily_pnl() to avoid chart/metric mismatch
-    df_pnl = df  # Will be reassigned to filtered version below if zero-cost exclusion is active
-
     if _zc_excluded:
         # Strip excluded tickers from every aggregated variable.
         # df stays intact for deposits/withdrawals — we only filter the P/L-relevant slices.
-        df_pnl = df[~df['Ticker'].isin(_zc_excluded)].copy()
+        df = df[~df['Ticker'].isin(_zc_excluded)].copy()
 
         # Campaigns
         all_campaigns  = {t: c for t, c in all_campaigns.items()  if t not in _zc_excluded}
@@ -468,14 +474,14 @@ def main():
         _pot_eq = 0.0
         _pot_cap = 0.0
         for _t in pure_options_tickers:
-            _t_eq = df_pnl[equity_mask(df_pnl['Instrument Type']) & (df_pnl['Ticker'] == _t)].sort_values('Date')
+            _t_eq = df[equity_mask(df['Instrument Type']) & (df['Ticker'] == _t)].sort_values('Date')
             _pot_eq  += sum(p - c for _, p, c in _iter_fifo_sells(_t_eq))
             _pot_cap += _t_eq[_t_eq['Net_Qty_Row'] > 0]['Total'].apply(abs).sum()
         pure_opts_pnl  += _pot_eq
         capital_deployed += _pot_cap
 
         # Recompute dividends/income without excluded tickers
-        _all_time_income     = df_pnl[df_pnl['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
+        _all_time_income     = df[df['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
         _wheel_divs_in_camps = sum(c.dividends for camps in all_campaigns.values() for c in camps)
 
         total_realized_pnl   = (closed_camp_pnl + open_premiums_banked + pure_opts_pnl
@@ -580,8 +586,7 @@ def main():
         if not closed_trades_df.empty else pd.DataFrame()
 
     # Slice the cached all-time daily P/L series to the current window
-    # Use df_pnl (filtered version) to match window P&L metric
-    _daily_pnl_all = get_daily_pnl(df_pnl)
+    _daily_pnl_all = get_daily_pnl(df)
     _daily_pnl     = _daily_pnl_all[
         _daily_pnl_all['Date'] >= start_date
     ].copy()
@@ -634,8 +639,7 @@ def main():
     net_deposited   = total_deposited + total_withdrawn
     first_date      = df['Date'].min()
     account_days    = (latest_date - first_date).days
-    # Fill NaN values before cumsum() to prevent NaN propagation
-    cash_balance    = df['Total'].fillna(0.0).cumsum().iloc[-1]
+    cash_balance    = df['Total'].cumsum().iloc[-1]
     margin_loan     = abs(cash_balance) if cash_balance < 0 else 0.0
     if net_deposited > 0:
         realized_ror = total_realized_pnl / net_deposited * 100
@@ -688,7 +692,7 @@ def main():
 
     m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
     m1.metric('Realized P/L',    fmt_dollar(_pnl_display))
-    m1.caption('All cash actually banked — options P/L, share sales, premiums collected. Filtered to selected time window. Unrealised share P/L not included.')
+    m1.caption('All cash actually banked — options P/L, share sales, premiums collected. ' + ('Full account history.' if _is_all_time else 'Filtered to selected time window.') + ' Unrealised share P/L not included.')
     if _ror_display is None:
         _ror_label  = '∞ house money' if net_deposited < 0 else 'N/A'
         _ror_help   = (
@@ -717,7 +721,7 @@ def main():
         )
     _cap_label = '%.1f%%' % cap_eff_score if cap_eff_score is not None else 'N/A'
     m3.metric('Cap Efficiency', _cap_label)
-    m3.caption('Annualised return on capital deployed in shares — (Realized P/L ÷ Capital Deployed) × 365. Benchmark: S&P ~10%/yr. Shows if your wheel is outperforming simple buy-and-hold on the same capital.' if cap_eff_score is not None else 'No capital currently deployed in share positions.')
+    m3.caption('Annualised return on capital deployed in shares — (Window P/L ÷ Capital Deployed ÷ Window Days × 365). Responds to the time window selector: short windows will show higher or lower rates than the true long-run figure. Benchmark: S&P ~10%/yr.' if cap_eff_score is not None else 'No capital currently deployed in share positions.')
     m4.metric('Capital Deployed',fmt_dollar(capital_deployed))
     m4.caption('Cash tied up in open share positions (wheel campaigns + any fractional holdings). Options margin not included.')
     m5.metric('Margin Loan',     fmt_dollar(margin_loan))
@@ -868,19 +872,19 @@ def main():
         else:
             st.info(window_label)
             st.markdown(f'#### 🎯 Premium Selling Scorecard {_win_label}', unsafe_allow_html=True)
-            st.caption(
+            st.caption((
                 'Credit trades only. '
-                '**Win Rate** = % of trades closed positive, regardless of size. '
-                '**Median Capture %** = typical % of opening credit kept at close — TastyTrade targets 50%. '
+                '**Win Rate** = %% of trades closed positive, regardless of size. '
+                '**Median Capture %%** = typical %% of opening credit kept at close — TastyTrade targets 50%%. '
                 '**Median Days Held** = typical time in a trade, resistant to outliers. '
-                '**Median Ann. Return** = typical annualised return on capital at risk, capped at ±500% to prevent '
+                '**Median Ann. Return** = typical annualised return on capital at risk, capped at ±%d%% to prevent '
                 '0DTE trades producing meaningless numbers — treat with caution on small sample sizes. '
                 '**Med Premium/Day** = median credit-per-day across individual trades — your typical theta capture rate per trade, '
                 'but skewed upward by short-dated trades where large credits are divided by very few days. '
                 '**Banked $/Day** = realized P/L divided by window days — what you actually kept after all buybacks. '
                 'The delta shows the gross credit rate for context — the gap between the two is your buyback cost. '
                 'This is the number to compare against income needs or running costs.'
-            )
+            ) % ANN_RETURN_CAP)
             dm1, dm2, dm3, dm4, dm5, dm6 = st.columns(6)
             if has_credit:
                 total_credit_rcvd    = credit_cdf['Premium Rcvd'].sum()
@@ -900,8 +904,7 @@ def main():
                 _losers  = all_cdf[all_cdf['Net P/L'] < 0]['Net P/L']
                 _avg_win  = _winners.mean() if not _winners.empty else 0.0
                 _avg_loss = _losers.mean()  if not _losers.empty  else 0.0
-                # When no losing trades exist (_avg_loss=0), return "N/A" rather than 0.0
-                _ratio    = abs(_avg_win / _avg_loss) if _avg_loss < -FIFO_EPSILON else None
+                _ratio    = abs(_avg_win / _avg_loss) if _avg_loss != 0 else None  # None = no losing trades
 
                 # Fees: commissions + fees on all option trades in window
                 _w_option_rows = df_window[
@@ -919,9 +922,8 @@ def main():
                 r1.caption('Mean P/L of all winning trades. Compare to Avg Loser — you want this number meaningfully larger.')
                 r2.metric('Avg Loser',    fmt_dollar(_avg_loss))
                 r2.caption('Mean P/L of all losing trades. A healthy system has avg loss smaller than avg win, even at high win rates.')
-                _ratio_str = 'N/A' if _ratio is None else '%.2fx' % _ratio
-                r3.metric('Win/Loss Ratio', _ratio_str)
-                r3.caption('Avg Winner ÷ Avg Loser. Above 1.0 means your wins are larger than your losses on average. TastyTrade targets >1.0 at lower win rates, or compensates with high win rate if below 1.0.')
+                r3.metric('Win/Loss Ratio', '%.2f×' % _ratio if _ratio is not None else '∞')
+                r3.caption('Avg Winner ÷ Avg Loser. Above 1.0 means your wins are larger than your losses on average. TastyTrade targets >1.0 at lower win rates, or compensates with high win rate if below 1.0. ∞ = no losing trades in this window.')
                 r4.metric('Total Fees',   fmt_dollar(_total_fees))
                 r4.caption('Commissions + exchange fees on option trades in this window. The silent drag on every trade.')
                 r5.metric('Fees % of P/L', '%.1f%%' % _fees_pct)
@@ -1005,16 +1007,16 @@ def main():
 
                 st.markdown('---')
                 st.markdown(f'#### Performance by Ticker {_win_label}', unsafe_allow_html=True)
-                st.caption(
+                st.caption((
                     'All closed trades — credit and debit — grouped by underlying. '
-                    '**Win %** counts any trade that closed positive, regardless of size. '
+                    '**Win %%** counts any trade that closed positive, regardless of size. '
                     '**Total P/L** is your actual net result after all opens and closes on that ticker. '
                     '**Med Days** = median holding period across all trades. '
-                    '**Med Capture %** = median percentage of opening credit kept at close — credit trades only. '
-                    'TastyTrade targets 50% capture. '
-                    '**Med Ann Ret %** = median annualised return on capital at risk, capped at ±500%. '
+                    '**Med Capture %%** = median percentage of opening credit kept at close — credit trades only. '
+                    'TastyTrade targets 50%% capture. '
+                    '**Med Ann Ret %%** = median annualised return on capital at risk, capped at ±%d%%. '
                     '**Total Credit Rcvd** = gross cash received when opening credit trades.'
-                )
+                ) % ANN_RETURN_CAP)
 
                 all_by_ticker = all_cdf.groupby('Ticker').agg(
                     Trades=('Net P/L', 'count'),
@@ -1178,7 +1180,7 @@ def main():
                         _dte_lay['yaxis']['title'] = dict(text='# Trades', font=dict(size=11))
                         _fig_dte.update_layout(**_dte_lay)
                         st.plotly_chart(_fig_dte, width='stretch', config={'displayModeBar': False})
-                        st.caption('🔵 Blue = TastyTrade target close zone (8–21 DTE). Grey = outside target.')
+                        st.caption('🔵 Blue = TastyTrade target close zone (8–21 DTE remaining at close). Grey = outside target. Closing in this window captures most theta while reducing gamma risk.')
 
                 with _tg_col2:
                     if not _roll_cdf.empty and _roll_cdf['Rolling_WR'].notna().sum() >= 2:
@@ -1325,6 +1327,75 @@ def main():
             st.plotly_chart(_fig_hist, width='stretch', config={'displayModeBar': False})
 
             st.markdown('---')
+            # ── Win Rate by DTE Bucket ────────────────────────────────────────
+            st.markdown(f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">🎯 Win Rate &amp; P/L by DTE at Open {_win_label}</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;">Where is your edge strongest? Win rate and average P/L split by days-to-expiry when the trade was opened. Use this to tune which DTE range to target — your best bucket is the one with high win rate <i>and</i> positive average P/L.</div>', unsafe_allow_html=True)
+            if has_credit and 'DTE Open' in all_cdf.columns:
+                _dte_open_df = all_cdf[all_cdf['DTE Open'].notna()].copy()
+                _dte_open_df = _dte_open_df[_dte_open_df['DTE Open'] <= LEAPS_DTE_THRESHOLD]  # exclude LEAPS
+                if not _dte_open_df.empty:
+                    _dte_open_bins   = [0, 7, 14, 21, 30, 45, 60, LEAPS_DTE_THRESHOLD]
+                    _dte_open_labels = ['0–7d', '8–14d', '15–21d', '22–30d', '31–45d', '46–60d', '61–90d']
+                    _dte_open_df['DTE Bucket'] = pd.cut(_dte_open_df['DTE Open'],
+                        bins=_dte_open_bins, labels=_dte_open_labels, include_lowest=True)
+                    _dte_grp = _dte_open_df.groupby('DTE Bucket', observed=True).agg(
+                        Trades=('Won', 'count'),
+                        Win_Rate=('Won', 'mean'),
+                        Avg_PnL=('Net P/L', 'mean'),
+                        Total_PnL=('Net P/L', 'sum'),
+                    ).reset_index()
+                    _dte_grp = _dte_grp[_dte_grp['Trades'] > 0].copy()
+                    _dte_grp['Win_Rate_Pct'] = _dte_grp['Win_Rate'] * 100
+
+                    _dcol1, _dcol2 = st.columns(2)
+                    with _dcol1:
+                        # Win rate bar chart coloured green/red by threshold
+                        _wr_colors = ['#00cc96' if w >= 50 else '#ef553b' for w in _dte_grp['Win_Rate_Pct']]
+                        _fig_dtewr = go.Figure(go.Bar(
+                            x=_dte_grp['DTE Bucket'].astype(str),
+                            y=_dte_grp['Win_Rate_Pct'],
+                            marker_color=_wr_colors, marker_line_width=0,
+                            text=['%.0f%% (%d)' % (w, t) for w, t in zip(_dte_grp['Win_Rate_Pct'], _dte_grp['Trades'])],
+                            textposition='outside',
+                            textfont=dict(size=10, family='IBM Plex Mono'),
+                            hovertemplate='%{x}<br>Win Rate: <b>%{y:.1f}%</b><extra></extra>'
+                        ))
+                        _fig_dtewr.add_hline(y=50, line_dash='dash',
+                            line_color='rgba(255,255,255,0.2)', line_width=1)
+                        _dtewr_lay = chart_layout('Win Rate by DTE at Open (LEAPS excluded)' + _win_suffix, height=300, margin_t=40)
+                        _dtewr_lay['showlegend'] = False
+                        _dtewr_lay['yaxis']['ticksuffix'] = '%'
+                        _dtewr_lay['yaxis']['range'] = [0, 115]
+                        _dtewr_lay['xaxis']['title'] = dict(text='DTE at Open', font=dict(size=11))
+                        _fig_dtewr.update_layout(**_dtewr_lay)
+                        st.plotly_chart(_fig_dtewr, width='stretch', config={'displayModeBar': False})
+                        st.caption('Green = win rate ≥ 50%. Format: 82% (14) = 82% win rate on 14 trades. Dashed line = 50% threshold. Buckets with fewer than 5 trades should be treated with caution.')
+
+                    with _dcol2:
+                        # Average P/L per trade by DTE bucket
+                        _pnl_colors = ['#00cc96' if p >= 0 else '#ef553b' for p in _dte_grp['Avg_PnL']]
+                        _fig_dtepnl = go.Figure(go.Bar(
+                            x=_dte_grp['DTE Bucket'].astype(str),
+                            y=_dte_grp['Avg_PnL'],
+                            marker_color=_pnl_colors, marker_line_width=0,
+                            text=[fmt_dollar(p, 0) for p in _dte_grp['Avg_PnL']],
+                            textposition='outside',
+                            textfont=dict(size=10, family='IBM Plex Mono'),
+                            hovertemplate='%{x}<br>Avg P/L: <b>$%{y:,.2f}</b><extra></extra>'
+                        ))
+                        _fig_dtepnl.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
+                        _dtepnl_lay = chart_layout('Avg P/L per Trade by DTE at Open' + _win_suffix, height=300, margin_t=40)
+                        _dtepnl_lay['showlegend'] = False
+                        _dtepnl_lay['yaxis']['tickprefix'] = '$'
+                        _dtepnl_lay['yaxis']['tickformat'] = ',.0f'
+                        _dtepnl_lay['xaxis']['title'] = dict(text='DTE at Open', font=dict(size=11))
+                        _fig_dtepnl.update_layout(**_dtepnl_lay)
+                        st.plotly_chart(_fig_dtepnl, width='stretch', config={'displayModeBar': False})
+                        st.caption('Average realized P/L per trade in each DTE bucket. Your sweet spot is the bucket with both high win rate and positive avg P/L.')
+                else:
+                    st.info('Not enough trades with DTE data in this window.')
+
+            st.markdown('---')
             st.markdown(f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">🗓 P/L by Ticker &amp; Month {_win_label}</div>', unsafe_allow_html=True)
             st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;">Net P/L per ticker per calendar month (by close date). Green = profitable, red = losing. Intensity shows size. Grey = no closed trades that month.</div>', unsafe_allow_html=True)
             _hm_df = all_cdf.copy()
@@ -1426,11 +1497,11 @@ def main():
             st.info("💡 **Lifetime mode** — all history for a ticker combined into one campaign. Effective basis and premiums accumulate across the full holding period without resetting.")
         else:
             st.caption(
-                'Tracks each share-holding period as a campaign — starting when you buy 100+ shares, ending when you exit. '
+                ('Tracks each share-holding period as a campaign — starting when you buy %d+ shares, ending when you exit. '
                 'Premiums banked from covered calls, covered strangles, and short puts are credited against your cost basis, '
                 'reducing your effective break-even over time. Legging in or out of one side (e.g. closing a put while keeping '
                 'the covered call) shows naturally as separate call/put chains below. '
-                'Campaigns reset when shares hit zero — toggle Lifetime mode to see your full history as one continuous position.'
+                'Campaigns reset when shares hit zero — toggle Lifetime mode to see your full history as one continuous position.') % WHEEL_MIN_SHARES
             )
         if not all_campaigns:
             st.info('No wheel campaigns found.')
@@ -1506,6 +1577,69 @@ def main():
                         ticker_opts = ticker_opts[
                             (ticker_opts['Date'] >= camp_start) & (ticker_opts['Date'] <= camp_end)
                         ]
+
+                        # ── P/L Waterfall ──────────────────────────────────────
+                        # Shows how each component contributes to the campaign result:
+                        # Share cost → premiums banked → dividends → exit proceeds → net P/L
+                        _wf_share_cost = -abs(c.total_cost)
+                        _wf_premiums   = c.premiums
+                        _wf_dividends  = c.dividends
+                        _wf_exit       = c.exit_proceeds if c.status == 'closed' else 0.0
+                        _wf_net        = rpnl
+
+                        _wf_labels  = ['Share Cost', 'Premiums', 'Dividends']
+                        _wf_values  = [_wf_share_cost, _wf_premiums, _wf_dividends]
+                        _wf_measure = ['absolute', 'relative', 'relative']
+
+                        if c.status == 'closed':
+                            _wf_labels.append('Exit Proceeds')
+                            _wf_values.append(_wf_exit)
+                            _wf_measure.append('relative')
+
+                        _wf_labels.append('Net P/L')
+                        _wf_values.append(_wf_net)
+                        _wf_measure.append('total')
+
+                        _wf_colors = []
+                        for lbl, val, msr in zip(_wf_labels, _wf_values, _wf_measure):
+                            if msr == 'absolute':
+                                _wf_colors.append('#ef553b')        # share cost always red (outflow)
+                            elif msr == 'total':
+                                _wf_colors.append('#00cc96' if val >= 0 else '#ef553b')
+                            else:
+                                _wf_colors.append('#00cc96' if val >= 0 else '#ef553b')
+
+                        _fig_wf = go.Figure(go.Waterfall(
+                            orientation='v',
+                            measure=_wf_measure,
+                            x=_wf_labels,
+                            y=_wf_values,
+                            connector=dict(line=dict(color='rgba(255,255,255,0.15)', width=1, dash='dot')),
+                            increasing=dict(marker=dict(color='#00cc96', line=dict(width=0))),
+                            decreasing=dict(marker=dict(color='#ef553b', line=dict(width=0))),
+                            totals=dict(marker=dict(
+                                color='#00cc96' if _wf_net >= 0 else '#ef553b',
+                                line=dict(width=0)
+                            )),
+                            text=[fmt_dollar(abs(v)) for v in _wf_values],
+                            textposition='outside',
+                            textfont=dict(size=10, family='IBM Plex Mono', color='#c9d1d9'),
+                            hovertemplate='%{x}<br><b>%{y:$,.2f}</b><extra></extra>',
+                        ))
+                        _wf_lay = chart_layout(
+                            f'{xe(ticker)} Campaign {i+1} — P/L Waterfall',
+                            height=280, margin_t=36
+                        )
+                        _wf_lay['showlegend'] = False
+                        _wf_lay['yaxis']['tickprefix'] = '$'
+                        _wf_lay['yaxis']['tickformat'] = ',.0f'
+                        _fig_wf.update_layout(**_wf_lay)
+                        st.plotly_chart(_fig_wf, width='stretch', config={'displayModeBar': False})
+                        if c.status == 'open':
+                            st.caption('Share cost = total cash paid for shares. Premiums and dividends reduce your effective basis. Exit proceeds will appear when the campaign closes.')
+                        else:
+                            st.caption('Share cost = total cash paid for shares. Each component stacks to show how premiums, dividends, and the share exit combine into your net P/L.')
+
                         chains = build_option_chains(ticker_opts)
 
                         if chains:
@@ -1586,29 +1720,132 @@ def main():
     with tab4:
         st.markdown(f'### 🔍 Realized P/L — All Tickers {_win_label}', unsafe_allow_html=True)
 
-        # ── Sparkline equity curve ─────────────────────────────────────────────────
-        if not closed_trades_df.empty:
-            _spark_df = closed_trades_df[closed_trades_df['Close Date'] >= start_date].sort_values('Close Date').copy()
-            if _spark_df.empty:
-                _spark_df = closed_trades_df.sort_values('Close Date').copy()
-            _spark_df['Cum P/L'] = _spark_df['Net P/L'].cumsum()
-            _spark_color = '#00cc96' if _spark_df['Cum P/L'].iloc[-1] >= 0 else '#ef553b'
-            _fill_color  = 'rgba(0,204,150,0.15)' if _spark_color == '#00cc96' else 'rgba(239,85,59,0.15)'
-            _fig_spark = go.Figure()
-            _fig_spark.add_trace(go.Scatter(
-                x=_spark_df['Close Date'], y=_spark_df['Cum P/L'],
-                mode='lines', line=dict(color=_spark_color, width=1.5),
-                fill='tozeroy', fillcolor=_fill_color,
-                hovertemplate='%{x|%d/%m/%y}<br>$%{y:,.2f}<extra></extra>'
+        # ── Portfolio Equity Curve ─────────────────────────────────────────────────
+        # Full-history FIFO-correct cumulative P/L: options + equity sales + dividends.
+        # Uses _daily_pnl_all (all-time) so the curve shows your true account trajectory
+        # from day one — not just the selected window. The selected window is shaded.
+        st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:8px;line-height:1.5;">Full-history cumulative realized P/L — options, equity sales, dividends and interest. FIFO-correct. Shaded region = selected time window.</div>', unsafe_allow_html=True)
+        if not _daily_pnl_all.empty:
+            _eq_curve = _daily_pnl_all.sort_values('Date').copy()
+            _eq_curve['Cum P/L'] = _eq_curve['PnL'].cumsum()
+            _eq_final   = _eq_curve['Cum P/L'].iloc[-1]
+            _eq_color   = '#00cc96' if _eq_final >= 0 else '#ef553b'
+            _eq_fill    = 'rgba(0,204,150,0.10)' if _eq_final >= 0 else 'rgba(239,85,59,0.10)'
+
+            # Peak for drawdown shading
+            _eq_curve['Peak']     = _eq_curve['Cum P/L'].cummax()
+            _eq_curve['Drawdown'] = _eq_curve['Cum P/L'] - _eq_curve['Peak']
+
+            _fig_eq2 = go.Figure()
+
+            # Drawdown fill (below peak — shows recovery valleys)
+            _dd_mask = _eq_curve['Drawdown'] < 0
+            if _dd_mask.any():
+                _fig_eq2.add_trace(go.Scatter(
+                    x=_eq_curve['Date'], y=_eq_curve['Peak'],
+                    mode='lines', line=dict(width=0),
+                    showlegend=False, hoverinfo='skip'
+                ))
+                _fig_eq2.add_trace(go.Scatter(
+                    x=_eq_curve['Date'], y=_eq_curve['Cum P/L'],
+                    mode='none', fill='tonexty',
+                    fillcolor='rgba(239,85,59,0.18)',
+                    showlegend=False, hoverinfo='skip',
+                    name='Drawdown'
+                ))
+
+            # Main equity curve
+            _fig_eq2.add_trace(go.Scatter(
+                x=_eq_curve['Date'], y=_eq_curve['Cum P/L'],
+                mode='lines', line=dict(color=_eq_color, width=2),
+                fill='tozeroy', fillcolor=_eq_fill,
+                name='Cumulative P/L',
+                hovertemplate='%{x|%d/%m/%y}<br><b>%{y:$,.2f}</b><extra></extra>'
             ))
-            _fig_spark.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
-            _fig_spark.update_layout(
-                height=90, margin=dict(l=0, r=0, t=4, b=4),
-                paper_bgcolor='rgba(10,14,23,0)', plot_bgcolor='rgba(10,14,23,0)',
-                xaxis=dict(visible=False), yaxis=dict(visible=False),
-                showlegend=False
+
+            # Selected window shading
+            if not _is_all_time:
+                _fig_eq2.add_vrect(
+                    x0=start_date, x1=latest_date,
+                    fillcolor='rgba(88,166,255,0.06)',
+                    line=dict(color='rgba(88,166,255,0.3)', width=1, dash='dot'),
+                    annotation_text=selected_period,
+                    annotation_position='top left',
+                    annotation_font=dict(color='#58a6ff', size=10)
+                )
+
+            # Final value annotation
+            _fig_eq2.add_annotation(
+                x=_eq_curve['Date'].iloc[-1], y=_eq_final,
+                text='<b>%s</b>' % fmt_dollar(_eq_final),
+                showarrow=False, xanchor='right', yanchor='bottom',
+                font=dict(color=_eq_color, size=12, family='IBM Plex Mono'),
+                bgcolor='rgba(10,14,23,0.8)', borderpad=4
             )
-            st.plotly_chart(_fig_spark, width='stretch', config={'displayModeBar': False})
+
+            _fig_eq2.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
+
+            _eq2_lay = chart_layout('Portfolio Equity Curve — Cumulative Realized P/L', height=300, margin_t=36)
+            _eq2_lay['yaxis']['tickprefix'] = '$'
+            _eq2_lay['yaxis']['tickformat'] = ',.0f'
+            _eq2_lay['showlegend'] = False
+            _fig_eq2.update_layout(**_eq2_lay)
+            st.plotly_chart(_fig_eq2, width='stretch', config={'displayModeBar': False})
+            st.caption('Red shading between curve and peak = drawdown from realized P/L peak (not account value — deposits and withdrawals are excluded entirely). Blue shaded region = selected time window. Curve always starts from your first transaction regardless of window selection.')
+
+            # ── Top single-day P/L events ──────────────────────────────────────
+            # Explains spikes and troughs in the equity curve above.
+            # Uses _daily_pnl_all (all-time) so big days outside the window are visible.
+            if len(_daily_pnl_all) >= 2:
+                _top_days = _daily_pnl_all.copy()
+                _top_days = _top_days.reindex(_top_days['PnL'].abs().sort_values(ascending=False).index)
+                _top_days = _top_days.head(10).copy()
+                _top_days['Date'] = pd.to_datetime(_top_days['Date'])
+
+                # For each big day, find the dominant transaction type
+                def _day_summary(date):
+                    _d_rows = df[df['Date'].dt.date == date.date()]
+                    # Options trades
+                    _opts = _d_rows[
+                        _d_rows['Instrument Type'].isin(OPT_TYPES) &
+                        _d_rows['Type'].isin(TRADE_TYPES)
+                    ]
+                    # Equity sells
+                    _eq_sells = _d_rows[
+                        equity_mask(_d_rows['Instrument Type']) &
+                        (_d_rows['Net_Qty_Row'] < 0)
+                    ]
+                    # Income
+                    _inc = _d_rows[_d_rows['Sub Type'].isin(INCOME_SUB_TYPES)]
+                    parts = []
+                    if not _opts.empty:
+                        _tickers = ', '.join(sorted(_opts['Ticker'].unique()[:3]))
+                        parts.append('Options (%s)' % _tickers)
+                    if not _eq_sells.empty:
+                        _tickers = ', '.join(sorted(_eq_sells['Ticker'].unique()[:3]))
+                        parts.append('Equity sale (%s)' % _tickers)
+                    if not _inc.empty:
+                        _tickers = ', '.join(sorted(_inc['Ticker'].dropna().unique()[:3]))
+                        parts.append('Income (%s)' % _tickers if _tickers else 'Income')
+                    return ' + '.join(parts) if parts else '—'
+
+                _top_days['What'] = _top_days['Date'].apply(_day_summary)
+                _top_days['P/L']  = _top_days['PnL'].apply(fmt_dollar)
+                _top_days['Date_fmt'] = _top_days['Date'].dt.strftime('%d %b %Y')
+
+                with st.expander('🔍 Top 10 single-day P/L events (explains curve spikes)', expanded=False):
+                    _top_display = _top_days[['Date_fmt', 'P/L', 'What']].copy()
+                    _top_display.columns = ['Date', 'P/L', 'What']
+                    st.dataframe(
+                        _top_display.style.map(
+                            lambda v: 'color:#00cc96;font-family:IBM Plex Mono' if v.startswith('$') and '-' not in v
+                                      else ('color:#ef553b;font-family:IBM Plex Mono' if v.startswith('-') or '−' in v else ''),
+                            subset=['P/L']
+                        ),
+                        width='stretch', hide_index=True
+                    )
+                    st.caption('Sorted by absolute P/L — largest moves first regardless of direction. Covers full account history, not just the selected window.')
+
         st.markdown('---')
         rows = []
         for ticker, camps in sorted(all_campaigns.items()):
@@ -1828,6 +2065,52 @@ def main():
                 _fig_vol.update_layout(**_vol_lay)
                 st.plotly_chart(_fig_vol, width='stretch', config={'displayModeBar': False})
                 st.caption('Amber dotted lines = rolling 4-week std dev (right axis). When the amber band widens your results are getting lumpier — tighten position sizing or reduce undefined risk.')
+
+                # ── Rolling 90-day Capital Efficiency ─────────────────────────
+                # Shows how the annualised return on deployed capital has evolved
+                # over time — each point is (90-day rolling P/L / capital_deployed)
+                # annualised. A rising line means you are deploying capital more
+                # productively. Flat or falling = position sizing or selection drifting.
+                if capital_deployed > 0 and len(_weekly_pnl) >= 6:
+                    st.markdown('---')
+                    st.markdown(f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;letter-spacing:0.01em;">📈 Rolling Capital Efficiency {_win_label}</div>', unsafe_allow_html=True)
+                    st.markdown('<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;">Annualised return on deployed capital on a rolling 13-week (90-day) basis. Shows whether your capital efficiency is improving or drifting over time. Benchmark: S&amp;P ~10%/yr.</div>', unsafe_allow_html=True)
+
+                    _roll_pnl = _weekly_pnl.copy()
+                    # 13-week rolling sum of P/L, annualised against current capital deployed
+                    _roll_pnl['Rolling_PnL_90d'] = _roll_pnl['PnL'].rolling(13, min_periods=4).sum()
+                    _roll_pnl['Rolling_CapEff']  = (
+                        _roll_pnl['Rolling_PnL_90d'] / capital_deployed / 90 * 365 * 100
+                    )
+                    _roll_valid = _roll_pnl.dropna(subset=['Rolling_CapEff'])
+
+                    if not _roll_valid.empty:
+                        _ce_color = '#00cc96' if _roll_valid['Rolling_CapEff'].iloc[-1] >= 0 else '#ef553b'
+                        _ce_fill  = 'rgba(0,204,150,0.08)' if _roll_valid['Rolling_CapEff'].iloc[-1] >= 0 else 'rgba(239,85,59,0.08)'
+                        _fig_ce = go.Figure()
+                        _fig_ce.add_hrect(y0=0, y1=10, fillcolor='rgba(255,164,33,0.04)',
+                            line_width=0, annotation_text='S&P benchmark ~10%',
+                            annotation_position='top left',
+                            annotation_font=dict(color='#ffa421', size=10))
+                        _fig_ce.add_trace(go.Scatter(
+                            x=_roll_valid['Week'], y=_roll_valid['Rolling_CapEff'],
+                            mode='lines', line=dict(color=_ce_color, width=2),
+                            fill='tozeroy', fillcolor=_ce_fill,
+                            hovertemplate='Week of %{x|%d %b}<br>Cap Efficiency: <b>%{y:.1f}%</b><extra></extra>'
+                        ))
+                        _fig_ce.add_hline(y=10, line_dash='dot', line_color='#ffa421',
+                            line_width=1.5,
+                            annotation_text='S&P ~10%',
+                            annotation_position='bottom right',
+                            annotation_font=dict(color='#ffa421', size=11))
+                        _fig_ce.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
+                        _ce_lay = chart_layout('Rolling 90-day Capital Efficiency (annualised)' + _win_suffix, height=300, margin_t=40)
+                        _ce_lay['yaxis']['ticksuffix'] = '%'
+                        _ce_lay['yaxis']['tickformat'] = ',.0f'
+                        _fig_ce.update_layout(**_ce_lay)
+                        st.plotly_chart(_fig_ce, width='stretch', config={'displayModeBar': False})
+                        st.caption('Rolling 13-week P/L annualised against your current capital deployed. Note: capital deployed is today\'s figure applied to historical P/L — if position sizes have changed significantly over time, earlier periods will be under or overstated. Amber line = S&P ~10%/yr benchmark.')
+
             else:
                 st.info('Not enough data in this window for volatility metrics (need at least 2 days of activity).')
         else:

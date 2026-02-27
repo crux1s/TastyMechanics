@@ -284,11 +284,8 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                     dividends += total
                     events.append({'date': row.Date, 'type': SUB_DIVIDEND,
                         'detail': SUB_DIVIDEND, 'cash': total})
-            # Sum only buy trades (positive share rows with Trade type)
-            # Skip deposits, withdrawals, dividends, interest, and fees
-            buy_rows = t[(t['Type'].isin(TRADE_TYPES)) & (t['Instrument_Type'].apply(is_share_row))]
-            total_cost_paid = buy_rows[buy_rows['Net_Qty_Row'] > 0]['Total'].sum()
-            total_cost = abs(total_cost_paid) if total_cost_paid < 0 else total_cost_paid
+            net_lifetime_cash = t[t['Type'].isin(MONEY_TYPES)]['Total'].sum()
+            total_cost = abs(net_lifetime_cash) if net_lifetime_cash < 0 else 0.0
             return [Campaign(
                 ticker=ticker, total_shares=net_shares,
                 total_cost=total_cost,
@@ -450,8 +447,7 @@ def pure_options_pnl(df: pd.DataFrame, ticker: str, campaigns: list[Campaign]) -
     dates = t['Date']
     in_any_window = pd.Series(False, index=t.index)
     for s, e in windows:
-        # Use exclusive upper bound to match calculate_windowed_equity_pnl and prevent double-counting
-        in_any_window |= (dates >= s) & (dates < e)
+        in_any_window |= (dates >= s) & (dates <= e)
     return t.loc[~in_any_window, 'Total'].sum()
 
 # ── DERIVATIVES METRICS ENGINE ─────────────────────────────────────────────────
@@ -547,9 +543,17 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
                 wing_width = (strikes_all.max() - strikes_all.min()) * 100 / 2
                 capital_risk = max(abs(open_credit), wing_width, 1)
             elif is_jade_lizard:
+                # Standard Jade Lizard: short put (naked) + short call spread.
+                # Max loss is on the put side — the naked short put carries uncapped
+                # downside. Best practical proxy: put_strike × 100 − net credit received.
+                # The original code used w_call (call spread width) which is wrong —
+                # it understates risk on high-strike put assignments.
+                # TODO(reverse_jade_lizard): A Reverse Jade Lizard (short call naked +
+                # short put spread) has the opposite risk profile — max loss on the call
+                # side. Detect and handle separately once trades exist in the CSV.
+                _jl_put_strike = float(put_strikes.min()) if len(put_strikes) > 0 else 0.0
                 trade_type   = 'Jade Lizard'
-                # Jade Lizard max loss is the put width, not the call width
-                capital_risk = max(w_put - abs(open_credit), 1)
+                capital_risk = max(_jl_put_strike * 100 - abs(open_credit), 1)
             elif is_calendar:
                 # TODO(calendar): Detection is correct (same strike, 2+ expirations).
                 # Capital risk should be debit paid for debit calendars, credit received
@@ -696,17 +700,17 @@ def build_option_chains(ticker_opts: pd.DataFrame) -> list:
                 'desc': str(row.Description)[:55],
             }
             if 'to open' in sub and qty < 0:
-                if last_close_date is not None and abs(net_qty) < FIFO_EPSILON:
+                if last_close_date is not None and net_qty == 0:
                     if (row.Date - last_close_date).days > ROLL_CHAIN_GAP_DAYS and current_chain:
                         chains.append(current_chain)
                         current_chain = []
-                net_qty += qty  # qty is already negative for STO
+                net_qty += abs(qty)
                 current_chain.append(event)
                 last_close_date = None
-            elif (PAT_CLOSE in sub or 'expiration' in sub or 'assignment' in sub):
-                net_qty += qty  # qty is positive for BTC, so this reduces the position
+            elif net_qty > 0 and (PAT_CLOSE in sub or 'expiration' in sub or 'assignment' in sub):
+                net_qty = max(net_qty - abs(qty), 0)
                 current_chain.append(event)
-                if abs(net_qty) < FIFO_EPSILON:
+                if net_qty == 0:
                     last_close_date = row.Date
 
         if current_chain:
