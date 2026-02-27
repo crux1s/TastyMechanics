@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 8501
 
-CMD ["streamlit", "run", "Tastytrade_CSV_Dashboard_v25.9.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["streamlit", "run", "tastymechanics.py", "--server.port=8501", "--server.address=0.0.0.0"]
