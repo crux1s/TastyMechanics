@@ -15,7 +15,7 @@ Classes
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, NamedTuple
+from typing import Optional, NamedTuple, Literal
 
 import pandas as pd
 
@@ -37,8 +37,8 @@ class ParsedData(NamedTuple):
                    that will overstate P/L on eventual sale.
     """
     df:             pd.DataFrame
-    split_events:   list
-    zero_cost_rows: list
+    split_events:   list[dict]
+    zero_cost_rows: list[dict]
 
 
 # ── Campaign model ────────────────────────────────────────────────────────────
@@ -75,8 +75,8 @@ class Campaign:
     exit_proceeds:  float
     start_date:     pd.Timestamp
     end_date:       Optional[pd.Timestamp]
-    status:         str                     # 'open' | 'closed'
-    events:         list = field(default_factory=list)
+    status:         Literal['open', 'closed']
+    events:         list[dict] = field(default_factory=list)
 
 
 # ── Computation output ────────────────────────────────────────────────────────
@@ -89,9 +89,9 @@ class AppData:
     Replaces a fragile positional tuple — fields are named, self-documenting,
     and safe to reorder or extend without breaking callers.
     """
-    all_campaigns:          dict            # {ticker: list[Campaign]}
-    wheel_tickers:          list
-    pure_options_tickers:   list
+    all_campaigns:          dict[str, list[Campaign]]
+    wheel_tickers:          list[str]
+    pure_options_tickers:   list[str]
     closed_trades_df:       pd.DataFrame
     df_open:                pd.DataFrame
     closed_camp_pnl:        float
@@ -99,6 +99,6 @@ class AppData:
     capital_deployed:       float
     pure_opts_pnl:          float
     extra_capital_deployed: float
-    pure_opts_per_ticker:   dict            # {ticker: float} options P/L outside campaign windows
-    split_events:           list            # [{ticker,date,ratio,...}] detected stock splits
-    zero_cost_rows:         list            # [{ticker,date,qty,...}] zero-cost deliveries
+    pure_opts_per_ticker:   dict[str, float]
+    split_events:           list[dict]
+    zero_cost_rows:         list[dict]

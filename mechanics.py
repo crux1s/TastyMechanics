@@ -284,8 +284,11 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                     dividends += total
                     events.append({'date': row.Date, 'type': SUB_DIVIDEND,
                         'detail': SUB_DIVIDEND, 'cash': total})
-            net_lifetime_cash = t[t['Type'].isin(MONEY_TYPES)]['Total'].sum()
-            total_cost = abs(net_lifetime_cash) if net_lifetime_cash < 0 else 0.0
+            # Sum only buy trades (positive share rows with Trade type)
+            # Skip deposits, withdrawals, dividends, interest, and fees
+            buy_rows = t[(t['Type'].isin(TRADE_TYPES)) & (t['Instrument_Type'].apply(is_share_row))]
+            total_cost_paid = buy_rows[buy_rows['Net_Qty_Row'] > 0]['Total'].sum()
+            total_cost = abs(total_cost_paid) if total_cost_paid < 0 else total_cost_paid
             return [Campaign(
                 ticker=ticker, total_shares=net_shares,
                 total_cost=total_cost,
@@ -447,7 +450,8 @@ def pure_options_pnl(df: pd.DataFrame, ticker: str, campaigns: list[Campaign]) -
     dates = t['Date']
     in_any_window = pd.Series(False, index=t.index)
     for s, e in windows:
-        in_any_window |= (dates >= s) & (dates <= e)
+        # Use exclusive upper bound to match calculate_windowed_equity_pnl and prevent double-counting
+        in_any_window |= (dates >= s) & (dates < e)
     return t.loc[~in_any_window, 'Total'].sum()
 
 # ── DERIVATIVES METRICS ENGINE ─────────────────────────────────────────────────
@@ -544,7 +548,8 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
                 capital_risk = max(abs(open_credit), wing_width, 1)
             elif is_jade_lizard:
                 trade_type   = 'Jade Lizard'
-                capital_risk = max(w_call - abs(open_credit), 1)
+                # Jade Lizard max loss is the put width, not the call width
+                capital_risk = max(w_put - abs(open_credit), 1)
             elif is_calendar:
                 # TODO(calendar): Detection is correct (same strike, 2+ expirations).
                 # Capital risk should be debit paid for debit calendars, credit received
@@ -691,17 +696,17 @@ def build_option_chains(ticker_opts: pd.DataFrame) -> list:
                 'desc': str(row.Description)[:55],
             }
             if 'to open' in sub and qty < 0:
-                if last_close_date is not None and net_qty == 0:
+                if last_close_date is not None and abs(net_qty) < FIFO_EPSILON:
                     if (row.Date - last_close_date).days > ROLL_CHAIN_GAP_DAYS and current_chain:
                         chains.append(current_chain)
                         current_chain = []
-                net_qty += abs(qty)
+                net_qty += qty  # qty is already negative for STO
                 current_chain.append(event)
                 last_close_date = None
-            elif net_qty > 0 and (PAT_CLOSE in sub or 'expiration' in sub or 'assignment' in sub):
-                net_qty = max(net_qty - abs(qty), 0)
+            elif (PAT_CLOSE in sub or 'expiration' in sub or 'assignment' in sub):
+                net_qty += qty  # qty is positive for BTC, so this reduces the position
                 current_chain.append(event)
-                if net_qty == 0:
+                if abs(net_qty) < FIFO_EPSILON:
                     last_close_date = row.Date
 
         if current_chain:

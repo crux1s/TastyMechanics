@@ -437,10 +437,13 @@ def main():
         if _exclude_zc:
             _zc_excluded = set(_zc_tickers_all)
 
+    # Create filtered df for P&L calculations BEFORE get_daily_pnl() to avoid chart/metric mismatch
+    df_pnl = df  # Will be reassigned to filtered version below if zero-cost exclusion is active
+
     if _zc_excluded:
         # Strip excluded tickers from every aggregated variable.
         # df stays intact for deposits/withdrawals — we only filter the P/L-relevant slices.
-        df = df[~df['Ticker'].isin(_zc_excluded)].copy()
+        df_pnl = df[~df['Ticker'].isin(_zc_excluded)].copy()
 
         # Campaigns
         all_campaigns  = {t: c for t, c in all_campaigns.items()  if t not in _zc_excluded}
@@ -464,14 +467,14 @@ def main():
         _pot_eq = 0.0
         _pot_cap = 0.0
         for _t in pure_options_tickers:
-            _t_eq = df[equity_mask(df['Instrument Type']) & (df['Ticker'] == _t)].sort_values('Date')
+            _t_eq = df_pnl[equity_mask(df_pnl['Instrument Type']) & (df_pnl['Ticker'] == _t)].sort_values('Date')
             _pot_eq  += sum(p - c for _, p, c in _iter_fifo_sells(_t_eq))
             _pot_cap += _t_eq[_t_eq['Net_Qty_Row'] > 0]['Total'].apply(abs).sum()
         pure_opts_pnl  += _pot_eq
         capital_deployed += _pot_cap
 
         # Recompute dividends/income without excluded tickers
-        _all_time_income     = df[df['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
+        _all_time_income     = df_pnl[df_pnl['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
         _wheel_divs_in_camps = sum(c.dividends for camps in all_campaigns.values() for c in camps)
 
         total_realized_pnl   = (closed_camp_pnl + open_premiums_banked + pure_opts_pnl
@@ -576,7 +579,8 @@ def main():
         if not closed_trades_df.empty else pd.DataFrame()
 
     # Slice the cached all-time daily P/L series to the current window
-    _daily_pnl_all = get_daily_pnl(df)
+    # Use df_pnl (filtered version) to match window P&L metric
+    _daily_pnl_all = get_daily_pnl(df_pnl)
     _daily_pnl     = _daily_pnl_all[
         _daily_pnl_all['Date'] >= start_date
     ].copy()
@@ -629,7 +633,8 @@ def main():
     net_deposited   = total_deposited + total_withdrawn
     first_date      = df['Date'].min()
     account_days    = (latest_date - first_date).days
-    cash_balance    = df['Total'].cumsum().iloc[-1]
+    # Fill NaN values before cumsum() to prevent NaN propagation
+    cash_balance    = df['Total'].fillna(0.0).cumsum().iloc[-1]
     margin_loan     = abs(cash_balance) if cash_balance < 0 else 0.0
     if net_deposited > 0:
         realized_ror = total_realized_pnl / net_deposited * 100
@@ -894,7 +899,8 @@ def main():
                 _losers  = all_cdf[all_cdf['Net P/L'] < 0]['Net P/L']
                 _avg_win  = _winners.mean() if not _winners.empty else 0.0
                 _avg_loss = _losers.mean()  if not _losers.empty  else 0.0
-                _ratio    = abs(_avg_win / _avg_loss) if _avg_loss != 0 else 0.0
+                # When no losing trades exist (_avg_loss=0), return "N/A" rather than 0.0
+                _ratio    = abs(_avg_win / _avg_loss) if _avg_loss < -FIFO_EPSILON else None
 
                 # Fees: commissions + fees on all option trades in window
                 _w_option_rows = df_window[
@@ -912,7 +918,8 @@ def main():
                 r1.caption('Mean P/L of all winning trades. Compare to Avg Loser — you want this number meaningfully larger.')
                 r2.metric('Avg Loser',    fmt_dollar(_avg_loss))
                 r2.caption('Mean P/L of all losing trades. A healthy system has avg loss smaller than avg win, even at high win rates.')
-                r3.metric('Win/Loss Ratio', '%.2fx' % _ratio)
+                _ratio_str = 'N/A' if _ratio is None else '%.2fx' % _ratio
+                r3.metric('Win/Loss Ratio', _ratio_str)
                 r3.caption('Avg Winner ÷ Avg Loser. Above 1.0 means your wins are larger than your losses on average. TastyTrade targets >1.0 at lower win rates, or compensates with high win rate if below 1.0.')
                 r4.metric('Total Fees',   fmt_dollar(_total_fees))
                 r4.caption('Commissions + exchange fees on option trades in this window. The silent drag on every trade.')

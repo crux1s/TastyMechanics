@@ -100,7 +100,13 @@ def get_signed_qty(row: pd.Series) -> float:
         if 'ASSIGNMENT' in dsc:                          return  qty
         if any(p in dsc for p in SPLIT_DSC_PATTERNS):   return  0
         return -qty
-    return 0
+    # If none of the known action patterns matched, raise an error instead of silently returning 0.
+    # This prevents FIFO corruption from unrecognised CSV formats or TastyTrade API changes.
+    raise CSVParseError(
+        f"Unrecognised transaction action or description. "
+        f"Action: '{row['Action']}', Description: '{row['Description'][:100]}'. "
+        f"Please report this at GitHub if the action pattern is legitimate."
+    )
 
 
 def equity_mask(series: pd.Series) -> pd.Series:
