@@ -76,7 +76,7 @@ pip install streamlit pandas plotly
 ### Run
 
 ```bash
-streamlit run Tastytrade_CSV_Dashboard_v25.9.py
+streamlit run tastymechanics.py
 ```
 
 Then open `http://localhost:8501` in your browser.
@@ -97,7 +97,7 @@ Then open `http://localhost:8501` in your browser.
 
 1. Fork this repository
 2. Go to [share.streamlit.io](https://share.streamlit.io) and sign in with GitHub
-3. Click **New app** → select your fork → set main file to `Tastytrade_CSV_Dashboard_v25.9.py`
+3. Click **New app** → select your fork → set main file to `tastymechanics.py`
 4. Deploy — no secrets or environment variables required
 
 ---
