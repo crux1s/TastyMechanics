@@ -17,6 +17,7 @@ from config import (
     INDEX_STRIKE_THRESHOLD,
     SPLIT_DSC_PATTERNS, ZERO_COST_WARN_TYPES,
     REQUIRED_COLUMNS,
+    FIFO_EPSILON,
 )
 
 # ── UI helpers & components (all in ui_components.py) ─────────────────────────
