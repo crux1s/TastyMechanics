@@ -28,9 +28,41 @@ import pandas as pd
 from config import (
     SPLIT_DSC_PATTERNS,
     REQUIRED_COLUMNS,
+    FIFO_ROUND,
 )
 
 from models import ParsedData
+
+
+# ── CSV parse exceptions ──────────────────────────────────────────────────────
+
+class CSVParseError(Exception):
+    """Base exception for all ingestion failures.
+    Catch this in the UI layer to display a clean user-facing message.
+    All subclasses carry a message safe to show directly to the user."""
+
+
+class CSVEncodingError(CSVParseError):
+    """File bytes could not be decoded as UTF-8.
+    Usually caused by opening the CSV in Excel and re-saving, which converts
+    the encoding to Windows-1252 (cp1252). Re-export directly from TastyTrade."""
+
+
+class CSVStructureError(CSVParseError):
+    """File is not a valid CSV or has no rows after the header.
+    Could be a PDF, HTML error page, or a zero-row export."""
+
+
+class CSVDateParseError(CSVParseError):
+    """Date column could not be parsed.
+    TastyTrade exports ISO 8601 timestamps with a +00:00 suffix. Any other
+    format indicates the file has been modified or is not a TastyTrade export."""
+
+
+class CSVValueError(CSVParseError):
+    """A required numeric column (Total, Quantity, etc.) contains an unexpected
+    value that could not be converted to float. Usually caused by manual edits
+    or a non-standard export format."""
 
 
 # ── Row-level helpers ─────────────────────────────────────────────────────────
@@ -182,8 +214,8 @@ def apply_split_adjustments(df: pd.DataFrame, split_events: list) -> pd.DataFram
             (df['Date'] < ev['date']) &
             (df['Net_Qty_Row'] != 0)
         )
-        df.loc[mask, 'Quantity']    = (df.loc[mask, 'Quantity']    * ev['ratio']).round(9)
-        df.loc[mask, 'Net_Qty_Row'] = (df.loc[mask, 'Net_Qty_Row'] * ev['ratio']).round(9)
+        df.loc[mask, 'Quantity']    = (df.loc[mask, 'Quantity']    * ev['ratio']).round(FIFO_ROUND)
+        df.loc[mask, 'Net_Qty_Row'] = (df.loc[mask, 'Net_Qty_Row'] * ev['ratio']).round(FIFO_ROUND)
     return df
 
 
@@ -217,17 +249,65 @@ def parse_csv(file_bytes: bytes) -> ParsedData:
     Returns ParsedData — a NamedTuple of (df, split_events, zero_cost_rows).
     The corporate action lists are bundled here so callers don't need to
     re-scan the DataFrame.
-    """
-    df = pd.read_csv(_io.BytesIO(file_bytes))
 
-    # Normalise dates — TastyTrade exports include a +00:00 UTC offset.
+    Raises
+    ------
+    CSVEncodingError   — file is not valid UTF-8 (e.g. re-saved in Excel).
+    CSVStructureError  — not a CSV, or the file has no data rows.
+    CSVDateParseError  — Date column format not recognised.
+    CSVValueError      — a numeric column contains an unparseable value.
+    """
+    # ── Step 1: decode and parse CSV structure ─────────────────────────────
+    try:
+        file_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        raise CSVEncodingError(
+            "File is not valid UTF-8. This usually means the CSV was opened "
+            "in Excel and re-saved, which changes the encoding. "
+            "Re-export directly from TastyTrade without opening the file first."
+        )
+
+    try:
+        df = pd.read_csv(_io.BytesIO(file_bytes))
+    except Exception as exc:
+        raise CSVStructureError(
+            f"Could not parse the file as a CSV: {exc}. "
+            "Make sure you're uploading the raw TastyTrade export, not a PDF or HTML page."
+        ) from exc
+
+    if df.empty:
+        raise CSVStructureError(
+            "The CSV has column headers but no data rows. "
+            "Check that your TastyTrade date range includes at least one transaction."
+        )
+
+    # ── Step 2: normalise dates ────────────────────────────────────────────
+    # TastyTrade exports ISO 8601 timestamps with a +00:00 UTC suffix.
     # Strip the timezone so all downstream code works with naive timestamps
     # and there is no risk of mixed-tz comparisons.
-    df['Date'] = pd.to_datetime(df['Date'], utc=True).dt.tz_localize(None)
+    try:
+        df['Date'] = pd.to_datetime(df['Date'], utc=True).dt.tz_localize(None)
+    except Exception as exc:
+        sample = df['Date'].dropna().iloc[0] if not df['Date'].dropna().empty else '(empty)'
+        raise CSVDateParseError(
+            f"Could not parse the Date column (sample value: '{sample}'). "
+            "TastyTrade exports ISO 8601 timestamps — the file may have been "
+            "modified or is not a TastyTrade CSV export."
+        ) from exc
 
+    # ── Step 3: parse numeric columns ─────────────────────────────────────
     for col in ['Total', 'Quantity', 'Commissions', 'Fees']:
-        df[col] = df[col].apply(clean_val)
+        try:
+            df[col] = df[col].apply(clean_val)
+        except Exception as exc:
+            bad = df[col].dropna().iloc[0] if not df[col].dropna().empty else '(empty)'
+            raise CSVValueError(
+                f"Column '{col}' contains an unexpected value (sample: '{bad}'). "
+                "Expected TastyTrade currency format like '$1,234.56' or a plain number. "
+                "The file may have been manually edited."
+            ) from exc
 
+    # ── Steps 4–8: derive fields, sort, corporate actions ─────────────────
     df['Ticker'] = (
         df['Underlying Symbol']
         .fillna(df['Symbol'].str.split().str[0])

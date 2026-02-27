@@ -72,3 +72,16 @@ REQUIRED_COLUMNS = {
     'Quantity', 'Total', 'Commissions', 'Fees',
     'Strike Price', 'Call or Put', 'Expiration Date', 'Root Symbol', 'Order #',
 }
+
+# ── FIFO arithmetic precision ─────────────────────────────────────────────────
+# Floating-point epsilon used to test whether a lot quantity is effectively zero.
+# Values below this threshold are treated as fully consumed. Also used as the
+# rounding precision for lot remainder arithmetic so accumulated floating-point
+# error doesn't leave ghost lots in the queue.
+FIFO_EPSILON  = 1e-9
+FIFO_ROUND    = 9
+
+# ── Display caps ──────────────────────────────────────────────────────────────
+# Annualised return is capped at ±ANN_RETURN_CAP % to prevent a 1-day trade
+# from producing a meaningless 50,000 % figure in the trade log.
+ANN_RETURN_CAP = 500

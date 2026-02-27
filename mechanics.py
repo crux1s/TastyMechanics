@@ -37,6 +37,8 @@ from config import (
     ROLL_CHAIN_GAP_DAYS,
     INDEX_STRIKE_THRESHOLD,
     SPLIT_DSC_PATTERNS,
+    FIFO_EPSILON, FIFO_ROUND,
+    ANN_RETURN_CAP,
 )
 from ingestion import equity_mask, option_mask
 from ui_components import is_share_row, is_option_row
@@ -65,6 +67,40 @@ def _iter_fifo_sells(equity_rows: pd.DataFrame) -> Iterator[tuple[pd.Timestamp, 
     first; only if no short inventory exists does it open a long.
 
     Yields (date, proceeds, cost_basis) — callers apply their own window/bucketing.
+
+    Examples
+    --------
+    All examples use Net_Qty_Row > 0 for buys, < 0 for sells.
+    Total is negative on buys (cash out), positive on sells (cash in).
+
+    1. Simple long — buy 100 shares @ $10, sell @ $15:
+
+       BUY  100  Total=-1000  →  long_queue: [(100, 10.00)]       nothing yielded
+       SELL 100  Total=+1500  →  long_queue: []
+                                  yields (date, proceeds=1500.00, cost=1000.00)
+                                  P/L = +$500.00
+
+    2. Two lots, partial FIFO sell — buy 100@$10, buy 100@$12, sell 150@$15:
+
+       BUY  100  Total=-1000  →  long_queue: [(100, 10.00)]
+       BUY  100  Total=-1200  →  long_queue: [(100, 10.00), (100, 12.00)]
+       SELL 150  Total=+2250  →  consumes first lot in full (100 @ $10)
+                                  consumes 50 shares from second lot (50 @ $12)
+                                  long_queue: [(50, 12.00)]
+                                  yields (date, proceeds=2250.00, cost=1600.00)
+                                  P/L = +$650.00
+
+       Note: a single yield covers the whole sell even when multiple lots
+       are consumed — proceeds and cost are summed across lots internally.
+
+    3. Short sell then cover — short 100 @ $15, cover @ $10:
+
+       SELL 100  Total=+1500  →  long_queue empty → opens short
+                                  short_queue: [(100, 15.00)]  nothing yielded
+       BUY  100  Total=-1000  →  covers short lot
+                                  short_queue: []
+                                  yields (date, proceeds=1500.00, cost=1000.00)
+                                  P/L = +$500.00  (shorted high, covered low)
     """
     long_queues  = {}   # ticker -> deque of (qty, cost_per_share)   [long lots]
     short_queues = {}   # ticker -> deque of (qty, proceeds_per_share) [short lots]
@@ -86,21 +122,21 @@ def _iter_fifo_sells(equity_rows: pd.DataFrame) -> Iterator[tuple[pd.Timestamp, 
             remaining = qty
             pps = abs(total) / qty               # cost per share on this buy
 
-            while remaining > 1e-9 and sq:
+            while remaining > FIFO_EPSILON and sq:
                 s_qty, s_pps = sq[0]
                 use      = min(remaining, s_qty)
                 # P/L on covering a short = what we shorted it for minus cover cost
                 short_proceeds = use * s_pps
                 cover_cost     = use * pps
                 yield row.Date, short_proceeds, cover_cost
-                remaining = round(remaining - use, 9)
-                leftover  = round(s_qty - use, 9)
-                if leftover < 1e-9:
+                remaining = round(remaining - use, FIFO_ROUND)
+                leftover  = round(s_qty - use, FIFO_ROUND)
+                if leftover < FIFO_EPSILON:
                     sq.popleft()
                 else:
                     sq[0] = (leftover, s_pps)
 
-            if remaining > 1e-9:
+            if remaining > FIFO_EPSILON:
                 # Residual qty is a new long position (or adding to existing)
                 lq.append((remaining, pps))
 
@@ -111,23 +147,23 @@ def _iter_fifo_sells(equity_rows: pd.DataFrame) -> Iterator[tuple[pd.Timestamp, 
             pps             = abs(total) / remaining   # proceeds per share on this sell
             sale_cost_basis = 0.0
 
-            while remaining > 1e-9 and lq:
+            while remaining > FIFO_EPSILON and lq:
                 b_qty, b_cost = lq[0]
                 use = min(remaining, b_qty)
                 sale_cost_basis += use * b_cost
-                remaining = round(remaining - use, 9)
-                leftover  = round(b_qty - use, 9)
-                if leftover < 1e-9:
+                remaining = round(remaining - use, FIFO_ROUND)
+                leftover  = round(b_qty - use, FIFO_ROUND)
+                if leftover < FIFO_EPSILON:
                     lq.popleft()
                 else:
                     lq[0] = (leftover, b_cost)
 
-            if sale_cost_basis > 0 or remaining < abs(qty) - 1e-9:
+            if sale_cost_basis > 0 or remaining < abs(qty) - FIFO_EPSILON:
                 # We closed at least some long lots — yield that realised P/L
                 long_qty_closed = abs(qty) - remaining
                 yield row.Date, long_qty_closed * pps, sale_cost_basis
 
-            if remaining > 1e-9:
+            if remaining > FIFO_EPSILON:
                 # Residual qty is a new short position (or adding to existing)
                 sq.append((remaining, pps))
 
@@ -510,6 +546,13 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
                 trade_type   = 'Jade Lizard'
                 capital_risk = max(w_call - abs(open_credit), 1)
             elif is_calendar:
+                # TODO(calendar): Detection is correct (same strike, 2+ expirations).
+                # Capital risk should be debit paid for debit calendars, credit received
+                # for credit calendars — currently both use abs(open_credit) which is
+                # correct for debits but may misstate credit calendars.
+                # Also: rolled calendars (front expires, new back sold) likely appear as
+                # separate closed trades rather than one continuous position. Needs real
+                # CSV data to verify — implement once you have calendar trades in your history.
                 trade_type   = 'Calendar Spread'
                 capital_risk = max(abs(open_credit), 1)
             elif w_call > 0 and w_put > 0:
@@ -603,7 +646,7 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
             # Ann Return %: enabled for ALL trades (credit and debit) — the formula is
             # the same: P/L / capital_at_risk * annualisation factor.
             # Previously gated to is_credit only, leaving debit trades always None.
-            'Ann Return %': max(min(net_pnl / capital_risk * 365 / days_held * 100, 500), -500)
+            'Ann Return %': max(min(net_pnl / capital_risk * 365 / days_held * 100, ANN_RETURN_CAP), -ANN_RETURN_CAP)
                 if capital_risk > 0 else None,
             'Prem/Day': open_credit / days_held if is_credit else None,
             'Won': net_pnl > 0, 'DTE Open': dte_open, 'Close Type': close_type,
@@ -737,6 +780,19 @@ def compute_app_data(parsed: ParsedData, use_lifetime: bool) -> AppData:
 
     all_tickers          = [t for t in df['Ticker'].unique() if t != 'CASH']
     pure_options_tickers = [t for t in all_tickers if t not in wheel_tickers]
+
+    # TODO(pmcc): Poor Man's Covered Call detection would slot in here.
+    # A PMCC ticker has a long deep-ITM call (LEAPS, DTE > 90 at open) plus
+    # recurring short calls on the same underlying — no share purchases.
+    # Detection: ticker appears in pure_options_tickers AND has a long call
+    # with DTE > LEAPS_DTE_THRESHOLD at open AND has subsequent short calls.
+    # Each PMCC would become a PmccCampaign(leaps_cost, premiums_collected,
+    # leaps_status) added to AppData, with a dedicated tab in the UI consuming it.
+    # P/L = premiums_collected - leaps_cost (+ leaps_exit if sold/expired).
+    # Capital at risk = LEAPS premium paid, not strike × 100.
+    # Implement once you have real PMCC trades in your CSV — the TastyTrade
+    # order/description format for LEAPS + short call rolls needs to be
+    # verified against actual data before building the detection logic.
 
     # ── Closed trades ──────────────────────────────────────────────────────
     latest_date  = df['Date'].max()

@@ -38,6 +38,7 @@ from ingestion import (
     equity_mask, option_mask,
     detect_corporate_actions, apply_split_adjustments,
     validate_columns, parse_csv,
+    CSVParseError,
 )
 
 
@@ -63,6 +64,19 @@ import os as _os
 #
 # Changelog
 # ---------
+# v25.9 (2026-02-27)
+#   - FIX: Zero-cost basis exclusion toggle — sidebar opt-in to exclude
+#     tickers with spin-off / ACATS $0-basis deliveries from all portfolio
+#     P/L metrics (ROR, Capital Efficiency, Realized P/L). FIFO engine
+#     unchanged; filtered at display layer only.
+#   - FIX: Realized ROR now shows '∞ house money' when net_deposited < 0
+#     (withdrawn more than deposited) and 'N/A' when net_deposited == 0,
+#     rather than the misleading 0.0% previously returned in both cases.
+#   - FIX: Capital Efficiency Score now shows 'N/A' when no capital is
+#     deployed, rather than 0.0%.
+#   - FIX: 5-day window changed to 7-day (Last 7 Days) so prior-period
+#     comparison always aligns Mon-Sun vs Mon-Sun — equal trading days.
+#
 # v25.9 (2026-02-26)
 #   - FIX: Assignment STO double-count — pre-purchase option that caused a
 #     put assignment was being counted in both campaign premiums AND the
@@ -254,7 +268,11 @@ def main():
         <h3 style="color:#c9d1d9;margin-top:2rem;">How to export from TastyTrade</h3>
         <p style="color:#8b949e;font-size:0.95rem;line-height:1.7;">
         <b style="color:#c9d1d9;">History → Transactions → set date range → Download CSV</b><br>
-        Export your full history for the most accurate results.
+        Export your <b style="color:#c9d1d9;">full account history</b> for accurate results —
+        not just a recent window. FIFO cost basis for equity P/L requires all prior buy
+        transactions to be present, even if the shares were purchased years ago. A partial
+        export will produce incorrect basis and P/L figures for any position that has earlier
+        lots outside the date range.
         </p>
 
         <h3 style="color:#c9d1d9;margin-top:2rem;">⚠️ Disclaimer</h3>
@@ -271,8 +289,9 @@ def main():
         <li><b style="color:#c9d1d9;">Long options exercised by you</b> — exercising a long call or put into shares is untested. Check the resulting position and cost basis.</li>
         <li><b style="color:#c9d1d9;">Futures options delivery</b> — cash-settled futures options (like /MES, /ZS) are included in P/L totals, but in-the-money expiry into a futures contract is not handled.</li>
         <li><b style="color:#c9d1d9;">Stock splits</b> — forward and reverse splits are detected and adjusted, but TastyTrade-issued post-split option symbols are not automatically stitched to pre-split contracts.</li>
-        <li><b style="color:#c9d1d9;">Spin-offs and zero-cost deliveries</b> — shares received at $0 cost (spin-offs, ACATS transfers) will show a warning. The $0 basis means P/L on sale will be overstated until corrected.</li>
-        <li><b style="color:#c9d1d9;">Complex multi-leg structures</b> — PMCC, diagonals, calendars, and ratio spreads may not be classified correctly in the trade log.</li>
+        <li><b style="color:#c9d1d9;">Spin-offs and zero-cost deliveries</b> — shares received at $0 cost (spin-offs, ACATS transfers) trigger a warning. Use the sidebar toggle to exclude those tickers from P/L metrics if the inflated basis distorts your numbers.</li>
+        <li><b style="color:#c9d1d9;">Mergers and acquisitions</b> — if a ticker you hold is acquired or merged, the original campaign may be orphaned with no exit recorded. P/L for that position will be incomplete. Reconcile manually against your broker statement.</li>
+        <li><b style="color:#c9d1d9;">Complex multi-leg structures</b> — PMCC, diagonals, calendars, and ratio spreads may not be classified correctly in the trade log. P/L totals are correct; labels may not be.</li>
         <li><b style="color:#c9d1d9;">Non-US accounts</b> — built and tested on a US TastyTrade account. Currency, tax treatment, and CSV format differences for other regions are unknown.</li>
         </ul>
 
@@ -343,8 +362,15 @@ def main():
 
     try:
         _parsed = load_and_parse(_raw_bytes)
+    except CSVParseError as e:
+        st.error(f'❌ **{e}**')
+        st.stop()
     except Exception as e:
-        st.error(f'❌ **File loaded but could not be parsed:** `{e}`\n\nMake sure you\'re uploading an unmodified TastyTrade CSV export.')
+        st.error(
+            f'❌ **Unexpected error while parsing the file.**\n\n'
+            f'Technical detail: `{type(e).__name__}: {e}`\n\n'
+            'Please report this at GitHub if it persists.'
+        )
         st.stop()
 
     df = _parsed.df
@@ -385,6 +411,77 @@ def main():
         for c in camps
     )
     total_realized_pnl += _all_time_income - _wheel_divs_in_camps
+
+    # ── Zero-cost basis exclusion toggle ──────────────────────────────────────────
+    # Shown in sidebar only when zero-cost deliveries were detected.
+    # When enabled, all tickers with a $0-basis delivery are stripped from every
+    # P/L metric so their artificially inflated gains don't pollute ROR / Cap Efficiency.
+    # The FIFO engine and underlying data are unchanged — this is a display filter only.
+    _zc_excluded: set[str] = set()
+    if corp_zero_cost_rows:
+        _zc_tickers_all = sorted({r['ticker'] for r in corp_zero_cost_rows})
+        with st.sidebar:
+            st.markdown('---')
+            st.header('⚠️ Basis Warnings')
+            _exclude_zc = st.toggle(
+                'Exclude zero-cost tickers from P/L',
+                value=False,
+                help=(
+                    'Tickers with spin-off / ACATS deliveries have a $0 cost basis. '
+                    'When shares are sold, the full proceeds appear as P/L, overstating '
+                    'Realized ROR and Capital Efficiency. Enable this to exclude those ' 
+                    'tickers from all portfolio-wide metrics.'
+                )
+            )
+            st.caption('Affected: ' + ', '.join(_zc_tickers_all))
+        if _exclude_zc:
+            _zc_excluded = set(_zc_tickers_all)
+
+    if _zc_excluded:
+        # Strip excluded tickers from every aggregated variable.
+        # df stays intact for deposits/withdrawals — we only filter the P/L-relevant slices.
+        df = df[~df['Ticker'].isin(_zc_excluded)].copy()
+
+        # Campaigns
+        all_campaigns  = {t: c for t, c in all_campaigns.items()  if t not in _zc_excluded}
+        wheel_tickers  = [t for t in wheel_tickers          if t not in _zc_excluded]
+        pure_options_tickers = [t for t in pure_options_tickers if t not in _zc_excluded]
+        pure_opts_per_ticker = {t: v for t, v in pure_opts_per_ticker.items() if t not in _zc_excluded}
+
+        # Recalculate aggregates from the filtered campaigns
+        closed_camp_pnl      = sum(realized_pnl(c, use_lifetime)
+                                   for camps in all_campaigns.values()
+                                   for c in camps if c.status == 'closed')
+        open_premiums_banked = sum(realized_pnl(c, use_lifetime)
+                                   for camps in all_campaigns.values()
+                                   for c in camps if c.status == 'open')
+        capital_deployed     = sum(c.total_shares * c.blended_basis
+                                   for camps in all_campaigns.values()
+                                   for c in camps if c.status == 'open')
+        pure_opts_pnl        = sum(pure_opts_per_ticker.values())
+
+        # Recalculate pure-options tickers contribution (non-wheel equity/options)
+        _pot_eq = 0.0
+        _pot_cap = 0.0
+        for _t in pure_options_tickers:
+            _t_eq = df[equity_mask(df['Instrument Type']) & (df['Ticker'] == _t)].sort_values('Date')
+            _pot_eq  += sum(p - c for _, p, c in _iter_fifo_sells(_t_eq))
+            _pot_cap += _t_eq[_t_eq['Net_Qty_Row'] > 0]['Total'].apply(abs).sum()
+        pure_opts_pnl  += _pot_eq
+        capital_deployed += _pot_cap
+
+        # Recompute dividends/income without excluded tickers
+        _all_time_income     = df[df['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
+        _wheel_divs_in_camps = sum(c.dividends for camps in all_campaigns.values() for c in camps)
+
+        total_realized_pnl   = (closed_camp_pnl + open_premiums_banked + pure_opts_pnl
+                                 + _all_time_income - _wheel_divs_in_camps)
+
+        # Filter closed trades table
+        if not closed_trades_df.empty:
+            closed_trades_df = closed_trades_df[
+                ~closed_trades_df['Ticker'].isin(_zc_excluded)
+            ].copy()
 
     # ── Corporate action warnings ──────────────────────────────────────────────────────────────────────────
     # Shown once at load time; both lists are empty for the vast majority of users.
@@ -444,14 +541,14 @@ def main():
 
     # ── Window-dependent slices (re-run on every window change, fast) ─────────────
     # ── Time window selector — top right ──────────────────────────────────────────
-    time_options = ['YTD', 'Last 5 Days', 'Last Month', 'Last 3 Months', 'Half Year', '1 Year', 'All Time']
+    time_options = ['YTD', 'Last 7 Days', 'Last Month', 'Last 3 Months', 'Half Year', '1 Year', 'All Time']
     _hdr_left, _hdr_right = st.columns([3, 1])
     with _hdr_right:
         selected_period = st.selectbox('Time Window', time_options, index=6, label_visibility='collapsed')
 
     if   selected_period == 'All Time':      start_date = df['Date'].min()
     elif selected_period == 'YTD':           start_date = pd.Timestamp(latest_date.year, 1, 1)
-    elif selected_period == 'Last 5 Days':   start_date = latest_date - timedelta(days=5)
+    elif selected_period == 'Last 7 Days':   start_date = latest_date - timedelta(days=7)
     elif selected_period == 'Last Month':    start_date = latest_date - timedelta(days=30)
     elif selected_period == 'Last 3 Months': start_date = latest_date - timedelta(days=90)
     elif selected_period == 'Half Year':     start_date = latest_date - timedelta(days=182)
@@ -534,7 +631,12 @@ def main():
     account_days    = (latest_date - first_date).days
     cash_balance    = df['Total'].cumsum().iloc[-1]
     margin_loan     = abs(cash_balance) if cash_balance < 0 else 0.0
-    realized_ror    = total_realized_pnl / net_deposited * 100 if net_deposited > 0 else 0.0
+    if net_deposited > 0:
+        realized_ror = total_realized_pnl / net_deposited * 100
+    elif net_deposited == 0:
+        realized_ror = None          # undefined — no net deposits
+    else:
+        realized_ror = None          # negative net deposits — house money, ROR is infinite
 
     # ── Window label helper — used in section titles throughout ───────────────────
     _win_start_str = start_date.strftime('%d/%m/%Y')
@@ -562,19 +664,41 @@ def main():
 
     st.markdown(f'### 📊 Portfolio Overview {_win_label}', unsafe_allow_html=True)
     _is_all_time    = selected_period == 'All Time'
-    _is_short_window = selected_period in ['Last 5 Days', 'Last Month', 'Last 3 Months']
+    _is_short_window = selected_period in ['Last 7 Days', 'Last Month', 'Last 3 Months']
     _pnl_display    = total_realized_pnl if _is_all_time else window_realized_pnl
-    _ror_display    = _pnl_display / net_deposited * 100 if net_deposited > 0 else 0.0
+    if net_deposited > 0:
+        _ror_display = _pnl_display / net_deposited * 100
+    elif net_deposited == 0:
+        _ror_display = None          # undefined — no net deposits in CSV
+    else:
+        _ror_display = None          # withdrawn more than deposited — house money
     # Capital Efficiency Score — annualised return on capital currently deployed
     # Uses window P/L and window days so it responds to time selector
     _window_days_int = max((latest_date - start_date).days, 1)
-    cap_eff_score = (_pnl_display / capital_deployed / _window_days_int * 365 * 100)     if capital_deployed > 0 else 0.0
+    cap_eff_score = (
+        _pnl_display / capital_deployed / _window_days_int * 365 * 100
+        if capital_deployed > 0 else None
+    )
 
     m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
     m1.metric('Realized P/L',    fmt_dollar(_pnl_display))
     m1.caption('All cash actually banked — options P/L, share sales, premiums collected. Filtered to selected time window. Unrealised share P/L not included.')
-    m2.metric('Realized ROR',    '%.1f%%' % _ror_display)
-    m2.caption('Realized P/L as a % of net deposits. How hard your deposited capital is working.')
+    if _ror_display is None:
+        _ror_label  = '∞ house money' if net_deposited < 0 else 'N/A'
+        _ror_help   = (
+            'You have withdrawn more than you deposited — you are trading on profits. '
+            'ROR vs deposits is mathematically undefined (infinite).'
+            if net_deposited < 0 else
+            'No net deposits found in this CSV. Export your full account history to see ROR.'
+        )
+    else:
+        _ror_label = '%.1f%%' % _ror_display
+        _ror_help  = None
+    m2.metric('Realized ROR', _ror_label)
+    if _ror_help:
+        m2.caption(_ror_help)
+    else:
+        m2.caption('Realized P/L as a % of net deposits. How hard your deposited capital is working.')
 
     if _is_short_window:
         st.warning(
@@ -585,8 +709,9 @@ def main():
             'This can make an actively managed period look like a loss even when the underlying trades are profitable. '
             '**All Time or YTD give the most reliable P/L picture.**'
         )
-    m3.metric('Cap Efficiency',  '%.1f%%' % cap_eff_score)
-    m3.caption('Annualised return on capital deployed in shares — (Realized P/L ÷ Capital Deployed) × 365. Benchmark: S&P ~10%/yr. Shows if your wheel is outperforming simple buy-and-hold on the same capital.')
+    _cap_label = '%.1f%%' % cap_eff_score if cap_eff_score is not None else 'N/A'
+    m3.metric('Cap Efficiency', _cap_label)
+    m3.caption('Annualised return on capital deployed in shares — (Realized P/L ÷ Capital Deployed) × 365. Benchmark: S&P ~10%/yr. Shows if your wheel is outperforming simple buy-and-hold on the same capital.' if cap_eff_score is not None else 'No capital currently deployed in share positions.')
     m4.metric('Capital Deployed',fmt_dollar(capital_deployed))
     m4.caption('Cash tied up in open share positions (wheel campaigns + any fractional holdings). Options margin not included.')
     m5.metric('Margin Loan',     fmt_dollar(margin_loan))
