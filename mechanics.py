@@ -40,7 +40,7 @@ from config import (
     PAT_CLOSE, PAT_EXPIR, PAT_ASSIGN,
     WHEEL_MIN_SHARES,
     ROLL_CHAIN_GAP_DAYS,
-    INDEX_STRIKE_THRESHOLD,
+    KNOWN_INDEXES,
     SPLIT_DSC_PATTERNS,
     FIFO_EPSILON, FIFO_ROUND,
     ANN_RETURN_CAP,
@@ -656,14 +656,16 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
             # This is a reasonable proxy for equity options (strike typically < $500),
             # but produces meaningless Ann Return % for index options where strikes are
             # in the hundreds or thousands (SPX ~5000, NDX ~20000, RUT ~2000).
-            # Heuristic: if the highest strike exceeds INDEX_STRIKE_THRESHOLD we treat
-            # this as an index underlying and use premium received as the capital_risk
-            # proxy instead — consistent with how traders actually manage index risk
-            # (margin-based, not theoretical zero-underlying loss).
-            max_strike   = max(strikes) if strikes else 0
-            if max_strike >= INDEX_STRIKE_THRESHOLD:
+            # Check if this is a known cash-settled index (SPX, NDX, RUT etc.).
+            # Index options use premium received as the capital risk proxy since
+            # they are margin-based, not subject to theoretical zero-underlying loss.
+            # Using an explicit list avoids misclassifying high-priced equities
+            # (MSTR, NFLX, AVGO etc.) that would trip a strike price threshold.
+            ticker_upper = ticker.upper().split()[0]  # strip suffixes
+            if ticker_upper in KNOWN_INDEXES:
                 capital_risk = max(abs(open_credit), 1)   # index: use premium as risk
             else:
+                max_strike   = max(strikes) if strikes else 0
                 capital_risk = max(max_strike * 100, 1)   # equity: theoretical max loss
             short_opens  = opens[opens['Net_Qty_Row'] < 0]
             long_opens   = opens[opens['Net_Qty_Row'] > 0]

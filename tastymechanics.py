@@ -15,7 +15,6 @@ from config import (
     INCOME_SUB_TYPES, DEPOSIT_SUB_TYPES,
     PAT_CLOSE, PAT_EXPIR, PAT_ASSIGN, PAT_EXERCISE, PAT_CLOSING,
     WHEEL_MIN_SHARES, LEAPS_DTE_THRESHOLD, ROLL_CHAIN_GAP_DAYS,
-    INDEX_STRIKE_THRESHOLD,
     SPLIT_DSC_PATTERNS, ZERO_COST_WARN_TYPES,
     REQUIRED_COLUMNS,
     ANN_RETURN_CAP,
@@ -378,7 +377,7 @@ def main():
 
     # ── Cached data loading ────────────────────────────────────────────────────────
 
-    @st.cache_data(show_spinner='📂 Loading CSV…')
+    @st.cache_data(max_entries=2, show_spinner='📂 Loading CSV…')
     def load_and_parse(file_bytes: bytes) -> ParsedData:
         """
         Thin Streamlit cache wrapper around ingestion.parse_csv().
@@ -1106,7 +1105,10 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
             'All closed trades grouped by underlying. '
             '**Win %%** counts any trade that closed positive. '
             '**Med Capture %%** = median %% of opening credit kept — credit trades only. '
-            '**Med Ann Ret %%** = median annualised return on capital at risk, capped at ±%d%%.'
+            '**Med Ann Ret %%** = median annualised return on capital at risk, capped at ±%d%% '
+            'to prevent 0DTE and short-dated trades producing meaningless numbers — '
+            'values shown in orange hit the cap. '
+            '**Total Prem Sold** = gross cash received opening credit trades, before buybacks.'
         ) % ANN_RETURN_CAP)
         all_by_ticker = all_cdf.groupby('Ticker').agg(
             Trades=('Net P/L', 'count'),
@@ -1128,16 +1130,25 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
             ticker_df['Total_Prem']  = None
         ticker_df = ticker_df.sort_values('Total_PNL', ascending=False)
         ticker_df.columns = ['Ticker', 'Trades', 'Win %', 'P/L', 'Days',
-                              'Capture %', 'Ann Ret %', 'Credit Rcvd']
+                              'Capture %', 'Ann Ret %', 'Total Prem Sold']
+
+        def _style_ticker_ann_ret(col):
+            return [
+                'color: #ffa500' if pd.notna(v) and abs(v) >= ANN_RETURN_CAP else ''
+                for v in col
+            ]
+
         st.dataframe(
             ticker_df.style.format({
-                'Win %':       lambda x: '{:.1f}%'.format(x),
-                'P/L':         fmt_dollar,
-                'Days':        lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                'Capture %':   lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
-                'Ann Ret %':   lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
-                'Credit Rcvd': lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—',
-            }).map(color_win_rate, subset=['Win %']).map(color_pnl_cell, subset=['P/L']),
+                'Win %':           lambda x: '{:.1f}%'.format(x),
+                'P/L':             fmt_dollar,
+                'Days':            lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                'Capture %':       lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
+                'Ann Ret %':       lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
+                'Total Prem Sold': lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—',
+            }).apply(_style_ticker_ann_ret, subset=['Ann Ret %'])
+             .map(color_win_rate, subset=['Win %'])
+             .map(color_pnl_cell, subset=['P/L']),
             width='stretch', hide_index=True
         )
 

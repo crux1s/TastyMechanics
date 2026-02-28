@@ -55,7 +55,10 @@ ROLL_CHAIN_GAP_DAYS = 3
 # index options use premium received (margin-based, not theoretical zero).
 # $500 sits safely above the highest-priced equity options (BRK.A aside) and
 # well below the lowest common index strike (RUT ~2000, SPX ~5000).
-INDEX_STRIKE_THRESHOLD = 500
+# Explicit list of cash-settled index underlyings.
+# Using a known list instead of a strike price heuristic prevents
+# high-priced equities (MSTR, NFLX, AVGO etc.) being misclassified as indexes.
+KNOWN_INDEXES = {'SPX', 'SPXW', 'NDX', 'RUT', 'VIX', 'XSP', 'NANOS', 'DJX', 'OEX'}
 
 # ── Corporate action detection ────────────────────────────────────────────────
 # TastyTrade Description field patterns for stock splits and zero-cost deliveries.

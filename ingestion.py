@@ -12,18 +12,10 @@ Public API
 Internal helpers (also importable for use in analysis functions)
   clean_val(val)                → float
   get_signed_qty(row)           → float
-  is_share_row(inst)            → bool   (scalar — single Instrument Type string)
-  is_option_row(inst)           → bool   (scalar — single Instrument Type string)
-  equity_mask(series)           → bool Series  (vectorised — whole column)
-  option_mask(series)           → bool Series  (vectorised — whole column)
+  equity_mask(series)           → bool Series
+  option_mask(series)           → bool Series
   detect_corporate_actions(df)  → (split_events, zero_cost_rows)
   apply_split_adjustments(df)   → df
-
-Note: is_share_row / is_option_row are the scalar equivalents of equity_mask /
-option_mask.  They live here (not in ui_components.py) because they encode
-knowledge about TastyTrade's Instrument Type field values — the same domain
-knowledge as the rest of this module.  ui_components.py re-exports them for
-backwards compatibility.
 """
 
 from __future__ import annotations
@@ -111,18 +103,6 @@ def get_signed_qty(row: pd.Series) -> float:
     return 0
 
 
-def is_share_row(inst) -> bool:
-    """Return True if inst is a plain equity row ('Equity', not an option).
-    Scalar equivalent of equity_mask() — use on a single Instrument Type value."""
-    return str(inst).strip() == 'Equity'
-
-
-def is_option_row(inst) -> bool:
-    """Return True if inst is an option row ('Equity Option' or 'Future Option').
-    Scalar equivalent of option_mask() — use on a single Instrument Type value."""
-    return 'Option' in str(inst)
-
-
 def equity_mask(series: pd.Series) -> pd.Series:
     """Vectorised test for plain equity rows — True for 'Equity', not options."""
     return series.str.strip() == 'Equity'
@@ -131,6 +111,16 @@ def equity_mask(series: pd.Series) -> pd.Series:
 def option_mask(series: pd.Series) -> pd.Series:
     """Vectorised test for option rows — True for 'Equity Option' or 'Future Option'."""
     return series.str.contains('Option', na=False)
+
+
+def is_share_row(instrument_type: str) -> bool:
+    """Scalar test — True if plain equity row."""
+    return str(instrument_type).strip() == 'Equity'
+
+
+def is_option_row(instrument_type: str) -> bool:
+    """Scalar test — True if any option type row."""
+    return 'Option' in str(instrument_type)
 
 
 # ── Corporate action detection ────────────────────────────────────────────────
@@ -167,15 +157,15 @@ def detect_corporate_actions(df: pd.DataFrame) -> tuple[list, list]:
     if rd.empty:
         return split_events, zero_cost_rows
 
-    rd['dsc_upper'] = rd['Description'].fillna('').str.upper()
+    rd['_dsc'] = rd['Description'].fillna('').str.upper()
 
     def _is_split_row(dsc):
         return any(p in dsc for p in SPLIT_DSC_PATTERNS)
 
     processed_indices = set()
     for (ticker, date), grp in rd.groupby(['Ticker', 'Date']):
-        removals  = grp[grp['dsc_upper'].apply(lambda d: 'REMOVAL'     in d and _is_split_row(d))]
-        additions = grp[grp['dsc_upper'].apply(lambda d: 'REMOVAL' not in d and _is_split_row(d))]
+        removals  = grp[grp['_dsc'].apply(lambda d: 'REMOVAL'     in d and _is_split_row(d))]
+        additions = grp[grp['_dsc'].apply(lambda d: 'REMOVAL' not in d and _is_split_row(d))]
         if not removals.empty and not additions.empty:
             pre_qty  = removals['Quantity'].sum()
             post_qty = additions['Quantity'].sum()
@@ -192,9 +182,10 @@ def detect_corporate_actions(df: pd.DataFrame) -> tuple[list, list]:
 
     # Zero-cost additions not matched to a split pair
     for row in rd[~rd.index.isin(processed_indices)].itertuples(index=False):
-        # dsc_upper is a plain column name (no leading underscore) so itertuples
-        # exposes it cleanly as row.dsc_upper — no workaround needed.
-        if 'ASSIGNMENT' in row.dsc_upper:
+        # itertuples renames columns starting with _ (e.g. _dsc → _N),
+        # so read Description directly and uppercase it here.
+        dsc = str(row.Description).upper()
+        if 'ASSIGNMENT' in dsc:
             continue
         if row.Quantity > 0:
             zero_cost_rows.append({
@@ -302,7 +293,15 @@ def parse_csv(file_bytes: bytes) -> ParsedData:
 
     # ── Step 2: normalise dates ────────────────────────────────────────────
     # TastyTrade exports ISO 8601 timestamps with a +00:00 UTC suffix.
-    # Strip the timezone so all downstream code works with naive timestamps
+    # We parse as UTC then immediately strip the timezone info, leaving naive
+    # timestamps. We deliberately do NOT convert to US/Eastern because:
+    #   1. DST transitions (ET vs EST) add complexity with no meaningful benefit.
+    #   2. All dates shift by the same offset — weekly/monthly P&L bucketing
+    #      is unaffected since the offset is consistent across all rows.
+    #   3. A trade at 11:58pm ET on a Sunday is extremely rare; the 1-day
+    #      UTC bleed into a new week bucket is an acceptable trade-off.
+    # Result: dates may appear 1 day later than TastyTrade's local UI shows
+    # for late-evening trades. This is expected and does not affect calculations.
     # and there is no risk of mixed-tz comparisons.
     try:
         df['Date'] = pd.to_datetime(df['Date'], utc=True).dt.tz_localize(None)
