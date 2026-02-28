@@ -18,7 +18,7 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # NEW STEP: Automatically generates version tags
+      # Automatically generates version tags
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -37,3 +37,12 @@ jobs:
           # This injects all the tags generated in the step above
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      # --- NEW STEP: SYNC README TO DOCKER HUB ---
+      - name: Update Docker Hub Description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          repository: cruxis/tastymechanics
+          readme-filepath: ./README.md
