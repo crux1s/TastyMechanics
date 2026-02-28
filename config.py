@@ -88,3 +88,40 @@ FIFO_ROUND    = 9
 # Annualised return is capped at ±ANN_RETURN_CAP % to prevent a 1-day trade
 # from producing a meaningless 50,000 % figure in the trade log.
 ANN_RETURN_CAP = 500
+
+# ── Scorecard colour thresholds ───────────────────────────────────────────────
+# Win rate colouring in Performance by Ticker table:
+#   >= WIN_RATE_GREEN  → green  (strong edge)
+#   >= WIN_RATE_ORANGE → orange (acceptable)
+#   <  WIN_RATE_ORANGE → red    (below target)
+WIN_RATE_GREEN  = 70   # %
+WIN_RATE_ORANGE = 50   # %
+
+# ── DTE progress bar ──────────────────────────────────────────────────────────
+# Max DTE shown as full bar in the open positions DTE progress widget.
+# 45 DTE is TastyTrade's standard short-premium entry target.
+DTE_PROGRESS_MAX = 45  # days
+
+# ── Close reason labels ───────────────────────────────────────────────────────
+CLOSE_EXPIRED    = '⏹️ Expired'
+CLOSE_ASSIGNED   = '📋 Assigned'
+CLOSE_EXERCISED  = '🏋️ Exercised'
+CLOSE_CLOSED     = '✂️ Closed'
+
+# ── UI colour palette ─────────────────────────────────────────────────────────
+# Dark-mode GitHub-inspired theme used throughout ui_components.py
+COLOURS = {
+    'green':       '#00cc96',   # profit, win, bullish
+    'red':         '#ef553b',   # loss, warning, bearish
+    'orange':      '#ffa500',   # caution, near-limit, covered
+    'blue':        '#58a6ff',   # neutral highlight, default badge
+    'text':        '#e6edf3',   # primary text
+    'text_muted':  '#8b949e',   # labels, secondary text
+    'text_dim':    '#6b7280',   # captions, tertiary text
+    'border':      '#1f2937',   # card borders, dividers
+    'card_bg':     '#111827',   # card background start
+    'card_bg2':    '#0f1520',   # card background end (gradient)
+    'tan':         '#8b7355',   # short < 4 days held asterisk
+    'white':       '#f0f6fc',   # ticker symbol text
+    'header_text': '#c9d1d9',   # chart header text
+}

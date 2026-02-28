@@ -44,6 +44,7 @@ from config import (
     SPLIT_DSC_PATTERNS,
     FIFO_EPSILON, FIFO_ROUND,
     ANN_RETURN_CAP,
+    CLOSE_EXPIRED, CLOSE_ASSIGNED, CLOSE_EXERCISED, CLOSE_CLOSED,
 )
 from ingestion import equity_mask, option_mask, is_share_row, is_option_row
 
@@ -336,7 +337,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 and 'REMOVAL' not in dsc_up
                 and current is not None):
             split_qty = row.Quantity   # raw CSV quantity (always positive)
-            if running_shares > 0.001 and split_qty > 0:
+            if running_shares > FIFO_EPSILON and split_qty > 0:
                 ratio = split_qty / running_shares
                 running_shares        = split_qty
                 current.total_shares  = split_qty
@@ -353,7 +354,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
         # ── Share buy / add ────────────────────────────────────────────────
         if is_share_row(inst) and qty >= WHEEL_MIN_SHARES:
             pps = abs(total) / qty
-            if running_shares < 0.001:
+            if running_shares < FIFO_EPSILON:
                 # New campaign entry — check if arrival was via put assignment
                 assignment_premium, assignment_events = _find_assignment_premium(t, row)
                 entry_label = 'Bought %.0f @ $%.2f/sh%s' % (
@@ -383,13 +384,13 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
 
         # ── Share sale / partial exit ──────────────────────────────────────
         elif is_share_row(inst) and qty < 0:
-            if current and running_shares > 0.001:
+            if current and running_shares > FIFO_EPSILON:
                 current.exit_proceeds += total
                 running_shares        += qty
                 pps = abs(total) / abs(qty) if qty != 0 else 0
                 current.events.append({'date': row.Date, 'type': 'Exit',
                     'detail': 'Sold %.0f @ $%.2f/sh' % (abs(qty), pps), 'cash': total})
-                if running_shares < 0.001:
+                if running_shares < FIFO_EPSILON:
                     current.end_date = row.Date
                     current.status   = 'closed'
                     campaigns.append(current)
@@ -549,13 +550,15 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
     closed_list = []
     for root, syms in trade_groups.items():
         grp = equity_opts[equity_opts['Symbol'].isin(syms)].sort_values('Date')
-        all_closed = all(abs(equity_opts[equity_opts['Symbol'] == s]['Net_Qty_Row'].sum()) < 0.001 for s in syms)
+        all_closed = all(abs(equity_opts[equity_opts['Symbol'] == s]['Net_Qty_Row'].sum()) < FIFO_EPSILON for s in syms)
         if not all_closed: continue
 
         opens = grp[grp['Sub Type'].str.lower().str.contains('to open', na=False)]
         if opens.empty: continue
 
         open_credit = opens['Total'].sum()
+        _short_opens = opens[opens['Net_Qty_Row'] < 0]
+        n_contracts = int(abs(_short_opens['Net_Qty_Row'].sum())) if not _short_opens.empty else int(abs(opens['Net_Qty_Row'].sum()))  # short legs only
         net_pnl     = grp['Total'].sum()
         # open_date is the earliest open across ALL legs in the trade group,
         # including legs from subsequent rolls. For a rolled position this means
@@ -675,7 +678,8 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
             has_sp = any('PUT'  in c for c in cp_shorts)
             has_lc = any('CALL' in c for c in cp_longs)
             has_lp = any('PUT'  in c for c in cp_longs)
-            n_contracts = int(abs(opens['Net_Qty_Row'].sum()))
+            _short_opens2 = opens[opens['Net_Qty_Row'] < 0]
+            n_contracts = int(abs(_short_opens2['Net_Qty_Row'].sum())) if not _short_opens2.empty else int(abs(opens['Net_Qty_Row'].sum()))
             if not is_credit:
                 if has_lc and not has_lp: trade_type = 'Long Call'
                 elif has_lp and not has_lc: trade_type = 'Long Put'
@@ -702,42 +706,59 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
             exp_dates = opens['Expiration Date'].dropna()
             if not exp_dates.empty:
                 nearest_exp = pd.to_datetime(exp_dates.iloc[0])
-                dte_open = max((nearest_exp - open_date).days, 0)
+                dte_open    = max((nearest_exp - open_date).days, 0)
+                expiry_date = nearest_exp.date()
             else:
-                dte_open = None
-        except (ValueError, TypeError, AttributeError): dte_open = None
+                nearest_exp = None
+                dte_open    = None
+                expiry_date = None
+        except (ValueError, TypeError, AttributeError):
+            nearest_exp = None
+            dte_open    = None
+            expiry_date = None
 
         closes = grp[~grp['Sub Type'].str.lower().str.contains('to open', na=False)]
         _close_sub_types = closes['Sub Type'].dropna().str.lower().unique().tolist()
         if any(PAT_EXPIR in s for s in _close_sub_types):
-            close_type = '⏹️ Expired'
+            close_type = CLOSE_EXPIRED
         elif any(PAT_ASSIGN in s for s in _close_sub_types):
-            close_type = '📋 Assigned'
+            close_type = CLOSE_ASSIGNED
         elif any('exercise' in s for s in _close_sub_types):
-            close_type = '🏋️ Exercised'
+            close_type = CLOSE_EXERCISED
         else:
-            close_type = '✂️ Closed'
+            close_type = CLOSE_CLOSED
 
         closed_list.append({
             'Ticker': ticker, 'Trade Type': trade_type,
             'Type': 'Call' if 'CALL' in cp else 'Put' if 'PUT' in cp else 'Mixed',
             'Spread': n_long > 0, 'Is Credit': is_credit, 'Days Held': days_held,
-            'Open Date': open_date, 'Close Date': close_date, 'Premium Rcvd': open_credit,
+            'Open Date': open_date, 'Close Date': close_date, 'Net Premium': open_credit,
             'Net P/L': net_pnl,
             # Capture %: for credit trades = P/L as % of premium collected (how much of the
             # credit did you keep). For debit trades = P/L as % of premium paid (return on
             # the capital deployed into the trade). Sign-safe: uses abs(open_credit).
-            'Capture %': net_pnl / abs(open_credit) * 100 if abs(open_credit) > 0 else None,
-            'Capital Risk': capital_risk,
+            # Capture % is only meaningful for credit trades — for debits it produces
+            # misleading values like -100% (full loss) that look like a valid metric.
+            'Capture %': net_pnl / abs(open_credit) * 100 if (is_credit and abs(open_credit) > 0) else None,
+            'Capital at Risk': capital_risk,
             # Ann Return %: enabled for ALL trades (credit and debit) — the formula is
             # the same: P/L / capital_at_risk * annualisation factor.
             # Previously gated to is_credit only, leaving debit trades always None.
             'Ann Return %': max(min(net_pnl / capital_risk * 365 / days_held * 100, ANN_RETURN_CAP), -ANN_RETURN_CAP)
                 if capital_risk > 0 else None,
-            'Prem/Day': open_credit / days_held if is_credit else None,
-            'Won': net_pnl > 0, 'DTE Open': dte_open, 'Close Type': close_type,
+            'Prem/Day': open_credit / days_held if is_credit else None,  # credit trades only
+            'Won': net_pnl > 0, 'DTE at Open': dte_open, 'Close Reason': close_type,
+            '50% Target': round(open_credit * 0.50, 2) if is_credit else None,
+            'Expiration': expiry_date,
+            'Contracts': n_contracts,
         })
-    return pd.DataFrame(closed_list)
+    ct = pd.DataFrame(closed_list)
+    if not ct.empty and 'Expiration' in ct.columns:
+        _today = pd.Timestamp.now().normalize()
+        ct['DTE at Close'] = ct['Expiration'].apply(
+            lambda e: max((pd.Timestamp(e) - _today).days, 0) if pd.notna(e) else None
+        )
+    return ct
 
 
 # ── ROLL CHAIN ENGINE ──────────────────────────────────────────────────────────
@@ -848,7 +869,7 @@ def compute_app_data(parsed: ParsedData, use_lifetime: bool) -> AppData:
     open_records = []
     for name, group in groups:
         net_qty = group['Net_Qty_Row'].sum()
-        if abs(net_qty) > 0.001:
+        if abs(net_qty) > FIFO_EPSILON:
             open_records.append({
                 'Ticker': name[0], 'Symbol': name[1],
                 'Instrument Type': name[2], 'Call or Put': name[3],

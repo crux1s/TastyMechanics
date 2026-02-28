@@ -11,7 +11,7 @@ constants used in colour lookups).
 
 import html as _html
 import pandas as pd
-from config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT
+from config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT, WIN_RATE_GREEN, WIN_RATE_ORANGE, DTE_PROGRESS_MAX, COLOURS
 # is_share_row / is_option_row live in ingestion.py — that is the correct home
 # for anything that encodes TastyTrade field values.  Re-exported here so that
 # tastymechanics.py can continue to import them from ui_components without change.
@@ -86,8 +86,15 @@ def detect_strategy(ticker_df):
     exps    = ticker_df['Expiration Date'].dropna().unique()
     if lc > 0 and sc > 0 and len(exps) >= 2 and len(strikes) == 1: return 'Calendar Spread'
     if lp > 0 and sp > 0 and len(exps) >= 2 and len(strikes) == 1: return 'Calendar Spread'
-    if lc == 2 and sc == 1 and len(strikes) == 3 and len(exps) == 1: return 'Call Butterfly'
-    if lp == 2 and sp == 1 and len(strikes) == 3 and len(exps) == 1: return 'Put Butterfly'
+    # Butterfly: 2 longs + 1 short, 3 strikes, 1 expiry AND short strike must be the middle strike
+    if lc == 2 and sc == 1 and len(strikes) == 3 and len(exps) == 1:
+        _sc_strikes = ticker_df[ticker_df.apply(identify_pos_type, axis=1) == 'Short Call']['Strike Price'].dropna()
+        if not _sc_strikes.empty and sorted(strikes)[0] < _sc_strikes.iloc[0] < sorted(strikes)[-1]:
+            return 'Call Butterfly'
+    if lp == 2 and sp == 1 and len(strikes) == 3 and len(exps) == 1:
+        _sp_strikes = ticker_df[ticker_df.apply(identify_pos_type, axis=1) == 'Short Put']['Strike Price'].dropna()
+        if not _sp_strikes.empty and sorted(strikes)[0] < _sp_strikes.iloc[0] < sorted(strikes)[-1]:
+            return 'Put Butterfly'
     if ls > 0 and sc > 0 and sp > 0: return 'Covered Strangle'
     if ls > 0 and sc > 0:            return 'Covered Call'
     if sp >= 1 and sc >= 1 and lc >= 1: return 'Jade Lizard'
@@ -95,9 +102,9 @@ def detect_strategy(ticker_df):
     if sc >= 1 and sp >= 1:             return 'Short Strangle'
     if lc >= 1 and sp >= 1:             return 'Risk Reversal'
     if lc > 1  and sc > 0:             return 'Call Debit Spread'
-    if sp > 0:  return 'Short Put'
-    if lc > 0:  return 'Long Call'
-    if ls > 0:  return 'Long Stock'
+    if sp > 0:       return 'Short Put'
+    if lc == 1:      return 'Long Call'   # exactly 1 long call — not 2+ unmatched
+    if ls > 0:       return 'Long Stock'
     return 'Custom/Mixed'
 
 
@@ -106,21 +113,21 @@ def detect_strategy(ticker_df):
 def color_win_rate(v):
     """Green / amber / red for win-rate cells in st.dataframe."""
     if not isinstance(v, (int, float)) or pd.isna(v): return ''
-    if v >= 70: return 'color: #00cc96; font-weight: bold'
-    if v >= 50: return 'color: #ffa500'
-    return 'color: #ef553b'
+    if v >= WIN_RATE_GREEN:  return f"color: {COLOURS['green']}; font-weight: bold"
+    if v >= WIN_RATE_ORANGE: return f"color: {COLOURS['orange']}"
+    return f"color: {COLOURS['red']}"
 
 def color_pnl_cell(val):
     """Green/red colouring for P/L columns in st.dataframe."""
     if not isinstance(val, (int, float)) or pd.isna(val): return ''
-    return 'color: #00cc96' if val > 0 else 'color: #ef553b' if val < 0 else ''
+    return f"color: {COLOURS['green']}" if val > 0 else f"color: {COLOURS['red']}" if val < 0 else ''
 
 def _fmt_ann_ret(row):
     """Format Ann Ret % cell — appends * for trades held < 4 days."""
     v = row['Ann Ret %']
     if pd.isna(v):
         return '—'
-    suffix = '*' if pd.notna(row['Days']) and row['Days'] < 4 else ''
+    suffix = '*' if pd.notna(row['Days Held']) and row['Days Held'] < 4 else ''
     return '{:.0f}%{}'.format(v, suffix)
 
 def _style_ann_ret(row):
@@ -128,10 +135,10 @@ def _style_ann_ret(row):
     styles = [''] * len(row)
     try:
         idx = list(row.index).index('Ann Ret %')
-        if pd.notna(row.get('Days')) and row.get('Days', 99) < 4:
-            styles[idx] = 'color: #8b7355'
+        if pd.notna(row.get('Days Held')) and row.get('Days Held', 99) < 4:
+            styles[idx] = f"color: {COLOURS['tan']}"
     except (ValueError, KeyError):
-        pass
+        pass  # column not present in this table variant — safe to skip
     return styles
 
 def _style_chain_row(row):
@@ -157,7 +164,7 @@ def _color_cash_row(row):
 def _color_cash_total(val):
     """Green/red for the Total column in the cash-flow table."""
     if not isinstance(val, (int, float)): return ''
-    return 'color:#00cc96' if val > 0 else 'color:#ef553b' if val < 0 else ''
+    return f"color:{COLOURS['green']}" if val > 0 else f"color:{COLOURS['red']}" if val < 0 else ''
 
 
 # ── Plotly chart layout ───────────────────────────────────────────────────────
@@ -169,10 +176,10 @@ def chart_layout(title='', height=300, margin_t=36, margin_b=20):
         height=height,
         paper_bgcolor='rgba(10,14,23,0)',
         plot_bgcolor='rgba(10,14,23,0)',
-        font=dict(family='IBM Plex Sans, sans-serif', size=12, color='#8b949e'),
+        font=dict(family='IBM Plex Sans, sans-serif', size=12, color=COLOURS['text_muted']),
         title=dict(
             text=title,
-            font=dict(size=13, color='#c9d1d9', family='IBM Plex Sans'),
+            font=dict(size=13, color=COLOURS['header_text'], family='IBM Plex Sans'),
             x=0, xanchor='left', pad=dict(l=0, b=8),
         ) if title else None,
         margin=dict(l=8, r=8, t=margin_t if title else 16, b=margin_b),
@@ -194,13 +201,13 @@ def chart_layout(title='', height=300, margin_t=36, margin_b=20):
 
 def _pnl_chip(label, val):
     """Inline HTML chip: labelled P/L value with sign colour."""
-    col  = '#00cc96' if val >= 0 else '#ef553b'
+    col  = COLOURS['green'] if val >= 0 else COLOURS['red']
     sign = '+' if val >= 0 else ''
     return (
         f'<span style="display:inline-flex;align-items:center;gap:5px;'
-        f'background:rgba(255,255,255,0.04);border:1px solid #1f2937;'
+        f'background:rgba(255,255,255,0.04);border:1px solid {COLOURS['border']};'
         f'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
-        f'<span style="color:#6b7280;">{label}</span>'
+        f'<span style="color:{COLOURS['text_dim']};">{label}</span>'
         f'<span style="color:{col};font-family:monospace;font-weight:600;">'
         f'{sign}${abs(val):,.2f}</span>'
         f'</span>'
@@ -209,7 +216,7 @@ def _pnl_chip(label, val):
 def _cmp_block(label, curr, prev, is_pct=False):
     """One column block in the period-comparison card."""
     delta = curr - prev
-    dcol  = '#00cc96' if delta >= 0 else '#ef553b'
+    dcol  = COLOURS['green'] if delta >= 0 else COLOURS['red']
     dsign = '+' if delta >= 0 else ''
     if is_pct:
         curr_str  = f'{curr:.1f}%'
@@ -219,10 +226,10 @@ def _cmp_block(label, curr, prev, is_pct=False):
         delta_str = f'{dsign}${delta:,.2f}' if delta >= 0 else f'-${abs(delta):,.2f}'
     return (
         f'<div style="flex:1;min-width:120px;padding:0 16px;'
-        f'border-right:1px solid #1f2937;">'
-        f'<div style="color:#6b7280;font-size:0.7rem;text-transform:uppercase;'
+        f'border-right:1px solid {COLOURS['border']};">'
+        f'<div style="color:{COLOURS['text_dim']};font-size:0.7rem;text-transform:uppercase;'
         f'letter-spacing:0.05em;margin-bottom:4px;">{label}</div>'
-        f'<div style="font-family:monospace;font-size:1.05rem;color:#e6edf3;">{curr_str}</div>'
+        f'<div style="font-family:monospace;font-size:1.05rem;color:{COLOURS['text']};">{curr_str}</div>'
         f'<div style="font-size:0.78rem;color:{dcol};margin-top:2px;">{delta_str} vs prior</div>'
         f'</div>'
     )
@@ -230,14 +237,14 @@ def _cmp_block(label, curr, prev, is_pct=False):
 def _dte_chip(a):
     """Inline HTML chip for an expiry alert item."""
     dte = a['dte']
-    fg  = '#ef553b' if dte <= 5 else '#ffa500' if dte <= 14 else '#00cc96'
+    fg  = COLOURS['red'] if dte <= 5 else COLOURS['orange'] if dte <= 14 else COLOURS['green']
     return (
         f'<span style="display:inline-flex;align-items:center;gap:5px;'
-        f'background:rgba(255,255,255,0.04);border:1px solid #1f2937;'
+        f'background:rgba(255,255,255,0.04);border:1px solid {COLOURS['border']};'
         f'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
         f'<span style="color:{fg};font-family:monospace;font-weight:600;">{dte}d</span>'
-        f'<span style="color:#6b7280;">{xe(a["ticker"])}</span>'
-        f'<span style="color:#8b949e;font-family:monospace;">{xe(a["label"])}</span>'
+        f'<span style="color:{COLOURS['text_dim']};">{xe(a["ticker"])}</span>'
+        f'<span style="color:{COLOURS['text_muted']};font-family:monospace;">{xe(a["label"])}</span>'
         f'</span>'
     )
 
@@ -248,10 +255,10 @@ def _badge_inline_style(strat):
         'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;'
     )
     _COLORS = {
-        'bullish': 'background:rgba(0,204,150,0.1);color:#00cc96;border:1px solid rgba(0,204,150,0.25);',
-        'bearish': 'background:rgba(239,85,59,0.1);color:#ef553b;border:1px solid rgba(239,85,59,0.25);',
-        'covered': 'background:rgba(255,165,0,0.1);color:#ffa500;border:1px solid rgba(255,165,0,0.25);',
-        'default': 'background:rgba(88,166,255,0.12);color:#58a6ff;border:1px solid rgba(88,166,255,0.25);',
+        'bullish': f"background:rgba(0,204,150,0.1);color:{COLOURS['green']};border:1px solid rgba(0,204,150,0.25);",
+        'bearish': f"background:rgba(239,85,59,0.1);color:{COLOURS['red']};border:1px solid rgba(239,85,59,0.25);",
+        'covered': f"background:rgba(255,165,0,0.1);color:{COLOURS['orange']};border:1px solid rgba(255,165,0,0.25);",
+        'default': f"background:rgba(88,166,255,0.12);color:{COLOURS['blue']};border:1px solid rgba(88,166,255,0.25);",
     }
     s = strat.lower()
     if any(k in s for k in ['put', 'strangle', 'condor', 'lizard', 'reversal']):
@@ -270,28 +277,28 @@ def render_position_card(ticker, t_df):
     badge_style = _badge_inline_style(strat)
 
     CARD = (
-        'background:linear-gradient(135deg,#111827 0%,#0f1520 100%);'
-        'border:1px solid #1f2937;border-radius:12px;padding:18px 20px 14px 20px;'
+        f"background:linear-gradient(135deg,{COLOURS['card_bg']} 0%,{COLOURS['card_bg2']} 100%);"
+        f"border:1px solid {COLOURS['border']};border-radius:12px;padding:18px 20px 14px 20px;"
         'margin-bottom:16px;box-shadow:0 2px 12px rgba(0,0,0,0.4);'
     )
     HDR = (
         'display:flex;align-items:center;justify-content:space-between;'
-        'margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #1f2937;'
+        f"margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid {COLOURS['border']};"
     )
     TICK = (
         'font-family:monospace;font-size:1.3rem;font-weight:600;'
-        'color:#f0f6fc;letter-spacing:0.04em;'
+        f"color:{COLOURS['white']};letter-spacing:0.04em;"
     )
     LEG = (
         'display:flex;align-items:flex-start;justify-content:space-between;'
         'padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05);'
     )
-    LBL  = 'color:#8b949e;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:2px;'
-    VAL  = 'font-family:monospace;color:#e6edf3;font-size:0.88rem;'
+    LBL  = f"color:{COLOURS['text_muted']};font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:2px;"
+    VAL  = f"font-family:monospace;color:{COLOURS['text']};font-size:0.88rem;"
     CHIP = (
         'display:inline-block;margin-top:6px;background:rgba(255,255,255,0.04);'
-        'border:1px solid #1f2937;border-radius:6px;padding:3px 10px;'
-        'font-family:monospace;font-size:0.8rem;color:#8b949e;'
+        f"border:1px solid {COLOURS['border']};border-radius:6px;padding:3px 10px;"
+        f"font-family:monospace;font-size:0.8rem;color:{COLOURS['text_muted']};"
     )
 
     legs_html   = ''
@@ -310,20 +317,20 @@ def render_position_card(ticker, t_df):
         if dte != 'N/A' and 'd' in str(dte):
             try:
                 dte_val   = int(str(dte).replace('d', ''))
-                pct       = min(dte_val / 45 * 100, 100)
-                bar_color = '#00cc96' if dte_val > 14 else '#ffa500' if dte_val > 5 else '#ef553b'
+                pct       = min(dte_val / DTE_PROGRESS_MAX * 100, 100)
+                bar_color = COLOURS['green'] if dte_val > 14 else COLOURS['orange'] if dte_val > 5 else COLOURS['red']
                 dte_html  = (
                     f'<div style="margin-top:6px;">'
-                    f'<div style="background:#1f2937;border-radius:4px;height:4px;width:100%;">'
+                    f'<div style="background:{COLOURS['border']};border-radius:4px;height:4px;width:100%;">'
                     f'<div style="width:{pct:.0f}%;background:{bar_color};'
                     f'border-radius:4px;height:4px;"></div>'
                     f'</div>'
-                    f'<div style="color:#6b7280;font-size:0.7rem;margin-top:3px;">'
+                    f'<div style="color:{COLOURS['text_dim']};font-size:0.7rem;margin-top:3px;">'
                     f'{dte} to expiry</div>'
                     f'</div>'
                 )
             except (ValueError, TypeError):
-                pass
+                pass  # non-numeric DTE value — leave cell unstyled
 
         legs_html += (
             f'<div style="{leg_style}">'

@@ -279,7 +279,7 @@ def parse_csv(file_bytes: bytes) -> ParsedData:
 
     try:
         df = pd.read_csv(_io.BytesIO(file_bytes))
-    except Exception as exc:
+    except (pd.errors.ParserError, UnicodeDecodeError, ValueError) as exc:
         raise CSVStructureError(
             f"Could not parse the file as a CSV: {exc}. "
             "Make sure you're uploading the raw TastyTrade export, not a PDF or HTML page."
@@ -305,8 +305,8 @@ def parse_csv(file_bytes: bytes) -> ParsedData:
     # and there is no risk of mixed-tz comparisons.
     try:
         df['Date'] = pd.to_datetime(df['Date'], utc=True).dt.tz_localize(None)
-    except Exception as exc:
-        sample = df['Date'].dropna().iloc[0] if not df['Date'].dropna().empty else '(empty)'
+    except (ValueError, TypeError, pd.errors.OutOfBoundsDatetime) as exc:
+        _date_nn = df['Date'].dropna(); sample = _date_nn.iloc[0] if not _date_nn.empty else '(empty)'
         raise CSVDateParseError(
             f"Could not parse the Date column (sample value: '{sample}'). "
             "TastyTrade exports ISO 8601 timestamps — the file may have been "
@@ -317,8 +317,8 @@ def parse_csv(file_bytes: bytes) -> ParsedData:
     for col in ['Total', 'Quantity', 'Commissions', 'Fees']:
         try:
             df[col] = df[col].apply(clean_val)
-        except Exception as exc:
-            bad = df[col].dropna().iloc[0] if not df[col].dropna().empty else '(empty)'
+        except (ValueError, TypeError, AttributeError) as exc:
+            _col_nn = df[col].dropna(); bad = _col_nn.iloc[0] if not _col_nn.empty else '(empty)'
             raise CSVValueError(
                 f"Column '{col}' contains an unexpected value (sample: '{bad}'). "
                 "Expected TastyTrade currency format like '$1,234.56' or a plain number. "

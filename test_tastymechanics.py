@@ -771,10 +771,10 @@ check_int('CT: total trades',              len(_ct),                    95)
 check_int('CT: winning trades',            int(_ct['Won'].sum()),       80)
 check    ('CT: win rate %',                _ct['Won'].mean() * 100,     84.2105)
 check    ('CT: total net P/L',             _ct['Net P/L'].sum(),        834.05)
-check    ('CT: total premium received',    _ct['Premium Rcvd'].sum(),   10377.80)
-check    ('CT: median capture %',          _ct['Capture %'].median(),   31.5467)
+check    ('CT: total premium received',    _ct['Net Premium'].sum(),   10377.80)
+check    ('CT: median capture %',          _ct[_ct['Is Credit']]['Capture %'].median(),   33.7950)
 check    ('CT: median days held',          _ct['Days Held'].median(),   6.0)
-check    ('CT: median DTE at open',        _ct['DTE Open'].median(),    36.0)
+check    ('CT: median DTE at open',        _ct['DTE at Open'].median(),    36.0)
 check_int('CT: credit trades',             int(_ct['Is Credit'].sum()), 91)
 check_int('CT: debit trades',              int((~_ct['Is Credit']).sum()), 4)
 
@@ -796,11 +796,11 @@ _rklb_big = _ct[
     (_ct['Trade Type'] == 'Short Strangle') &
     (_ct['Net P/L'] > 700)
 ].iloc[0]
-check    ('CT RKLB strangle premium',    _rklb_big['Premium Rcvd'],  1194.76)
+check    ('CT RKLB strangle premium',    _rklb_big['Net Premium'],  1194.76)
 check    ('CT RKLB strangle net P/L',    _rklb_big['Net P/L'],        757.53)
 check    ('CT RKLB strangle capture %',  _rklb_big['Capture %'],       63.4044)
 check_int('CT RKLB strangle days held',  int(_rklb_big['Days Held']),  63)
-check_int('CT RKLB strangle DTE open',   int(_rklb_big['DTE Open']),   64)
+check_int('CT RKLB strangle DTE open',   int(_rklb_big['DTE at Open']),   64)
 
 # INTC strangle Dec11–Jan02: 22 days, $209.78 credit, $119.55 P/L
 _intc_strang = _ct[
@@ -808,17 +808,17 @@ _intc_strang = _ct[
     (_ct['Trade Type'] == 'Short Strangle') &
     (_ct['Net P/L'] > 100)
 ].iloc[0]
-check('CT INTC strangle premium',   _intc_strang['Premium Rcvd'],  209.78)
+check('CT INTC strangle premium',   _intc_strang['Net Premium'],  209.78)
 check('CT INTC strangle net P/L',   _intc_strang['Net P/L'],       119.55)
 check('CT INTC strangle capture %', _intc_strang['Capture %'],      56.9883)
 
 # SOFI put assigned Feb-20: 42 days held, 100% capture (expired worthless assigned)
 _sofi_assigned = _ct[
     (_ct['Ticker'] == 'SOFI') &
-    (_ct['Close Type'] == '📋 Assigned') &
-    (_ct['Premium Rcvd'] > 130)
+    (_ct['Close Reason'] == '📋 Assigned') &
+    (_ct['Net Premium'] > 130)
 ].iloc[0]
-check    ('CT SOFI assigned put premium',   _sofi_assigned['Premium Rcvd'], 132.88)
+check    ('CT SOFI assigned put premium',   _sofi_assigned['Net Premium'], 132.88)
 check    ('CT SOFI assigned put net P/L',   _sofi_assigned['Net P/L'],      132.88)
 check    ('CT SOFI assigned put capture %', _sofi_assigned['Capture %'],    100.0)
 check_int('CT SOFI assigned put days held', int(_sofi_assigned['Days Held']), 42)
@@ -832,7 +832,7 @@ check_int('CT SOFI assigned put days held', int(_sofi_assigned['Days Held']), 42
 _slv_put = _ct[
     (_ct['Ticker'] == 'SLV') & (_ct['Trade Type'] == 'Short Put')
 ].iloc[0]
-check    ('VERIFIED SLV put credit received',  _slv_put['Premium Rcvd'], 100.88)
+check    ('VERIFIED SLV put credit received',  _slv_put['Net Premium'], 100.88)
 check    ('VERIFIED SLV put net P/L',          _slv_put['Net P/L'],       39.76)
 check    ('VERIFIED SLV put capture %',        _slv_put['Capture %'],     39.4132, tol=0.001)
 check_int('VERIFIED SLV put days held',        int(_slv_put['Days Held']),  2)
@@ -843,7 +843,7 @@ _intc_put_loss = _ct[
     (_ct['Trade Type'] == 'Short Put') &
     (_ct['Net P/L'] < 0)
 ].iloc[0]
-check    ('VERIFIED INTC losing put credit received', _intc_put_loss['Premium Rcvd'], 103.88)
+check    ('VERIFIED INTC losing put credit received', _intc_put_loss['Net Premium'], 103.88)
 check    ('VERIFIED INTC losing put net P/L',         _intc_put_loss['Net P/L'],      -13.24)
 check    ('VERIFIED INTC losing put capture %',       _intc_put_loss['Capture %'],    -12.7455, tol=0.001)
 check_int('VERIFIED INTC losing put days held',       int(_intc_put_loss['Days Held']), 19)
@@ -854,10 +854,22 @@ _smr_put_loss = _ct[
     (_ct['Trade Type'] == 'Short Put') &
     (_ct['Net P/L'] < 0)
 ].iloc[0]
-check    ('VERIFIED SMR losing put credit received', _smr_put_loss['Premium Rcvd'],  60.88)
+check    ('VERIFIED SMR losing put credit received', _smr_put_loss['Net Premium'],  60.88)
 check    ('VERIFIED SMR losing put net P/L',         _smr_put_loss['Net P/L'],       -87.24)
 check    ('VERIFIED SMR losing put capture %',       _smr_put_loss['Capture %'],    -143.2983, tol=0.001)
 check_int('VERIFIED SMR losing put days held',       int(_smr_put_loss['Days Held']), 21)
+
+
+# TSLA Call Debit Spread — VERIFIED against TastyTrade UI (screenshot 2026-03-01)
+# Oct 2: BTO 1 Oct3 457.5C @ 12.23 (-$1,224.12) + STO 1 Oct3 460C @ 10.93 (+$1,091.88)
+# Oct 4: Both legs expired worthless ($0). Net debit = -$132.24.
+# Capture % = None (debit trade — not meaningful)
+_tsla_ds = _ct[(_ct['Ticker'] == 'TSLA') & (_ct['Trade Type'] == 'Call Debit Spread')].iloc[0]
+check    ('VERIFIED TSLA call debit spread net premium',  _tsla_ds['Net Premium'],  -132.24)
+check    ('VERIFIED TSLA call debit spread net P/L',      _tsla_ds['Net P/L'],      -132.24)
+check_int('VERIFIED TSLA call debit spread capture % is NaN', pd.isna(_tsla_ds['Capture %']), True)
+check_int('VERIFIED TSLA call debit spread days held',    int(_tsla_ds['Days Held']), 2)
+check_int('VERIFIED TSLA call debit spread close reason', _tsla_ds['Close Reason'], '⏹️ Expired')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -892,9 +904,9 @@ check_int('CT strategy Iron Condor wins',       int(_ct_strat.loc['Iron Condor',
 # Short Put (x2) — multi-contract trade recorded as single row
 _sp2 = _ct[_ct['Trade Type'] == 'Short Put (x2)']
 check_int('CT Short Put (x2) count',       len(_sp2),                  1)
-check    ('CT Short Put (x2) premium',     _sp2.iloc[0]['Premium Rcvd'], 361.76)
+check    ('CT Short Put (x2) premium',     _sp2.iloc[0]['Net Premium'], 361.76)
 check    ('CT Short Put (x2) net P/L',     _sp2.iloc[0]['Net P/L'],      133.52)
-check_int('CT Short Put (x2) DTE open',    int(_sp2.iloc[0]['DTE Open']), 46)
+check_int('CT Short Put (x2) DTE open',    int(_sp2.iloc[0]['DTE at Open']), 46)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -902,14 +914,14 @@ check_int('CT Short Put (x2) DTE open',    int(_sp2.iloc[0]['DTE Open']), 46)
 # ══════════════════════════════════════════════════════════════════════════════
 print('\n── 19. Closed trades — close types & debit trades ─────────────────────')
 
-_close_counts = _ct['Close Type'].value_counts()
+_close_counts = _ct['Close Reason'].value_counts()
 
 check_int('CT close type Closed count',   int(_close_counts.get('✂️ Closed',   0)), 90)
 check_int('CT close type Expired count',  int(_close_counts.get('⏹️ Expired',  0)),  3)
 check_int('CT close type Assigned count', int(_close_counts.get('📋 Assigned', 0)),  2)
 check_int('CT close types sum to total',  int(_close_counts.sum()),                 95)
 
-_expired = _ct[_ct['Close Type'] == '⏹️ Expired']
+_expired = _ct[_ct['Close Reason'] == '⏹️ Expired']
 # Expired trades — only check count; capture% varies (some expired worthless, some ITM)
 check_int('CT expired: SOFI expired worthless (100% capture)',
           int((_expired[_expired['Ticker'] == 'SOFI']['Capture %'] == 100.0).sum()), 1)
@@ -927,15 +939,15 @@ check    ('CT debit trades total P/L',     _debit['Net P/L'].sum(),       -227.1
 _tsla_ds = _ct[
     (_ct['Ticker'] == 'TSLA') & (_ct['Trade Type'] == 'Call Debit Spread')
 ].iloc[0]
-check('CT TSLA debit spread premium',    _tsla_ds['Premium Rcvd'], -132.24)
+check('CT TSLA debit spread premium',    _tsla_ds['Net Premium'], -132.24)
 check('CT TSLA debit spread net P/L',    _tsla_ds['Net P/L'],      -132.24)
-check('CT TSLA debit spread capture %',  _tsla_ds['Capture %'],    -100.0)
+check_int('CT TSLA debit spread capture %',  pd.isna(_tsla_ds['Capture %']),  True)
 
 # META Calendar Spread: debit trade that turned a profit
 _meta_cal = _ct[
     (_ct['Ticker'] == 'META') & (_ct['Trade Type'] == 'Calendar Spread')
 ].iloc[0]
-check('CT META calendar debit premium',  _meta_cal['Premium Rcvd'], -72.24)
+check('CT META calendar debit premium',  _meta_cal['Net Premium'], -72.24)
 check('CT META calendar net P/L',        _meta_cal['Net P/L'],       18.52)
 check_int('CT META calendar is winner',  int(_meta_cal['Won']),       1)
 
@@ -990,6 +1002,163 @@ check_int('CT YTD: no pre-2026 close dates', int(_ytd_pre.sum()), 0)
 _w7_outside = pd.to_datetime(_w7['Close Date']) < (_latest - timedelta(days=7))
 check_int('CT 7d: no out-of-window close dates', int(_w7_outside.sum()), 0)
 
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 24 — UI HELPER FUNCTIONS: xe(), identify_pos_type(), detect_strategy()
+# ══════════════════════════════════════════════════════════════════════════════
+from ui_components import xe, identify_pos_type, detect_strategy
+
+def _make_row(inst_type, cp, qty, strike=100.0, exp='2026-06-20'):
+    """Helper — build a minimal Series for identify_pos_type / detect_strategy."""
+    return pd.Series({
+        'Instrument Type': inst_type,
+        'Call or Put':     cp,
+        'Net_Qty':         qty,
+        'Strike Price':    strike,
+        'Expiration Date': exp,
+        'Ticker':          'TEST',
+    })
+
+def _make_df(*rows):
+    """Helper — build a DataFrame from _make_row calls."""
+    return pd.DataFrame(list(rows))
+
+print('\n── Section 24: xe() ──────────────────────────────────────────────────────')
+
+# Normal string passes through unchanged
+check_int('xe: plain string',         xe('hello'),              'hello')
+check_int('xe: integer input',        xe(42),                   '42')
+check_int('xe: None input',           xe(None),                 'None')
+check_int('xe: < escaped',            xe('<script>'),           '&lt;script&gt;')
+check_int('xe: > escaped',            xe('>'),                  '&gt;')
+check_int('xe: & escaped',            xe('AT&T'),               'AT&amp;T')
+check_int('xe: double quote escaped', xe('"hello"'),            '&quot;hello&quot;')
+check_int('xe: mixed HTML chars',     xe('<b class="x">hi</b>'), '&lt;b class=&quot;x&quot;&gt;hi&lt;/b&gt;')
+
+print('\n── Section 24: identify_pos_type() ──────────────────────────────────────')
+
+check_int('ipt: Long Stock',  identify_pos_type(_make_row('Equity', '',     100)),  'Long Stock')
+check_int('ipt: Short Stock', identify_pos_type(_make_row('Equity', '',    -100)),  'Short Stock')
+check_int('ipt: Long Call',   identify_pos_type(_make_row('Equity Option', 'CALL',   1)), 'Long Call')
+check_int('ipt: Short Call',  identify_pos_type(_make_row('Equity Option', 'CALL',  -1)), 'Short Call')
+check_int('ipt: Long Put',    identify_pos_type(_make_row('Equity Option', 'PUT',    1)), 'Long Put')
+check_int('ipt: Short Put',   identify_pos_type(_make_row('Equity Option', 'PUT',   -1)), 'Short Put')
+check_int('ipt: Future Option Short Put',
+      identify_pos_type(_make_row('Future Option', 'PUT', -1)), 'Short Put')
+check_int('ipt: unknown type returns Asset',
+      identify_pos_type(_make_row('Unknown', '', 1)), 'Asset')
+
+print('\n── Section 24: detect_strategy() ────────────────────────────────────────')
+
+# Short Put — single naked put
+check_int('ds: Short Put',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'PUT', -1, 100)
+      )), 'Short Put')
+
+# Covered Call — long stock + short call
+check_int('ds: Covered Call',
+      detect_strategy(_make_df(
+          _make_row('Equity',        '',     100),
+          _make_row('Equity Option', 'CALL', -1, 110),
+      )), 'Covered Call')
+
+# Covered Strangle — long stock + short call + short put
+check_int('ds: Covered Strangle',
+      detect_strategy(_make_df(
+          _make_row('Equity',        '',     100),
+          _make_row('Equity Option', 'CALL', -1, 110),
+          _make_row('Equity Option', 'PUT',  -1,  90),
+      )), 'Covered Strangle')
+
+# Short Strangle — short call + short put, no stock
+check_int('ds: Short Strangle',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL', -1, 110),
+          _make_row('Equity Option', 'PUT',  -1,  90),
+      )), 'Short Strangle')
+
+# Jade Lizard — short put + short call + long call
+check_int('ds: Jade Lizard',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'PUT',  -1,  90),
+          _make_row('Equity Option', 'CALL', -1, 110),
+          _make_row('Equity Option', 'CALL',  1, 115),
+      )), 'Jade Lizard')
+
+# Big Lizard — short call + short put + long put
+check_int('ds: Big Lizard',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL', -1, 110),
+          _make_row('Equity Option', 'PUT',  -1,  90),
+          _make_row('Equity Option', 'PUT',   1,  85),
+      )), 'Big Lizard')
+
+# Risk Reversal — long call + short put
+check_int('ds: Risk Reversal',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL',  1, 110),
+          _make_row('Equity Option', 'PUT',  -1,  90),
+      )), 'Risk Reversal')
+
+# Call Debit Spread — 2 long calls + 1 short call
+check_int('ds: Call Debit Spread',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL',  1, 100),
+          _make_row('Equity Option', 'CALL',  1, 105),
+          _make_row('Equity Option', 'CALL', -1, 110),
+      )), 'Call Debit Spread')
+
+# Call Butterfly — 2 long calls + 1 short call, 3 strikes, 1 expiry
+check_int('ds: Call Butterfly',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL',  1,  95, '2026-06-20'),
+          _make_row('Equity Option', 'CALL', -1, 100, '2026-06-20'),
+          _make_row('Equity Option', 'CALL',  1, 105, '2026-06-20'),
+      )), 'Call Butterfly')
+
+# Put Butterfly — 2 long puts + 1 short put, 3 strikes, 1 expiry
+check_int('ds: Put Butterfly',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'PUT',  1,  95, '2026-06-20'),
+          _make_row('Equity Option', 'PUT', -1, 100, '2026-06-20'),
+          _make_row('Equity Option', 'PUT',  1, 105, '2026-06-20'),
+      )), 'Put Butterfly')
+
+# Calendar Spread — same strike, 2 expiries (calls)
+check_int('ds: Calendar Spread (calls)',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL',  1, 100, '2026-06-20'),
+          _make_row('Equity Option', 'CALL', -1, 100, '2026-07-18'),
+      )), 'Calendar Spread')
+
+# Calendar Spread — same strike, 2 expiries (puts)
+check_int('ds: Calendar Spread (puts)',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'PUT',  1, 100, '2026-06-20'),
+          _make_row('Equity Option', 'PUT', -1, 100, '2026-07-18'),
+      )), 'Calendar Spread')
+
+# Long Call — single long call
+check_int('ds: Long Call',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL', 1, 100)
+      )), 'Long Call')
+
+# Long Stock — shares only
+check_int('ds: Long Stock',
+      detect_strategy(_make_df(
+          _make_row('Equity', '', 100)
+      )), 'Long Stock')
+
+# Custom/Mixed — unrecognised combination
+check_int('ds: Custom/Mixed fallback',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL',  1, 100),
+          _make_row('Equity Option', 'CALL',  1, 105),
+      )), 'Custom/Mixed')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # GRAND TOTAL
