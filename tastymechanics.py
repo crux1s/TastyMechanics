@@ -298,6 +298,7 @@ def main():
     st.title(f'📟 TastyMechanics {APP_VERSION}')
 
     with st.sidebar:
+        st.image('icon.png', width=80)
         st.header('⚙️ Data Control')
         uploaded_file = st.file_uploader('Upload TastyTrade History CSV', type='csv')
         st.markdown(

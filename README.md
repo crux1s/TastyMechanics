@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icon.png" width="120" alt="TastyMechanics icon"/>
+</p>
+
 # 📟 TastyMechanics
 
 A Streamlit dashboard for analysing your TastyTrade options trading history. Upload your CSV export and get a full breakdown of realized P/L, wheel campaigns, trade analytics, and portfolio health — all running locally or on Streamlit Community Cloud. Your data is never sent anywhere.
