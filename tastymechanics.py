@@ -300,6 +300,14 @@ def main():
     with st.sidebar:
         st.header('⚙️ Data Control')
         uploaded_file = st.file_uploader('Upload TastyTrade History CSV', type='csv')
+        st.markdown(
+            '<div style="font-size:0.75rem;color:#6e7681;margin-top:0.5rem;">'
+            'New to TastyTrade? '
+            '<a href="https://tastytrade.com/welcome/?referralCode=NT57Z3P85B" '
+            'target="_blank" style="color:#58a6ff;">Open an account</a>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         st.markdown('---')
         st.header('🎯 Campaign Settings')
         use_lifetime = st.toggle('Show Lifetime "House Money"', value=False,
@@ -353,7 +361,8 @@ def main():
 
         <p style="color:#444d56;font-size:0.78rem;margin-top:1.5rem;text-align:center;">
         TastyMechanics {APP_VERSION} · Open source · MIT licence ·
-        <a href="https://github.com/timluey/tastymechanics" style="color:#58a6ff;">GitHub</a>
+        <a href="https://github.com/crux1s/TastyMechanics" style="color:#58a6ff;">GitHub</a> ·
+        <a href="https://tastytrade.com/welcome/?referralCode=NT57Z3P85B" style="color:#58a6ff;">Open a TastyTrade account</a>
         </p>
 
         </div>

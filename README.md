@@ -10,7 +10,7 @@ A Streamlit dashboard for analysing your TastyTrade options trading history. Upl
 
 Hosted on Streamlit Community Cloud — upload your CSV and explore without installing anything:
 
-https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
+https://tastymechanics-v6mwejh3jtdmaz5aw7rxzk.streamlit.app/
 
 ---
 
@@ -82,6 +82,8 @@ streamlit run tastymechanics.py
 Then open `http://localhost:8501` in your browser.
 
 ### Getting your CSV from TastyTrade
+
+> Don't have a TastyTrade account yet? [Open one here](https://tastytrade.com/welcome/?referralCode=NT57Z3P85B) — this app was built and tested exclusively on TastyTrade exports.
 
 1. Log in to TastyTrade
 2. Go to **History → Transactions**
