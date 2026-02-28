@@ -134,7 +134,7 @@ models.py          Dataclasses — Campaign, AppData, ParsedData
 ingestion.py       CSV parsing — pure Python, no Streamlit dependency
 mechanics.py       Analytics engine — FIFO, campaigns, trade classification
 ui_components.py   Visual helpers — formatters, colour functions, chart layout
-app.py             Streamlit wiring — sidebar, tabs, cached wrappers only
+tastymechanics.py  Streamlit wiring — sidebar, tabs, cached wrappers only
 ```
 
 **Data flow**
