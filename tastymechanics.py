@@ -360,7 +360,7 @@ def main():
         </div>
 
         <p style="color:#444d56;font-size:0.78rem;margin-top:1.5rem;text-align:center;">
-        TastyMechanics {APP_VERSION} · Open source · MIT licence ·
+        TastyMechanics {APP_VERSION} · Open source · AGPL-3.0 ·
         <a href="https://github.com/crux1s/TastyMechanics" style="color:#58a6ff;">GitHub</a> ·
         <a href="https://tastytrade.com/welcome/?referralCode=NT57Z3P85B" style="color:#58a6ff;">Open a TastyTrade account</a>
         </p>

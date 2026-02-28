@@ -2,7 +2,7 @@
 
 A Streamlit dashboard for analysing your TastyTrade options trading history. Upload your CSV export and get a full breakdown of realized P/L, wheel campaigns, trade analytics, and portfolio health — all running locally or on Streamlit Community Cloud. Your data is never sent anywhere.
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Streamlit](https://img.shields.io/badge/streamlit-1.30%2B-red) ![License](https://img.shields.io/badge/license-MIT-green)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Streamlit](https://img.shields.io/badge/streamlit-1.30%2B-red) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 ---
 
@@ -227,4 +227,12 @@ Place your TastyTrade CSV (named `tastytrade_*.csv` or `tastymechanics_*.csv`) i
 
 ## License
 
-MIT — do what you like with it, no warranty implied.
+[AGPL-3.0](./LICENSE) — free to use, modify, and distribute. If you run a modified version as a public web service you must open source your changes under the same licence.
+
+---
+
+## Support the Project
+
+TastyMechanics is free and open source. If it's useful to you and you're not already on TastyTrade, consider opening an account through the referral link below — it costs you nothing extra and helps fund continued development.
+
+[Open a TastyTrade account](https://tastytrade.com/welcome/?referralCode=NT57Z3P85B)
