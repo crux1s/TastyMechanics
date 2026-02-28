@@ -1,4 +1,5 @@
 import streamlit as st
+from pathlib import Path
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -298,15 +299,17 @@ def main():
     st.title(f'📟 TastyMechanics {APP_VERSION}')
 
     with st.sidebar:
-        st.image('icon.png', width=80)
+        _icon_path = Path(__file__).parent / 'icon.png'
+        if _icon_path.exists():
+            st.image(str(_icon_path), width=80)
         st.header('⚙️ Data Control')
         uploaded_file = st.file_uploader('Upload TastyTrade History CSV', type='csv')
         st.markdown(
             '<div style="font-size:0.75rem;color:#6e7681;margin-top:0.5rem;">'
             'New to TastyTrade? <a href="https://tastytrade.com/welcome/?referralCode=NT57Z3P85B" '
             'target="_blank" style="color:#58a6ff;">Open an account</a>'
-            ' · <a href="https://www.buymeacoffee.com/Cruxis" '
-            'target="_blank" style="color:#ffdd00;">☕ Coffee</a>'
+            ' &nbsp;·&nbsp; <a href="https://www.buymeacoffee.com/Cruxis" '
+            'target="_blank" style="color:#ffdd00;">Buy me a coffee</a>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -364,7 +367,7 @@ def main():
         <p style="color:#444d56;font-size:0.78rem;margin-top:1.5rem;text-align:center;">
         TastyMechanics {APP_VERSION} · Open source · AGPL-3.0 ·
         <a href="https://github.com/crux1s/TastyMechanics" style="color:#58a6ff;">GitHub</a> ·
-        <a href="https://www.buymeacoffee.com/Cruxis" style="color:#ffdd00;">☕ Buy me a coffee</a> ·
+        <a href="https://www.buymeacoffee.com/Cruxis" style="color:#ffdd00;">Buy me a coffee</a> ·
         <a href="https://tastytrade.com/welcome/?referralCode=NT57Z3P85B" style="color:#58a6ff;">Open a TastyTrade account</a>
         </p>
 
