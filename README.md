@@ -10,7 +10,7 @@ A Streamlit dashboard for analysing your TastyTrade options trading history. Upl
 
 Hosted on Streamlit Community Cloud — upload your CSV and explore without installing anything:
 
-https://tastymechanics-v6mwejh3jtdmaz5aw7rxzk.streamlit.app/
+https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 
 ---
 
