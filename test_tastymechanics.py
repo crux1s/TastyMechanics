@@ -21,20 +21,20 @@ sys.path.insert(0, _HERE)
 
 
 def _find_csv():
-    """Find the TastyTrade CSV — looks in script folder then uploads mount."""
+    """Find the TastyTrade CSV — looks in script folder then uploads mount.
+    Accepts files starting with 'tastytrade' or 'tastymechanics'.
+    """
     candidates = []
-    for f in os.listdir(_HERE):
-        if f.startswith('tastytrade') and f.endswith('.csv'):
-            candidates.append(os.path.join(_HERE, f))
-    uploads = '/mnt/user-data/uploads'
-    if os.path.isdir(uploads):
-        for f in os.listdir(uploads):
-            if f.startswith('tastytrade') and f.endswith('.csv'):
-                candidates.append(os.path.join(uploads, f))
+    for folder in [_HERE, '/mnt/user-data/uploads']:
+        if not os.path.isdir(folder):
+            continue
+        for f in os.listdir(folder):
+            if (f.startswith('tastytrade') or f.startswith('tastymechanics')) and f.endswith('.csv'):
+                candidates.append(os.path.join(folder, f))
     if not candidates:
         raise FileNotFoundError(
-            "No tastytrade CSV found.\n"
-            f"Looked in: {_HERE}\n"
+            "No tastytrade/tastymechanics CSV found.\n"
+            f"Looked in: {_HERE} and /mnt/user-data/uploads\n"
             "Place your TastyTrade export CSV in the same folder as this script."
         )
     return max(candidates, key=lambda p: (os.path.getmtime(p), os.path.basename(p)))
@@ -55,6 +55,12 @@ from mechanics import (
     effective_basis,
     realized_pnl,
     compute_app_data,
+    build_option_chains,
+    build_closed_trades,
+    calc_dte,
+    _uf_find,
+    _uf_union,
+    _group_symbols_by_order,
 )
 
 
@@ -110,12 +116,12 @@ def _summary(label):
 # ══════════════════════════════════════════════════════════════════════════════
 print('\n── 1. Data loading & parsing ──────────────────────────────────────────')
 
-check_int('Row count',           len(df), 422)
+check_int('Row count',           len(df), 428)
 check_int('Equity rows',         equity_mask(df['Instrument Type']).sum(), 24)
-check_int('Equity Option rows',  (df['Instrument Type'] == 'Equity Option').sum(), 330)
+check_int('Equity Option rows',  (df['Instrument Type'] == 'Equity Option').sum(), 336)
 check_int('Future Option rows',  (df['Instrument Type'] == 'Future Option').sum(), 20)
 check_int('Money Movement rows', (df['Type'] == 'Money Movement').sum(), 56)
-check('Total of all rows',       df['Total'].sum(), -3488.91)
+check('Total of all rows',       df['Total'].sum(), -3362.63)
 
 achr_assign = df[(df['Ticker'] == 'ACHR') & (df['Sub Type'] == 'Assignment')]
 check_int('Assignment Net_Qty_Row sign (+)', int(achr_assign['Net_Qty_Row'].sum()), 1)
@@ -153,7 +159,7 @@ check('AMD out of window (Nov 6 start)',
 print('\n── 3. Options cash flows ───────────────────────────────────────────────')
 
 opt_df = df[df['Instrument Type'].isin(OPT_TYPES) & df['Type'].isin(TRADE_TYPES)]
-check('Total options cash flow', opt_df['Total'].sum(), 892.17)
+check('Total options cash flow', opt_df['Total'].sum(), 1018.45)
 
 spx_all        = df[df['Ticker'] == 'SPX']
 spx_trade_opts = spx_all[spx_all['Instrument Type'].isin(OPT_TYPES) & spx_all['Type'].isin(TRADE_TYPES)]
@@ -197,7 +203,7 @@ check('ACHR pre-purchase STO (outside window = 27.89)', achr_pre, 27.89)
 
 sofi_post = df[(df['Ticker'] == 'SOFI') & df['Instrument Type'].isin(OPT_TYPES) &
                df['Type'].isin(TRADE_TYPES) & (df['Date'] >= pd.Timestamp('2025-12-01'))]['Total'].sum()
-check('SOFI campaign premiums (post-Dec-1 options)', sofi_post, 402.46)
+check('SOFI campaign premiums (post-Dec-1 options)', sofi_post, 478.10)
 
 sofi_pre = df[(df['Ticker'] == 'SOFI') & df['Instrument Type'].isin(OPT_TYPES) &
               df['Type'].isin(TRADE_TYPES) & (df['Date'] < pd.Timestamp('2025-12-01'))]['Total'].sum()
@@ -209,7 +215,7 @@ check('SMR pre-purchase options (outside window = 352.79)', smr_pre, 352.79)
 
 smr_post = df[(df['Ticker'] == 'SMR') & df['Instrument Type'].isin(OPT_TYPES) &
               df['Type'].isin(TRADE_TYPES) & (df['Date'] >= pd.Timestamp('2026-01-09'))]['Total'].sum()
-check('SMR campaign premiums (post-purchase = 22.96)', smr_post, 22.96)
+check('SMR campaign premiums (post-purchase = 42.72)', smr_post, 42.72)
 
 joby_pre = df[(df['Ticker'] == 'JOBY') & df['Instrument Type'].isin(OPT_TYPES) &
               df['Type'].isin(TRADE_TYPES) & (df['Date'] < pd.Timestamp('2026-01-09'))]['Total'].sum()
@@ -225,11 +231,11 @@ all_eq       = sum(p - c for _, p, c in fifo_results)
 all_inc      = income['Total'].sum()
 ground_truth = all_opts + all_eq + all_inc
 
-check('Ground truth total realized P/L',  ground_truth, 965.59)
-check('Options component',                all_opts,      892.17)
-check('Equity FIFO component',            all_eq,         79.97)
+check('Ground truth total realized P/L',  ground_truth, 1091.87)
+check('Options component',                all_opts,      1018.45)
+check('Equity FIFO component',            all_eq,          79.97)
 check('Dividend+interest component',      all_inc,         -6.55)
-check('Components sum to total',          all_opts + all_eq + all_inc, 965.59)
+check('Components sum to total',          all_opts + all_eq + all_inc, 1091.87)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 7. DEPOSITS / PORTFOLIO STATS
@@ -241,8 +247,8 @@ wdrs = df[df['Sub Type'] == 'Withdrawal']['Total'].sum()
 check('Total deposited',       deps,            5998.00)
 check('Total withdrawn',       wdrs,             -55.00)
 check('Net deposited',         deps + wdrs,     5943.00)
-check('Realized ROR %',        ground_truth / (deps + wdrs) * 100, 16.24, tol=0.1)
-check('Cash balance (all rows summed)', df['Total'].sum(), -3488.91, tol=0.01)
+check('Realized ROR %',        ground_truth / (deps + wdrs) * 100, 18.37, tol=0.1)
+check('Cash balance (all rows summed)', df['Total'].sum(), -3362.63, tol=0.01)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 8. OPEN EQUITY POSITIONS
@@ -279,7 +285,7 @@ w_opts = df[df['Instrument Type'].isin(OPT_TYPES) & df['Type'].isin(TRADE_TYPES)
             (df['Date'] >= earliest)]['Total'].sum()
 w_eq   = sum(p - c for d, p, c in fifo_results if d >= earliest)
 w_inc  = df[df['Sub Type'].isin(INCOME_SUB_TYPES) & (df['Date'] >= earliest)]['Total'].sum()
-check('All Time window P/L == ground truth', w_opts + w_eq + w_inc, 965.59)
+check('All Time window P/L == ground truth', w_opts + w_eq + w_inc, 1091.87)
 
 nov_start = pd.Timestamp('2025-11-01')
 nov_end   = pd.Timestamp('2025-11-30')
@@ -386,21 +392,21 @@ check('ACHR open campaign P/L',        a['camp_pnl'],   90.19)
 s = _camp('SOFI')
 check('SOFI cost basis (200 shares)',  s['cost'],     5558.08)
 check('SOFI shares held',              s['shares'],    200.0)
-check('SOFI campaign premiums',        s['premiums'],  402.46)
-check('SOFI effective basis/sh',       s['eff_basis'],  25.78, tol=0.01)
-check('SOFI open campaign P/L',        s['camp_pnl'],  402.46)
+check('SOFI campaign premiums',        s['premiums'],  478.10)
+check('SOFI effective basis/sh',       s['eff_basis'],  25.40, tol=0.01)
+check('SOFI open campaign P/L',        s['camp_pnl'],  478.10)
 
 m = _camp('SMR')
 check('SMR cost basis (100 @ 20.48)', m['cost'],     2048.08)
-check('SMR campaign premiums',         m['premiums'],   22.96)
-check('SMR effective basis/sh',        m['eff_basis'],  20.25, tol=0.01)
-check('SMR open campaign P/L',         m['camp_pnl'],   22.96)
+check('SMR campaign premiums',         m['premiums'],   42.72)
+check('SMR effective basis/sh',        m['eff_basis'],  20.05, tol=0.01)
+check('SMR open campaign P/L',         m['camp_pnl'],   42.72)
 
 j = _camp('JOBY')
 check('JOBY cost basis (100 @ 15.33)', j['cost'],    1533.08)
-check('JOBY campaign premiums',         j['premiums'],  52.32)
-check('JOBY effective basis/sh',        j['eff_basis'], 14.81, tol=0.01)
-check('JOBY open campaign P/L',         j['camp_pnl'],  52.32)
+check('JOBY campaign premiums',         j['premiums'],  83.20)
+check('JOBY effective basis/sh',        j['eff_basis'], 14.50, tol=0.01)
+check('JOBY open campaign P/L',         j['camp_pnl'],  83.20)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 12. OUTSIDE-WINDOW OPTIONS — real pure_options_pnl()
@@ -431,28 +437,28 @@ def window_pnl(start):
     return w_opts, w_eq, w_inc, w_opts + w_eq + w_inc
 
 o,e,i,t = window_pnl(latest_date - pd.Timedelta(days=7))
-check('1W opts',   o,  -143.96, tol=0.05)
+check('1W opts',   o,   -45.56, tol=0.05)
 check('1W equity', e,   -20.84, tol=0.02)
 check('1W income', i,     0.00, tol=0.02)
-check('1W total',  t,  -164.80, tol=0.10)
+check('1W total',  t,   -66.40, tol=0.10)
 
 o,e,i,t = window_pnl(latest_date - pd.Timedelta(days=30))
-check('1M opts',   o,  -168.52, tol=0.05)
+check('1M opts',   o,   216.96, tol=0.05)
 check('1M equity', e,   -20.84, tol=0.02)
 check('1M income', i,    -7.23, tol=0.02)
-check('1M total',  t,  -196.59, tol=0.10)
+check('1M total',  t,   188.89, tol=0.10)
 
 _,_,_,t = window_pnl(latest_date - pd.Timedelta(days=90))
-check('3M total',  t,   713.24, tol=0.20)
+check('3M total',  t,   839.52, tol=0.20)
 
 _,_,_,t = window_pnl(earliest)
-check('All Time window == ground truth', t, 965.59, tol=0.02)
+check('All Time window == ground truth', t, 1091.87, tol=0.02)
 
 o,e,i,t = window_pnl(pd.Timestamp(f'{latest_date.year}-01-01'))
-check('YTD opts',   o,  455.95, tol=0.05)
+check('YTD opts',   o,  582.23, tol=0.05)
 check('YTD equity', e,  -20.84, tol=0.02)
 check('YTD income', i,   -8.25, tol=0.02)
-check('YTD total',  t,  426.86, tol=0.10)
+check('YTD total',  t,  553.14, tol=0.10)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 14. CAPITAL DEPLOYED
@@ -589,6 +595,400 @@ check('INV: no NaN Ticker on trade rows',
       float(df[df['Type'].isin(TRADE_TYPES)]['Ticker'].isna().sum()), 0.0)
 check('INV: Balance Adjustment not in INCOME_SUB_TYPES',
       float('Balance Adjustment' in INCOME_SUB_TYPES), 0.0)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 9. UNION-FIND HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 21. Union-Find helpers ─────────────────────────────────────────────')
+
+# _uf_find — basic root lookup
+_p = {}
+check_int('UF: single node is its own root', _uf_find(_p, 'A'), 'A')
+
+# _uf_union — two nodes in same component
+_p = {}
+_uf_union(_p, 'A', 'B')
+check_int('UF: union(A,B) — find(A) == find(B)', _uf_find(_p, 'A'), _uf_find(_p, 'B'))
+
+# _uf_union — transitivity: A∩B and B∩C → all three same root
+_p = {}
+_uf_union(_p, 'A', 'B')
+_uf_union(_p, 'B', 'C')
+check_int('UF: transitivity A∩B and B∩C → find(A)==find(C)',
+          _uf_find(_p, 'A'), _uf_find(_p, 'C'))
+
+# _group_symbols_by_order — two symbols sharing one order land in same group
+_groups = _group_symbols_by_order({'SPY_C450': ['ORD1'], 'SPY_P440': ['ORD1']})
+_roots  = list(_groups.values())
+check_int('UF group: two syms sharing an order → one group',
+          len(_roots), 1)
+check_int('UF group: that group contains both syms',
+          len(_roots[0]), 2)
+
+# _group_symbols_by_order — two symbols with different orders → two groups
+_groups2 = _group_symbols_by_order({'SPY_C450': ['ORD1'], 'SPY_P440': ['ORD2']})
+check_int('UF group: two syms with different orders → two groups',
+          len(_groups2), 2)
+
+# _group_symbols_by_order — chain: A∩B and B∩C → one group of three
+_groups3 = _group_symbols_by_order({
+    'SPY_C450': ['ORD1'],
+    'SPY_C460': ['ORD1', 'ORD2'],
+    'SPY_C470': ['ORD2'],
+})
+check_int('UF group: chain A∩B and B∩C → one group of three',
+          sum(len(v) for v in _groups3.values()), 3)
+check_int('UF group: chain → exactly one group',
+          len(_groups3), 1)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 10. calc_dte
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 22. calc_dte ───────────────────────────────────────────────────────')
+
+_ref = pd.Timestamp('2025-01-01')
+
+def _opt_row(exp, inst='Equity Option'):
+    """Build a minimal Series that calc_dte accepts."""
+    return pd.Series({'Instrument Type': inst, 'Expiration Date': exp})
+
+# Normal case — 21 days out
+check_int('DTE: 21 days out',  calc_dte(_opt_row('2025-01-22'), _ref), '21d')
+
+# Expiry today — should return '0d' not negative
+check_int('DTE: expiry == reference date returns 0d',
+          calc_dte(_opt_row('2025-01-01'), _ref), '0d')
+
+# Already expired — floor at 0
+check_int('DTE: past expiry returns 0d',
+          calc_dte(_opt_row('2024-12-01'), _ref), '0d')
+
+# Non-option row → N/A
+check_int('DTE: equity row returns N/A',
+          calc_dte(_opt_row('2025-01-22', inst='Equity'), _ref), 'N/A')
+
+# Missing expiration → N/A
+check_int('DTE: NaN expiration returns N/A',
+          calc_dte(_opt_row(float('nan')), _ref), 'N/A')
+
+# Malformed expiration → N/A (no exception raised)
+check_int('DTE: garbage expiration returns N/A',
+          calc_dte(_opt_row('not-a-date'), _ref), 'N/A')
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 11. build_option_chains
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 23. build_option_chains ────────────────────────────────────────────')
+
+def _make_opts(rows):
+    """
+    Build a minimal DataFrame for build_option_chains from a list of dicts.
+    Required columns: Date, Sub Type, Net_Qty_Row, Total, Call or Put,
+                      Strike Price, Expiration Date, Description.
+    """
+    return pd.DataFrame([{
+        'Date':            pd.Timestamp(r['date']),
+        'Sub Type':        r['sub'],
+        'Net_Qty_Row':     r['qty'],
+        'Total':           r.get('total', 0.0),
+        'Call or Put':     r.get('cp', 'PUT'),
+        'Strike Price':    r.get('strike', 100.0),
+        'Expiration Date': r.get('exp', '2025-03-21'),
+        'Description':     r.get('desc', ''),
+    } for r in rows])
+
+# ── Single STO that expires — one chain, one event ──────────────────────────
+_single = _make_opts([
+    {'date': '2025-01-05', 'sub': 'Sell to Open', 'qty': -1, 'total': 150},
+    {'date': '2025-01-19', 'sub': 'Expiration',   'qty':  1, 'total':   0},
+])
+_ch = build_option_chains(_single)
+check_int('Chains: single STO+expire → 1 chain',  len(_ch), 1)
+check_int('Chains: single chain has 2 events',     len(_ch[0]), 2)
+
+# ── Two STOs within ROLL_CHAIN_GAP_DAYS → same chain (a roll) ───────────────
+_roll = _make_opts([
+    {'date': '2025-01-05', 'sub': 'Sell to Open',  'qty': -1, 'total':  150},
+    {'date': '2025-01-19', 'sub': 'Buy to Close',  'qty':  1, 'total': -100},
+    {'date': '2025-01-20', 'sub': 'Sell to Open',  'qty': -1, 'total':  120},
+    {'date': '2025-02-14', 'sub': 'Expiration',    'qty':  1, 'total':    0},
+])
+_ch2 = build_option_chains(_roll)
+check_int('Chains: roll within gap → 1 chain',        len(_ch2), 1)
+check_int('Chains: rolled chain has 4 events',         len(_ch2[0]), 4)
+
+# ── Two STOs separated by > ROLL_CHAIN_GAP_DAYS → two separate chains ───────
+_two = _make_opts([
+    {'date': '2025-01-05', 'sub': 'Sell to Open', 'qty': -1, 'total':  150},
+    {'date': '2025-01-19', 'sub': 'Expiration',   'qty':  1, 'total':    0},
+    {'date': '2025-02-10', 'sub': 'Sell to Open', 'qty': -1, 'total':  120},
+    {'date': '2025-03-21', 'sub': 'Expiration',   'qty':  1, 'total':    0},
+])
+_ch3 = build_option_chains(_two)
+check_int('Chains: gap > threshold → 2 chains', len(_ch3), 2)
+
+# ── CALL and PUT STOs in same DataFrame → grouped by cp_type, separate chains
+_mixed = _make_opts([
+    {'date': '2025-01-05', 'sub': 'Sell to Open', 'qty': -1, 'cp': 'PUT',  'total':  80},
+    {'date': '2025-01-19', 'sub': 'Expiration',   'qty':  1, 'cp': 'PUT',  'total':   0},
+    {'date': '2025-01-05', 'sub': 'Sell to Open', 'qty': -1, 'cp': 'CALL', 'total':  70},
+    {'date': '2025-01-19', 'sub': 'Expiration',   'qty':  1, 'cp': 'CALL', 'total':   0},
+])
+_ch4 = build_option_chains(_mixed)
+check_int('Chains: PUT + CALL → 2 chains (one each)', len(_ch4), 2)
+
+# ── BTO leg in same DataFrame → not recorded in chain ───────────────────────
+_spread = _make_opts([
+    {'date': '2025-01-05', 'sub': 'Sell to Open', 'qty': -1, 'total':  80},
+    {'date': '2025-01-05', 'sub': 'Buy to Open',  'qty':  1, 'total': -30},
+    {'date': '2025-01-19', 'sub': 'Expiration',   'qty':  1, 'total':   0},
+])
+_ch5 = build_option_chains(_spread)
+check_int('Chains: BTO leg not recorded — chain has 2 events (STO + expiry)',
+          len(_ch5[0]), 2)
+
+# ── Empty DataFrame → no chains ──────────────────────────────────────────────
+_empty = _make_opts([])
+check_int('Chains: empty input → 0 chains', len(build_option_chains(_empty)), 0)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 17. CLOSED TRADES — CORE AGGREGATES
+# ══════════════════════════════════════════════════════════════════════════════
+# build_closed_trades() pairs every STO with its matching BTC/expiry/assignment
+# and computes Capture %, Days Held, DTE at Open, Ann Return %, etc.
+# These tests pin the headline numbers from the real CSV so any regression in
+# the pairing logic or column calculations is caught immediately.
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 17. Closed trades — core aggregates ────────────────────────────────')
+
+_ct = build_closed_trades(df)
+
+check_int('CT: total trades',              len(_ct),                    95)
+check_int('CT: winning trades',            int(_ct['Won'].sum()),       80)
+check    ('CT: win rate %',                _ct['Won'].mean() * 100,     84.2105)
+check    ('CT: total net P/L',             _ct['Net P/L'].sum(),        834.05)
+check    ('CT: total premium received',    _ct['Premium Rcvd'].sum(),   10377.80)
+check    ('CT: median capture %',          _ct['Capture %'].median(),   31.5467)
+check    ('CT: median days held',          _ct['Days Held'].median(),   6.0)
+check    ('CT: median DTE at open',        _ct['DTE Open'].median(),    36.0)
+check_int('CT: credit trades',             int(_ct['Is Credit'].sum()), 91)
+check_int('CT: debit trades',              int((~_ct['Is Credit']).sum()), 4)
+
+# ── Per-ticker net P/L ───────────────────────────────────────────────────────
+_ct_by_ticker = _ct.groupby('Ticker')['Net P/L'].sum()
+check('CT ticker RKLB net P/L',   _ct_by_ticker['RKLB'],    618.00)
+check('CT ticker SOFI net P/L',   _ct_by_ticker['SOFI'],    509.22)
+check('CT ticker SMR  net P/L',   _ct_by_ticker['SMR'],     362.63)
+check('CT ticker INTC net P/L',   _ct_by_ticker['INTC'],    217.99)
+check('CT ticker JOBY net P/L',   _ct_by_ticker['JOBY'],     52.32)
+check('CT ticker GLD  net P/L',   _ct_by_ticker['GLD'],    -189.92)
+check('CT ticker XYZ  net P/L',   _ct_by_ticker['XYZ'],    -354.46)
+check('CT ticker SPX  net P/L',   _ct_by_ticker['SPX'],    -307.40)
+
+# ── Spot-check individual trade fields ──────────────────────────────────────
+# RKLB big strangle: Oct 16 → Dec 18 2025, 63 days, $1194.76 credit, $757.53 P/L
+_rklb_big = _ct[
+    (_ct['Ticker'] == 'RKLB') &
+    (_ct['Trade Type'] == 'Short Strangle') &
+    (_ct['Net P/L'] > 700)
+].iloc[0]
+check    ('CT RKLB strangle premium',    _rklb_big['Premium Rcvd'],  1194.76)
+check    ('CT RKLB strangle net P/L',    _rklb_big['Net P/L'],        757.53)
+check    ('CT RKLB strangle capture %',  _rklb_big['Capture %'],       63.4044)
+check_int('CT RKLB strangle days held',  int(_rklb_big['Days Held']),  63)
+check_int('CT RKLB strangle DTE open',   int(_rklb_big['DTE Open']),   64)
+
+# INTC strangle Dec11–Jan02: 22 days, $209.78 credit, $119.55 P/L
+_intc_strang = _ct[
+    (_ct['Ticker'] == 'INTC') &
+    (_ct['Trade Type'] == 'Short Strangle') &
+    (_ct['Net P/L'] > 100)
+].iloc[0]
+check('CT INTC strangle premium',   _intc_strang['Premium Rcvd'],  209.78)
+check('CT INTC strangle net P/L',   _intc_strang['Net P/L'],       119.55)
+check('CT INTC strangle capture %', _intc_strang['Capture %'],      56.9883)
+
+# SOFI put assigned Feb-20: 42 days held, 100% capture (expired worthless assigned)
+_sofi_assigned = _ct[
+    (_ct['Ticker'] == 'SOFI') &
+    (_ct['Close Type'] == '📋 Assigned') &
+    (_ct['Premium Rcvd'] > 130)
+].iloc[0]
+check    ('CT SOFI assigned put premium',   _sofi_assigned['Premium Rcvd'], 132.88)
+check    ('CT SOFI assigned put net P/L',   _sofi_assigned['Net P/L'],      132.88)
+check    ('CT SOFI assigned put capture %', _sofi_assigned['Capture %'],    100.0)
+check_int('CT SOFI assigned put days held', int(_sofi_assigned['Days Held']), 42)
+
+# ── Human-verified trades (cross-checked against TastyTrade UI) ──────────────
+# These were verified screenshot-by-screenshot against the real TastyTrade
+# transaction history on 28 Feb 2026. The pairing logic, credit received,
+# buyback cost, and net P/L were all confirmed exact.
+
+# SLV Put Jan 7 → Jan 10 2026: SOLD @ 1.02 (+$100.88), BOUGHT @ 0.61 (-$61.12)
+_slv_put = _ct[
+    (_ct['Ticker'] == 'SLV') & (_ct['Trade Type'] == 'Short Put')
+].iloc[0]
+check    ('VERIFIED SLV put credit received',  _slv_put['Premium Rcvd'], 100.88)
+check    ('VERIFIED SLV put net P/L',          _slv_put['Net P/L'],       39.76)
+check    ('VERIFIED SLV put capture %',        _slv_put['Capture %'],     39.4132, tol=0.001)
+check_int('VERIFIED SLV put days held',        int(_slv_put['Days Held']),  2)
+
+# INTC 41 Put Jan 28 → Feb 17 2026: SOLD @ 1.05 (+$103.88), BOUGHT @ 1.17 (-$117.12)
+_intc_put_loss = _ct[
+    (_ct['Ticker'] == 'INTC') &
+    (_ct['Trade Type'] == 'Short Put') &
+    (_ct['Net P/L'] < 0)
+].iloc[0]
+check    ('VERIFIED INTC losing put credit received', _intc_put_loss['Premium Rcvd'], 103.88)
+check    ('VERIFIED INTC losing put net P/L',         _intc_put_loss['Net P/L'],      -13.24)
+check    ('VERIFIED INTC losing put capture %',       _intc_put_loss['Capture %'],    -12.7455, tol=0.001)
+check_int('VERIFIED INTC losing put days held',       int(_intc_put_loss['Days Held']), 19)
+
+# SMR 13 Put Jan 26 → Feb 17 2026: SOLD @ 0.62 (+$60.88), BOUGHT @ 1.48 (-$148.12)
+_smr_put_loss = _ct[
+    (_ct['Ticker'] == 'SMR') &
+    (_ct['Trade Type'] == 'Short Put') &
+    (_ct['Net P/L'] < 0)
+].iloc[0]
+check    ('VERIFIED SMR losing put credit received', _smr_put_loss['Premium Rcvd'],  60.88)
+check    ('VERIFIED SMR losing put net P/L',         _smr_put_loss['Net P/L'],       -87.24)
+check    ('VERIFIED SMR losing put capture %',       _smr_put_loss['Capture %'],    -143.2983, tol=0.001)
+check_int('VERIFIED SMR losing put days held',       int(_smr_put_loss['Days Held']), 21)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 18. CLOSED TRADES — STRATEGY BREAKDOWN
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 18. Closed trades — strategy breakdown ─────────────────────────────')
+
+_ct_strat = _ct.groupby('Trade Type').agg(
+    count=('Won', 'count'),
+    wins=('Won', 'sum'),
+    total_pnl=('Net P/L', 'sum'),
+)
+
+# Trade counts per strategy
+check_int('CT strategy Short Put count',        int(_ct_strat.loc['Short Put',    'count']), 32)
+check_int('CT strategy Short Call count',       int(_ct_strat.loc['Short Call',   'count']), 22)
+check_int('CT strategy Iron Condor count',      int(_ct_strat.loc['Iron Condor',  'count']), 17)
+check_int('CT strategy Short Strangle count',   int(_ct_strat.loc['Short Strangle','count']), 6)
+check_int('CT strategy Put Credit Spread count',int(_ct_strat.loc['Put Credit Spread','count']), 10)
+
+# Net P/L per strategy
+check('CT strategy Short Put total P/L',      _ct_strat.loc['Short Put',    'total_pnl'],  1119.70)
+check('CT strategy Short Call total P/L',     _ct_strat.loc['Short Call',   'total_pnl'],   732.93)
+check('CT strategy Iron Condor total P/L',    _ct_strat.loc['Iron Condor',  'total_pnl'],  -389.29)
+check('CT strategy Put Credit Spread P/L',    _ct_strat.loc['Put Credit Spread','total_pnl'], -638.86)
+
+# Win counts
+check_int('CT strategy Short Call wins (all)',  int(_ct_strat.loc['Short Call', 'wins']), 22)
+check_int('CT strategy Short Put wins',         int(_ct_strat.loc['Short Put',  'wins']), 30)
+check_int('CT strategy Iron Condor wins',       int(_ct_strat.loc['Iron Condor','wins']), 13)
+
+# Short Put (x2) — multi-contract trade recorded as single row
+_sp2 = _ct[_ct['Trade Type'] == 'Short Put (x2)']
+check_int('CT Short Put (x2) count',       len(_sp2),                  1)
+check    ('CT Short Put (x2) premium',     _sp2.iloc[0]['Premium Rcvd'], 361.76)
+check    ('CT Short Put (x2) net P/L',     _sp2.iloc[0]['Net P/L'],      133.52)
+check_int('CT Short Put (x2) DTE open',    int(_sp2.iloc[0]['DTE Open']), 46)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 19. CLOSED TRADES — CLOSE TYPES & DEBIT TRADES
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 19. Closed trades — close types & debit trades ─────────────────────')
+
+_close_counts = _ct['Close Type'].value_counts()
+
+check_int('CT close type Closed count',   int(_close_counts.get('✂️ Closed',   0)), 90)
+check_int('CT close type Expired count',  int(_close_counts.get('⏹️ Expired',  0)),  3)
+check_int('CT close type Assigned count', int(_close_counts.get('📋 Assigned', 0)),  2)
+check_int('CT close types sum to total',  int(_close_counts.sum()),                 95)
+
+_expired = _ct[_ct['Close Type'] == '⏹️ Expired']
+# Expired trades — only check count; capture% varies (some expired worthless, some ITM)
+check_int('CT expired: SOFI expired worthless (100% capture)',
+          int((_expired[_expired['Ticker'] == 'SOFI']['Capture %'] == 100.0).sum()), 1)
+check_int('CT expired: SPX expired ITM (loss, capture < 0)',
+          int((_expired[_expired['Ticker'] == 'SPX']['Net P/L'] < 0).sum()), 1)
+check_int('CT expired: all 3 are in the expired set',
+          len(_expired), 3)
+
+# Debit trades (Calendar Spread, Debit Spread, Butterfly)
+_debit = _ct[~_ct['Is Credit']]
+check_int('CT debit trade count',          len(_debit),                    4)
+check    ('CT debit trades total P/L',     _debit['Net P/L'].sum(),       -227.19)
+
+# TSLA Call Debit Spread: bought $132.24, lost the whole thing
+_tsla_ds = _ct[
+    (_ct['Ticker'] == 'TSLA') & (_ct['Trade Type'] == 'Call Debit Spread')
+].iloc[0]
+check('CT TSLA debit spread premium',    _tsla_ds['Premium Rcvd'], -132.24)
+check('CT TSLA debit spread net P/L',    _tsla_ds['Net P/L'],      -132.24)
+check('CT TSLA debit spread capture %',  _tsla_ds['Capture %'],    -100.0)
+
+# META Calendar Spread: debit trade that turned a profit
+_meta_cal = _ct[
+    (_ct['Ticker'] == 'META') & (_ct['Trade Type'] == 'Calendar Spread')
+].iloc[0]
+check('CT META calendar debit premium',  _meta_cal['Premium Rcvd'], -72.24)
+check('CT META calendar net P/L',        _meta_cal['Net P/L'],       18.52)
+check_int('CT META calendar is winner',  int(_meta_cal['Won']),       1)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 20. CLOSED TRADES — WINDOW FILTERING
+# ══════════════════════════════════════════════════════════════════════════════
+# Verifies that filtering closed trades by Close Date gives the right counts
+# and P/L for each named window. This exercises the same date slicing that
+# render_tab1 and render_tab2 rely on.
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 20. Closed trades — window filtering ────────────────────────────────')
+
+from datetime import timedelta
+
+_latest = df['Date'].max()   # 2026-02-27
+
+def _ct_window(start):
+    """Closed trades whose Close Date falls on or after start."""
+    return _ct[pd.to_datetime(_ct['Close Date']) >= start]
+
+# YTD (Jan 1 2026 →)
+_ytd = _ct_window(pd.Timestamp('2026-01-01'))
+check_int('CT YTD trade count',   len(_ytd),                    41)
+check    ('CT YTD net P/L',       _ytd['Net P/L'].sum(),       979.95)
+check_int('CT YTD win count',     int(_ytd['Won'].sum()),        35)
+
+# 7d window
+_w7 = _ct_window(_latest - timedelta(days=7))
+check_int('CT 7d trade count',    len(_w7),                      8)
+check    ('CT 7d net P/L',        _w7['Net P/L'].sum(),         262.20)
+
+# 30d window
+_w30 = _ct_window(_latest - timedelta(days=30))
+check_int('CT 30d trade count',   len(_w30),                    22)
+check    ('CT 30d net P/L',       _w30['Net P/L'].sum(),        200.13)
+
+# All-time window == full table
+check_int('CT all-time == full table', len(_ct_window(df['Date'].min())), len(_ct))
+
+# Boundary: a trade closed exactly on latest_date IS included in 1d window
+_on_latest = _ct[pd.to_datetime(_ct['Close Date']).dt.normalize() == _latest]
+if not _on_latest.empty:
+    _w0 = _ct_window(_latest)
+    check_int('CT boundary: trade on latest_date included', len(_w0) >= 1, 1)
+
+# YTD: no trade closed before Jan 1 appears
+_ytd_pre = pd.to_datetime(_ytd['Close Date']).dt.normalize() < pd.Timestamp('2026-01-01')
+check_int('CT YTD: no pre-2026 close dates', int(_ytd_pre.sum()), 0)
+
+# 7d: all close dates within window
+_w7_outside = pd.to_datetime(_w7['Close Date']) < (_latest - timedelta(days=7))
+check_int('CT 7d: no out-of-window close dates', int(_w7_outside.sum()), 0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

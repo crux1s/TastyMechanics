@@ -165,17 +165,39 @@ CSV upload
 
 **Test suite**
 
-`test_tastymechanics.py` contains 153 tests covering all P/L figures, campaign accounting, windowed views, FIFO edge cases, and structural invariants. Tests import directly from `mechanics.py` and `ingestion.py` — no Streamlit server required, no exec hacks, no parallel reimplementations that can drift.
+`test_tastymechanics.py` contains 258 tests across 23 sections covering all P/L figures, campaign accounting, windowed views, FIFO edge cases, closed trade pairing, strategy breakdowns, and structural invariants. Tests import directly from `mechanics.py` and `ingestion.py` — no Streamlit server required, no exec hacks, no parallel reimplementations that can drift.
 
 ```bash
 python test_tastymechanics.py
 ```
 
-Expected values were derived independently from raw CSV data using pandas. A failing test means the app's math has changed — intentionally or not.
+Place your TastyTrade CSV (named `tastytrade_*.csv` or `tastymechanics_*.csv`) in the same folder as the script. Expected values are pinned to real account data — a failing test means the app's math has changed, intentionally or not. Three tests are marked **VERIFIED** — cross-checked screenshot-by-screenshot against the live TastyTrade UI.
 
 ---
 
 ## Changelog
+
+**v25.11 — Refactor & Testing** (2026-02-28)
+- Six tab render functions extracted from `main()` into module-level scope — `main()` reduced from 2,191 to 875 lines
+- Union-Find helpers (`_uf_find`, `_uf_union`, `_group_symbols_by_order`) extracted from `build_closed_trades` to module level — now independently testable
+- `_write_test_snapshot` refactored from 22 positional parameters to a single `ctx` dict
+- Time window selection replaced 7-branch `if/elif` chain with `_WINDOW_START` dict lookup
+- Test suite expanded from 185 to 258 tests (23 sections)
+- Four new test sections: closed trade core aggregates, strategy breakdown, close types & debit trades, window filtering
+- Three **VERIFIED** tests added — P/L figures cross-checked screenshot-by-screenshot against live TastyTrade UI
+- CSV discovery updated to accept `tastymechanics_*.csv` filename pattern in addition to `tastytrade_*.csv`
+- Duplicate section numbers (9, 10, 11) in test output corrected to 21, 22, 23
+- Portfolio Overview metric captions rewritten — consistent length, Cap Efficiency description halved
+- `build_option_chains` empty-DataFrame guard added (prevented crash on tickers with no option history)
+
+**v25.10 — Bug Fixes** (2026-02-27)
+- `realized_ror` recomputed after zero-cost exclusion filter (was using stale pre-filter value)
+- `pure_options_pnl()` boundary condition fixed — options on campaign start date now correctly classified
+- Dependency chain restored: `build_campaigns` result passed through correctly to downstream callers
+- FIFO zero-quantity guard added — prevents division by zero on degenerate lot sequences
+- Column rename: `_dsc` → `dsc_upper` (leading underscore caused `itertuples` access failure on Windows)
+- Type annotation corrected: `Optional[Campaign]` (was missing `Optional` wrapper)
+- Version bumped to v25.10
 
 **v25.9 — Refactor** (2026-02-27)
 - Extracted pure analytics into `mechanics.py` (no Streamlit dependency)

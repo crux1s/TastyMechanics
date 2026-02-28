@@ -12,10 +12,18 @@ Public API
 Internal helpers (also importable for use in analysis functions)
   clean_val(val)                → float
   get_signed_qty(row)           → float
-  equity_mask(series)           → bool Series
-  option_mask(series)           → bool Series
+  is_share_row(inst)            → bool   (scalar — single Instrument Type string)
+  is_option_row(inst)           → bool   (scalar — single Instrument Type string)
+  equity_mask(series)           → bool Series  (vectorised — whole column)
+  option_mask(series)           → bool Series  (vectorised — whole column)
   detect_corporate_actions(df)  → (split_events, zero_cost_rows)
   apply_split_adjustments(df)   → df
+
+Note: is_share_row / is_option_row are the scalar equivalents of equity_mask /
+option_mask.  They live here (not in ui_components.py) because they encode
+knowledge about TastyTrade's Instrument Type field values — the same domain
+knowledge as the rest of this module.  ui_components.py re-exports them for
+backwards compatibility.
 """
 
 from __future__ import annotations
@@ -103,6 +111,18 @@ def get_signed_qty(row: pd.Series) -> float:
     return 0
 
 
+def is_share_row(inst) -> bool:
+    """Return True if inst is a plain equity row ('Equity', not an option).
+    Scalar equivalent of equity_mask() — use on a single Instrument Type value."""
+    return str(inst).strip() == 'Equity'
+
+
+def is_option_row(inst) -> bool:
+    """Return True if inst is an option row ('Equity Option' or 'Future Option').
+    Scalar equivalent of option_mask() — use on a single Instrument Type value."""
+    return 'Option' in str(inst)
+
+
 def equity_mask(series: pd.Series) -> pd.Series:
     """Vectorised test for plain equity rows — True for 'Equity', not options."""
     return series.str.strip() == 'Equity'
@@ -147,15 +167,15 @@ def detect_corporate_actions(df: pd.DataFrame) -> tuple[list, list]:
     if rd.empty:
         return split_events, zero_cost_rows
 
-    rd['_dsc'] = rd['Description'].fillna('').str.upper()
+    rd['dsc_upper'] = rd['Description'].fillna('').str.upper()
 
     def _is_split_row(dsc):
         return any(p in dsc for p in SPLIT_DSC_PATTERNS)
 
     processed_indices = set()
     for (ticker, date), grp in rd.groupby(['Ticker', 'Date']):
-        removals  = grp[grp['_dsc'].apply(lambda d: 'REMOVAL'     in d and _is_split_row(d))]
-        additions = grp[grp['_dsc'].apply(lambda d: 'REMOVAL' not in d and _is_split_row(d))]
+        removals  = grp[grp['dsc_upper'].apply(lambda d: 'REMOVAL'     in d and _is_split_row(d))]
+        additions = grp[grp['dsc_upper'].apply(lambda d: 'REMOVAL' not in d and _is_split_row(d))]
         if not removals.empty and not additions.empty:
             pre_qty  = removals['Quantity'].sum()
             post_qty = additions['Quantity'].sum()
@@ -172,10 +192,9 @@ def detect_corporate_actions(df: pd.DataFrame) -> tuple[list, list]:
 
     # Zero-cost additions not matched to a split pair
     for row in rd[~rd.index.isin(processed_indices)].itertuples(index=False):
-        # itertuples renames columns starting with _ (e.g. _dsc → _N),
-        # so read Description directly and uppercase it here.
-        dsc = str(row.Description).upper()
-        if 'ASSIGNMENT' in dsc:
+        # dsc_upper is a plain column name (no leading underscore) so itertuples
+        # exposes it cleanly as row.dsc_upper — no workaround needed.
+        if 'ASSIGNMENT' in row.dsc_upper:
             continue
         if row.Quantity > 0:
             zero_cost_rows.append({

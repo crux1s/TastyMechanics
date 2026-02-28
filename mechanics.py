@@ -18,6 +18,11 @@ Public API
   build_option_chains(ticker_opts)                → list
   calc_dte(row, reference_date)                   → str
   compute_app_data(parsed, use_lifetime)          → AppData
+
+Internal helpers (also importable and testable)
+  _uf_find(parent, x)                            → str   (Union-Find with path compression)
+  _uf_union(parent, a, b)                        → None  (Union-Find merge)
+  _group_symbols_by_order(sym_open_orders)       → dict  (groups multi-leg trade symbols)
 """
 
 from __future__ import annotations
@@ -40,8 +45,7 @@ from config import (
     FIFO_EPSILON, FIFO_ROUND,
     ANN_RETURN_CAP,
 )
-from ingestion import equity_mask, option_mask
-from ui_components import is_share_row, is_option_row
+from ingestion import equity_mask, option_mask, is_share_row, is_option_row
 
 
 # ── FIFO CORE ─────────────────────────────────────────────────────────────────
@@ -120,7 +124,10 @@ def _iter_fifo_sells(equity_rows: pd.DataFrame) -> Iterator[tuple[pd.Timestamp, 
             # ── BUY row ───────────────────────────────────────────────────────
             # Cover shorts first (FIFO); any residual qty opens/adds to a long.
             remaining = qty
-            pps = abs(total) / qty               # cost per share on this buy
+            # Guard: qty > 0 is guaranteed by the branch condition, but a row
+            # with qty=0 and total!=0 (e.g. a misclassified fee) would cause
+            # ZeroDivisionError without this check.
+            pps = abs(total) / qty if qty != 0 else 0.0  # cost per share on this buy
 
             while remaining > FIFO_EPSILON and sq:
                 s_qty, s_pps = sq[0]
@@ -144,7 +151,7 @@ def _iter_fifo_sells(equity_rows: pd.DataFrame) -> Iterator[tuple[pd.Timestamp, 
             # ── SELL row ──────────────────────────────────────────────────────
             # Close longs first (FIFO); any residual qty opens/adds to a short.
             remaining       = abs(qty)
-            pps             = abs(total) / remaining   # proceeds per share on this sell
+            pps             = abs(total) / remaining   # proceeds per share — remaining == abs(qty) > 0 always
             sale_cost_basis = 0.0
 
             while remaining > FIFO_EPSILON and lq:
@@ -295,9 +302,9 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 status='open', events=events,
             )]
 
-    campaigns: list      = []
-    current:   Campaign  = None
-    running_shares       = 0.0
+    campaigns: list               = []
+    current:   Optional[Campaign] = None
+    running_shares                = 0.0
 
     for row in t.itertuples(index=False):
         inst     = str(row.Instrument_Type)
@@ -311,6 +318,19 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
         # We detect the addition row (no REMOVAL keyword) to compute the ratio
         # and rescale the live campaign. total_cost is unchanged — the same
         # cash was invested, there are just more shares now.
+        #
+        # Ratio source: split_qty (TastyTrade's addition row) / running_shares
+        # (our tracked post-previous-split count). This is correct because
+        # apply_split_adjustments() has already rescaled all pre-split lot
+        # quantities in the DataFrame, so running_shares always reflects the
+        # current share count immediately before this split event. On a second
+        # split the same logic applies: running_shares is the post-first-split
+        # count, and split_qty is the post-second-split count.
+        #
+        # Edge case: if TastyTrade's addition row quantity doesn't exactly match
+        # running_shares × ratio (e.g. fractional rounding on a reverse split),
+        # running_shares is set directly to split_qty — TastyTrade's figure is
+        # authoritative; our tracked count defers to theirs.
         if (is_share_row(inst) and qty == 0 and total == 0
                 and any(p in dsc_up for p in SPLIT_DSC_PATTERNS)
                 and 'REMOVAL' not in dsc_up
@@ -441,16 +461,79 @@ def realized_pnl(c: Campaign, use_lifetime: bool = False) -> float:
     return c.premiums + c.dividends
 
 def pure_options_pnl(df: pd.DataFrame, ticker: str, campaigns: list[Campaign]) -> float:
-    """Options P/L for a ticker that falls *outside* all campaign windows."""
-    windows = [(c.start_date, c.end_date or df['Date'].max()) for c in campaigns]
+    """
+    Options P/L for a ticker that falls *outside* all campaign windows.
+
+    Window boundary convention
+    --------------------------
+    Start is always inclusive (>= start_date).
+    End depends on whether the campaign is closed or still open:
+
+      Closed campaign (c.end_date is set):
+        End is *exclusive* (< end_date).  The end_date is the share-sale date.
+        An option that closes on that exact date is after the campaign has ended
+        and must not be counted as campaign premium — it belongs in the
+        outside-window bucket.  Using <= would double-count it.
+
+      Open campaign (c.end_date is None):
+        No upper bound is applied.  Options from start_date onwards are inside
+        the live campaign regardless of the latest data date, so no sentinel
+        value is needed and no edge case can arise.
+    """
     t = df[(df['Ticker'] == ticker) & option_mask(df['Instrument Type'])]
     dates = t['Date']
     in_any_window = pd.Series(False, index=t.index)
-    for s, e in windows:
-        in_any_window |= (dates >= s) & (dates <= e)
+    for c in campaigns:
+        s = c.start_date
+        if c.end_date is not None:
+            # Closed campaign — exclusive end: option on sale date is outside
+            in_any_window |= (dates >= s) & (dates < c.end_date)
+        else:
+            # Open campaign — no upper bound: all options from start are inside
+            in_any_window |= (dates >= s)
     return t.loc[~in_any_window, 'Total'].sum()
 
 # ── DERIVATIVES METRICS ENGINE ─────────────────────────────────────────────────
+
+# Union-Find (disjoint-set) helpers used by build_closed_trades to group
+# option symbols that share an Order # into a single multi-leg trade.
+# Extracted to module level so they are independently importable and testable.
+
+def _uf_find(parent: dict, x: str) -> str:
+    """Return the root of x's component, with path compression."""
+    parent.setdefault(x, x)
+    if parent[x] != x:
+        parent[x] = _uf_find(parent, parent[x])
+    return parent[x]
+
+
+def _uf_union(parent: dict, a: str, b: str) -> None:
+    """Merge the components containing a and b."""
+    parent[_uf_find(parent, a)] = _uf_find(parent, b)
+
+
+def _group_symbols_by_order(sym_open_orders: dict) -> dict:
+    """
+    Given {symbol: [order_id, ...]} return {root_symbol: [symbol, ...]}
+    where all symbols that share at least one Order # end up in the same group.
+    Uses Union-Find to handle chains: A∩B and B∩C → {A, B, C} one group.
+    """
+    order_to_syms: dict = defaultdict(set)
+    for sym, orders in sym_open_orders.items():
+        for oid in orders:
+            order_to_syms[oid].add(sym)
+
+    parent: dict = {}
+    for syms in order_to_syms.values():
+        syms = list(syms)
+        for i in range(1, len(syms)):
+            _uf_union(parent, syms[0], syms[i])
+
+    groups: dict = defaultdict(list)
+    for sym in sym_open_orders:
+        groups[_uf_find(parent, sym)].append(sym)
+    return groups
+
 
 def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = None) -> pd.DataFrame:
     if campaign_windows is None: campaign_windows = {}
@@ -461,23 +544,7 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
         if not opens.empty:
             sym_open_orders[sym] = opens['Order #'].dropna().unique().tolist()
 
-    order_to_syms = defaultdict(set)
-    for sym, orders in sym_open_orders.items():
-        for oid in orders: order_to_syms[oid].add(sym)
-
-    parent = {}
-    def find(x):
-        parent.setdefault(x, x)
-        if parent[x] != x: parent[x] = find(parent[x])
-        return parent[x]
-    def union(a, b): parent[find(a)] = find(b)
-
-    for oid, syms in order_to_syms.items():
-        syms = list(syms)
-        for i in range(1, len(syms)): union(syms[0], syms[i])
-
-    trade_groups = defaultdict(list)
-    for sym in sym_open_orders: trade_groups[find(sym)].append(sym)
+    trade_groups = _group_symbols_by_order(sym_open_orders)
 
     closed_list = []
     for root, syms in trade_groups.items():
@@ -490,6 +557,14 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
 
         open_credit = opens['Total'].sum()
         net_pnl     = grp['Total'].sum()
+        # open_date is the earliest open across ALL legs in the trade group,
+        # including legs from subsequent rolls. For a rolled position this means
+        # days_held spans the full roll chain (first open → final close), not
+        # just the last leg. This is intentional: it treats a roll as one
+        # continuous trade rather than a series of independent ones, giving a
+        # conservative (lower) Ann Return % that reflects the real capital
+        # commitment duration. A future improvement could expose per-roll
+        # metrics separately for accounts with active roll histories.
         open_date   = opens['Date'].min()
         close_date  = grp['Date'].max()
         days_held   = max((close_date - open_date).days, 1)
@@ -671,6 +746,8 @@ def build_option_chains(ticker_opts: pd.DataFrame) -> list:
     A chain = one continuous short position, rolled multiple times.
     Chain ends when position goes flat AND next STO is > 3 days later.
     """
+    if ticker_opts.empty:
+        return []
     chains = []
     for cp_type in ['CALL', 'PUT']:
         legs = ticker_opts[
@@ -708,10 +785,17 @@ def build_option_chains(ticker_opts: pd.DataFrame) -> list:
                 current_chain.append(event)
                 last_close_date = None
             elif net_qty > 0 and (PAT_CLOSE in sub or 'expiration' in sub or 'assignment' in sub):
+                # Close / expiry / assignment — reduce net position and record.
                 net_qty = max(net_qty - abs(qty), 0)
                 current_chain.append(event)
                 if net_qty == 0:
                     last_close_date = row.Date
+            # BTO legs (qty > 0, 'to open' in sub) are intentionally not recorded.
+            # Roll chains model short-premium positions — the long wing of a spread
+            # is opened in the same order as the short and appears in closed_trades_df
+            # with correct P/L. Recording it here would duplicate the entry in the
+            # chain visualisation without adding information. If spread-leg detail
+            # is ever needed, add an 'is_long_wing' flag to the event dict here.
 
         if current_chain:
             chains.append(current_chain)
@@ -850,6 +934,16 @@ def compute_app_data(parsed: ParsedData, use_lifetime: bool) -> AppData:
         pure_opts_pnl += opt_flow + eq_fifo_pnl
 
         # 3. Shares still open → capital deployed (not realized P/L)
+        #
+        # Approximation: remaining capital is costed at the average buy price
+        # across ALL lots for this ticker, including lots that have already been
+        # sold. The FIFO engine has consumed those lots internally, but we don't
+        # expose the remaining queue here without restructuring the engine.
+        # For a ticker with no partial sells this is exact. For one with partial
+        # sells it slightly overstates capital deployed (sold-lot cost leaks in).
+        # The error is bounded by (sold_qty / total_bought) × total_buy_cost and
+        # is typically small. A precise fix would require _iter_fifo_sells() to
+        # return the residual queue — deferred until this becomes measurable.
         net_shares = t_eq_rows['Net_Qty_Row'].sum()
         if net_shares > 0.0001:
             bought_rows    = t_eq_rows[t_eq_rows['Net_Qty_Row'] > 0]

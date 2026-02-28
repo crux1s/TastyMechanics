@@ -12,6 +12,10 @@ constants used in colour lookups).
 import html as _html
 import pandas as pd
 from config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT
+# is_share_row / is_option_row live in ingestion.py — that is the correct home
+# for anything that encodes TastyTrade field values.  Re-exported here so that
+# tastymechanics.py can continue to import them from ui_components without change.
+from ingestion import is_share_row, is_option_row
 
 
 # ── XSS safety ────────────────────────────────────────────────────────────────
@@ -22,12 +26,6 @@ def xe(s):
 
 
 # ── Position type helpers (pure classification, no math) ──────────────────────
-
-def is_share_row(inst):
-    return str(inst).strip() == 'Equity'
-
-def is_option_row(inst):
-    return 'Option' in str(inst)
 
 def identify_pos_type(row):
     """Classify a single open-position row as Long/Short Stock/Call/Put."""
