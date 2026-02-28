@@ -237,6 +237,8 @@ Place your TastyTrade CSV (named `tastytrade_*.csv` or `tastymechanics_*.csv`) i
 
 ## Support the Project
 
-TastyMechanics is free and open source. If it's useful to you and you're not already on TastyTrade, consider opening an account through the referral link below — it costs you nothing extra and helps fund continued development.
+TastyMechanics is free and open source. If it's saved you time or helped you trade smarter, a coffee goes a long way toward covering the 5-sigma moves.
 
-[Open a TastyTrade account](https://tastytrade.com/welcome/?referralCode=NT57Z3P85B)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Cruxis-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/Cruxis)
+
+Not on TastyTrade yet? [Open an account here](https://tastytrade.com/welcome/?referralCode=NT57Z3P85B) — it costs you nothing extra and helps fund continued development.
