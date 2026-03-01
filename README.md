@@ -161,6 +161,7 @@ models.py          Dataclasses — Campaign, AppData, ParsedData
 ingestion.py       CSV parsing — pure Python, no Streamlit dependency
 mechanics.py       Analytics engine — FIFO, campaigns, trade classification
 ui_components.py   Visual helpers — formatters, colour functions, chart layout
+report.py          HTML report export — self-contained, no Streamlit dependency
 tastymechanics.py  Streamlit wiring — sidebar, tabs, cached wrappers only
 ```
 
