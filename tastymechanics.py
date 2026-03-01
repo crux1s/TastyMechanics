@@ -967,7 +967,7 @@ def main():
                 div_income=div_income,
                 int_net=int_net,
                 total_fees=_rpt_total_fees,
-                net_deposited=net_deposited,
+                net_deposited=total_deposited,
                 selected_period=selected_period,
             )
             _report_fname = 'tastymechanics_report_%s.html' % _win_start_str.replace('/', '-')

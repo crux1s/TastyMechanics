@@ -48,7 +48,7 @@ def build_html_report(all_cdf, credit_cdf, has_credit, has_data,
         'Dividends':                 fmt_dollar(div_income),
         'Interest (net)':            fmt_dollar(int_net),
         'Total Fees':                fmt_dollar(total_fees),
-        'Net Deposited':             fmt_dollar(net_deposited),
+        'Deposited':                 fmt_dollar(net_deposited),
         'Total Trades':              str(len(all_cdf)),
     }
 
