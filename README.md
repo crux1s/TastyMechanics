@@ -2,7 +2,7 @@
   <img src="icon.png" width="120" alt="TastyMechanics icon"/>
 </p>
 
-# 📟 TastyMechanics
+# 📟 TastyMechanics &nbsp; [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/Cruxis)
 
 A Streamlit dashboard for **theta and wheel strategy traders** on TastyTrade. Built around premium selling — short puts, covered calls, strangles, and the wheel — with metrics that matter for multi-day holds: capture %, annualised return, banked $/day, effective basis, and campaign tracking.
 
@@ -10,7 +10,11 @@ Upload your CSV export and get a full breakdown of realized P/L, wheel campaigns
 
 > **Heads up for 0DTE traders:** the app works but some metrics (Ann Return %, Med Premium/Day, Wheel Campaigns) are less meaningful for same-day trades. 0DTE-specific analytics are on the roadmap.
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Streamlit](https://img.shields.io/badge/streamlit-1.30%2B-red) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
+
+> **Personal project.** TastyMechanics is built around how I trade — wheel strategies, theta harvesting, and premium selling on TastyTrade. It works well for my account and my style. It may not fit yours out of the box, and that is intentional. If you trade differently — 0DTE, futures, spreads-heavy, non-US — the numbers may not tell the full story. You are welcome to fork the repo and customise it to match your trading style. The codebase is modular by design: analytics live in `mechanics.py`, display in `tabs/`, constants in `config.py`. Changing a metric or adding a new one is usually a small, contained change.
+
+---
+
 
 ---
 
