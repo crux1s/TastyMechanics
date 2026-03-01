@@ -8,6 +8,18 @@ Ideas and planned improvements, loosely prioritised. Not a commitment — just a
 
 Nothing active right now.
 
+## Readability & Maintainability
+
+- **Docstrings for `effective_basis()` and `realized_pnl()`** (`mechanics.py` ~448–462) — non-obvious accounting functions. "Effective" vs "blended" basis, and why `exit_proceeds` is added in `realized_pnl`, aren't self-evident. Add a proper docstring explaining the formula and when to use each. Medium priority.
+
+- **FIFO branch comments** (`mechanics.py` ~123–175) — the preamble docstring is excellent but the actual `if qty > 0` / `elif qty < 0` branches have no signpost. Add 1–2 lines before each branch: `# BUY: cover shorts first (FIFO), then open/add long` and `# SELL: close longs first (FIFO), then open/add short`. Low priority.
+
+- **Type hints on tab render functions** (`tabs/tab0`–`tab5`) — each takes 8–12 positional arguments with no hints. Add signatures like `def render_tab1(closed_trades_df: pd.DataFrame, ...) -> None`. Low priority.
+
+- **Old-style `%` formatting** (`mechanics.py:347`, `ui_components.py:53–55`) — not a bug, just inconsistent with f-strings used everywhere else. Standardise on f-strings when those lines are touched for other reasons. Not worth a dedicated pass.
+
+
+
 ---
 
 ## 0DTE Support
@@ -63,6 +75,7 @@ These tests are scoped and ready to write — just waiting for the right CSV dat
 
 ## Completed
 
+- ✅ `_aggregate_campaign_pnl()` extracted to mechanics.py — eliminates duplicate aggregation between `compute_app_data()` and zero-cost exclusion path
 - ✅ `_classify_trade_type` and `_calculate_capital_risk` extracted from `build_closed_trades` to module-level pure functions in `mechanics.py` — testable in isolation, orchestrator now clean
 - ✅ High-priced equity index misclassification fixed — `KNOWN_INDEXES` explicit list in `config.py` replaces strike > $500 heuristic
 - ✅ Wheel Campaigns waterfall chart removed (was redundant with card metrics)

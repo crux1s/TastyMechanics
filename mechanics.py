@@ -447,14 +447,55 @@ def _find_assignment_premium(t: pd.DataFrame, row: Any) -> tuple[float, list]:
     return 0.0, events
 
 def effective_basis(c: Campaign, use_lifetime: bool = False) -> float:
-    """Cost per share after netting premiums and dividends against total_cost."""
+    """
+    Cost per share after netting all premium income and dividends against the
+    total share acquisition cost.
+
+    Formula (window mode):
+        effective_basis = (total_cost - premiums - dividends) / total_shares
+
+    This answers: "What did these shares actually cost me, accounting for
+    everything I have collected while holding them?" A negative effective basis
+    means premiums + dividends have exceeded the total share cost — the
+    position is running on house money.
+
+    use_lifetime=True returns blended_basis instead — the raw FIFO cost per
+    share with no premium offset. Used in the Wheel Campaigns tab when the
+    House Money lifetime toggle is off, so the basis card shows the unmodified
+    acquisition cost for comparison.
+
+    Returns 0.0 when total_shares is 0 (campaign not yet holding shares,
+    e.g. a pure-premium run with no assignment yet).
+    """
     if use_lifetime:
         return c.blended_basis
     net = c.total_cost - c.premiums - c.dividends
     return net / c.total_shares if c.total_shares > 0 else 0.0
 
 def realized_pnl(c: Campaign, use_lifetime: bool = False) -> float:
-    """Total realised profit/loss for a campaign."""
+    """
+    Total realised profit/loss for a campaign.
+
+    Open campaign:
+        realized_pnl = premiums + dividends
+        Only income actually banked. The equity position is unrealised —
+        shares are still held, so no exit proceeds are included.
+
+    Closed campaign:
+        realized_pnl = exit_proceeds + premiums + dividends - total_cost
+        exit_proceeds is the cash received when shares were sold (positive).
+        total_cost is the cash paid to acquire shares (positive, subtracted).
+        Equivalent to: equity_gain + premiums + dividends,
+        where equity_gain = exit_proceeds - total_cost.
+
+    use_lifetime=True returns only premiums + dividends regardless of status —
+    used when the House Money lifetime toggle strips out the equity component
+    so the scorecard shows pure premium income only.
+
+    Note: this function is the single formula for campaign P/L. It is called
+    from both compute_app_data() and the zero-cost exclusion path via
+    _aggregate_campaign_pnl() — a change here propagates to both automatically.
+    """
     if use_lifetime:
         return c.premiums + c.dividends
     if c.status == 'closed':
@@ -892,6 +933,42 @@ def calc_dte(row: pd.Series, reference_date: pd.Timestamp) -> str:
 
 # ── Full portfolio computation ───────────────────────────────────────────────
 
+def _aggregate_campaign_pnl(
+    all_campaigns: dict,
+    use_lifetime: bool,
+) -> tuple:
+    """
+    Aggregate P/L and capital figures from a campaign dict.
+    Returns (closed_camp_pnl, open_premiums_banked, capital_deployed).
+
+    Extracted to avoid duplication between compute_app_data() and the
+    zero-cost exclusion filter in tastymechanics.py — a bug fix in one
+    formula now propagates to both automatically.
+
+    closed_camp_pnl      — realized_pnl() for all closed campaigns
+    open_premiums_banked — realized_pnl() for all open campaigns
+                           (premiums + dividends already banked but position still open)
+    capital_deployed     — total_shares × blended_basis for open campaigns
+                           (equity capital currently at risk)
+    """
+    closed_camp_pnl = sum(
+        realized_pnl(c, use_lifetime)
+        for camps in all_campaigns.values()
+        for c in camps if c.status == 'closed'
+    )
+    open_premiums_banked = sum(
+        realized_pnl(c, use_lifetime)
+        for camps in all_campaigns.values()
+        for c in camps if c.status == 'open'
+    )
+    capital_deployed = sum(
+        c.total_shares * c.blended_basis
+        for camps in all_campaigns.values()
+        for c in camps if c.status == 'open'
+    )
+    return closed_camp_pnl, open_premiums_banked, capital_deployed
+
+
 def compute_app_data(parsed: ParsedData, use_lifetime: bool) -> AppData:
     """
     All heavy computation that depends only on the full DataFrame and
@@ -964,15 +1041,9 @@ def compute_app_data(parsed: ParsedData, use_lifetime: bool) -> AppData:
     closed_trades_df = build_closed_trades(df, campaign_windows=_camp_windows)
 
     # ── All-time P/L accounting ────────────────────────────────────────────
-    closed_camp_pnl      = sum(realized_pnl(c, use_lifetime)
-                               for camps in all_campaigns.values()
-                               for c in camps if c.status == 'closed')
-    open_premiums_banked = sum(realized_pnl(c, use_lifetime)
-                               for camps in all_campaigns.values()
-                               for c in camps if c.status == 'open')
-    capital_deployed     = sum(c.total_shares * c.blended_basis
-                               for camps in all_campaigns.values()
-                               for c in camps if c.status == 'open')
+    closed_camp_pnl, open_premiums_banked, capital_deployed = _aggregate_campaign_pnl(
+        all_campaigns, use_lifetime
+    )
 
     # ── P/L for pure-options tickers (not part of a 100-share wheel) ─────────
     # Two components per ticker:

@@ -47,6 +47,7 @@ from ingestion import (
 # ── Analytics engine (pure Python — no Streamlit dependency) ──────────────────
 from mechanics import (
     _iter_fifo_sells,
+    _aggregate_campaign_pnl,
     calculate_windowed_equity_pnl,
     calculate_daily_realized_pnl,
     build_campaigns,
@@ -65,159 +66,40 @@ import hashlib as _hashlib
 # TastyMechanics v25.12
 # ==========================================
 #
-# Changelog
-# ---------
+# Changelog (recent versions — full history in git log)
+# -----------------------------------------------------
 # v25.12 (2026-03-01)
-#   - FEATURE: Weekly and Monthly P/L bar charts replaced with candlestick charts.
-#     Candles show the cumulative P/L equity curve open/high/low/close for each
-#     period. Wicks reveal intra-period swings invisible in bar charts.
-#     Hover shows net P/L, trade count, open, close for each period.
-#   - FEATURE: HTML report export. Download button in sidebar generates a
-#     self-contained dark-theme HTML file with two scorecard sections
-#     (Portfolio Overview and Premium Selling Performance), equity curve,
-#     weekly/monthly candles, and performance by ticker table. Filename includes
-#     window start date. No external dependencies beyond Plotly CDN.
-#   - FEATURE: Lifetime "House Money" toggle moved from sidebar Campaign Settings
-#     into the Wheel Campaigns tab header (right-aligned column). Sidebar
-#     Campaign Settings section removed. Toggle state persisted via session_state
-#     so whole-app data cache still invalidates correctly on change.
-#   - FIX: f-string quote conflicts in ui_components.py replaced with pre-extracted
-#     local variables and string concatenation. Fixes SyntaxError on Python < 3.12
-#     (affected Unraid Docker deployments running Python 3.10/3.11).
-#   - FIX: datetime.utcnow() replaced with datetime.now(timezone.utc) — removes
-#     DeprecationWarning on Python 3.12+.
-#   - COLOURS: 13-colour palette added to config.py. ui_components.py fully
-#     migrated to COLOURS dict — all hex codes replaced with named references.
-#     tastymechanics.py partially migrated (chart colours, bar colours, Python
-#     variable assignments). CSS/HTML inline strings parked for future sprint.
-#   - TESTING: 294 tests passing (was 258). 31 new tests added (Section 24):
-#     xe() HTML escaping (8 tests), identify_pos_type() (8 tests),
-#     detect_strategy() (15 tests including two bug fixes).
-#   - FIX: detect_strategy() Call Butterfly false positive — was matching Call
-#     Debit Spread when lc==2, sc==1, 3 strikes. Fixed by verifying short call
-#     is the middle strike between the two long strikes.
-#   - FIX: detect_strategy() Long Call false positive — lc>0 was matching 2+
-#     unmatched long calls. Fixed to lc==1 so multiple lone calls fall through
-#     to Custom/Mixed.
-#   - VERIFIED: TSLA Call Debit Spread test — Oct 2 BTO 457.5C/$12.23,
-#     STO 460C/$10.93, both expired worthless Oct 4. Net -$132.24. Capture %
-#     correctly None (not -100%). Five assertions verified against TastyTrade UI.
+#   - FEATURE: Candlestick charts replace bar charts for weekly/monthly P/L.
+#   - FEATURE: HTML report export (Portfolio Overview + Premium Selling Performance).
+#   - FEATURE: Lifetime "House Money" toggle moved into Wheel Campaigns tab header.
+#   - REFACTOR: report.py extracted — HTML export has no Streamlit dependency.
+#   - REFACTOR: tabs/tab0–tab5 extracted — tastymechanics.py is now orchestration only.
+#   - REFACTOR: _classify_trade_type() and _calculate_capital_risk() extracted to
+#     module-level pure functions in mechanics.py — independently testable.
+#   - REFACTOR: _aggregate_campaign_pnl() extracted — eliminates duplicate aggregation
+#     between compute_app_data() and the zero-cost exclusion path.
+#   - FIX: f-string Python 3.10/3.11 compatibility (Unraid Docker).
+#   - FIX: datetime.utcnow() deprecation warning on Python 3.12+.
+#   - FIX: Report "Deposited" figure corrected (was net, now gross deposits).
+#   - FIX: Streamlit Cloud cache stale-file bug — hashlib.md5 replaces hash().
+#   - FIX: detect_strategy() Call Butterfly and Long Call false positives.
+#   - FIX: DTE alert thresholds (5d/14d) moved to config.py as named constants.
+#   - FIX: .iloc[0] unguarded calls in mechanics.py.
+#   - FIX: qty != 0 → abs(qty) > FIFO_EPSILON for consistency with FIFO engine.
+#   - COLOURS: Full COLOURS palette migration — all hardcoded hex removed from
+#     tastymechanics.py and ui_components.py. config.py is single source of truth.
+#   - TESTING: 294 tests passing (was 258). TSLA Call Debit Spread VERIFIED.
 #
 # v25.11 (2026-02-28)
-#   - REFACTOR: Six tab render functions extracted from main() into module-level
-#     scope (render_tab0-render_tab5). main() reduced from 2,191 to 875 lines.
-#     Each function receives only the variables it uses -- explicit interfaces,
-#     no hidden closure dependencies. Paves way for file-per-tab splitting.
-#   - REFACTOR: Union-Find helpers (_uf_find, _uf_union, _group_symbols_by_order)
-#     extracted from build_closed_trades() closure to module level in mechanics.py.
-#     Now independently importable and testable.
-#   - REFACTOR: _write_test_snapshot refactored from 22 positional parameters to
-#     a single ctx dict -- eliminates parameter ordering errors, trivial to extend.
-#   - REFACTOR: Time window selection replaced 7-branch if/elif chain with
-#     _WINDOW_START dict lookup.
-#   - TESTING: Suite expanded 185 -> 258 tests (23 sections). Four new sections:
-#     closed trade core aggregates, strategy breakdown, close types & debit trades,
-#     window filtering. Three VERIFIED tests cross-checked against live TastyTrade UI.
-#   - TESTING: CSV discovery accepts tastymechanics_*.csv in addition to tastytrade_*.csv.
-#   - FIX: build_option_chains() empty-DataFrame guard added -- prevented crash on
-#     tickers with no option history in the filtered window.
-#   - UI: Portfolio Overview metric captions rewritten -- consistent length,
-#     Cap Efficiency description halved, Account Age note improved.
+#   - REFACTOR: render_tab0–render_tab5 extracted from main().
+#   - REFACTOR: Union-Find helpers extracted to module level in mechanics.py.
+#   - TESTING: Suite expanded 185 → 258 tests (23 sections).
+#   - FIX: build_option_chains() empty-DataFrame crash.
 #
-# v25.10 (2026-02-28)
-#   - FIX: realized_ror now recomputed after zero-cost exclusion filter so it
-#     always reflects the final total_realized_pnl in both code paths.
-#     Previously the ROR card showed the pre-filter value when the exclusion
-#     toggle was on. (Review finding #6)
-#   - FIX: pure_options_pnl() window boundary changed from <= to < for closed
-#     campaigns. An option closing on the same date as a share sale was silently
-#     excluded from all P/L buckets. Open campaign windows now use no upper
-#     bound rather than a df['Date'].max() sentinel. (Review finding #3)
-#   - FIX: FIFO engine zero-qty guard added to BUY path pps calculation.
-#     A misclassified corporate action row with qty=0 and total!=0 would have
-#     raised ZeroDivisionError; now returns pps=0.0 safely. (Review finding #1)
-#   - REFACTOR: is_share_row() / is_option_row() moved from ui_components.py to
-#     ingestion.py — their correct home alongside equity_mask() / option_mask().
-#     ui_components.py re-exports them for backwards compatibility.
-#     mechanics.py now imports them from ingestion, restoring the strict
-#     one-way dependency chain. (Review finding #9)
-#
-# v25.9 (2026-02-27)
-#   - NEW: Win Rate & Avg P/L by DTE at Open charts (Trade Analysis tab).
-#     Two-column view showing win rate and avg P/L per DTE bucket (0–7d through
-#     61–90d). LEAPS excluded. Reveals where your edge is strongest by DTE.
-#   - NEW: Rolling 90-day Capital Efficiency chart (All Trades tab).
-#     13-week rolling P/L annualised against deployed capital. S&P 10% benchmark
-#     line. Rising = capital working harder; flat/falling = sizing drift.
-#   - NEW: Campaign P/L Waterfall chart (Wheel Campaigns tab, per campaign).
-#     Shows Share Cost → Premiums → Dividends → Exit Proceeds → Net P/L as a
-#     stacked waterfall. Makes the "house money" story visually obvious.
-#   - FIX: Zero-cost basis exclusion toggle — sidebar opt-in to exclude
-#     tickers with spin-off / ACATS $0-basis deliveries from all portfolio
-#     P/L metrics (ROR, Capital Efficiency, Realized P/L). FIFO engine
-#     unchanged; filtered at display layer only.
-#   - FIX: Realized ROR now shows '∞ house money' when net_deposited < 0
-#     (withdrawn more than deposited) and 'N/A' when net_deposited == 0,
-#     rather than the misleading 0.0% previously returned in both cases.
-#   - FIX: Capital Efficiency Score now shows 'N/A' when no capital is
-#     deployed, rather than 0.0%.
-#   - FIX: 5-day window changed to 7-day (Last 7 Days) so prior-period
-#     comparison always aligns Mon-Sun vs Mon-Sun — equal trading days.
-#
-# v25.9 (2026-02-26)
-#   - FIX: Assignment STO double-count — pre-purchase option that caused a
-#     put assignment was being counted in both campaign premiums AND the
-#     outside-window P/L bucket. Fixed: assignment STO stays solely in the
-#     outside-window bucket. Verified against real account data.
-#   - FIX: Windowed P/L and All Time P/L both missing dividends and interest.
-#     Income now included in both window_realized_pnl and total_realized_pnl.
-#   - FIX: Standalone ticker equity P/L replaced cash-flow approximation with
-#     proper FIFO engine — correct for accounts with open equity positions.
-#   - FIX: option_mask() typo introduced in v25.7 refactor (wrong function name
-#     and wrong DataFrame at two call sites).
-#   - TEST: 180-test suite (test_tastymechanics.py) added. All P/L figures,
-#     campaign accounting, windowed views, and edge cases verified against
-#     independently computed ground truth from raw CSV data.
-#
-# v25.8 (2026-02-26)
-#   - REFACTOR: load_and_parse() returns ParsedData NamedTuple.
-#     detect_corporate_actions() now runs exactly once.
-#   - REFACTOR: equity_mask() / option_mask() vectorised helpers replace
-#     scattered .str.strip() comparisons throughout.
-#   - REFACTOR: AppData dataclass confirmed clean; all dict access migrated
-#     to attribute access.
-#
-# v25.6 (2026-02-26)
-#   - FIX: Stock splits (forward and reverse) handled end-to-end. Pre-split
-#     lot sizes rescaled in FIFO engine; split REMOVAL rows no longer trigger
-#     false P/L or duplicate campaigns. Warning banner shown at load time.
-#   - FIX: Zero-cost share deliveries (spin-offs, ACATS transfers) flagged
-#     with an amber warning noting the $0 basis will overstate P/L on sale.
-#   - FIX: Timezone architecture unified — single UTC conversion in
-#     load_and_parse(), naive datetimes everywhere downstream.
-#   - FIX: Short equity FIFO — buy-to-cover now correctly matches the
-#     originating short lot instead of treating proceeds as costless gain.
-#   - FIX: Naked long options (LEAPS) no longer mislabelled as debit spreads.
-#   - FIX: LEAPS excluded from ThetaGang DTE metrics (DTE > 90 threshold).
-#   - FIX: Weekly bar chart hover negative formatting.
-#   - REFACTOR: AppData dataclass, _iter_fifo_sells() shared FIFO core,
-#     APP_VERSION constant, XSS prevention via xe() helper.
-#
-# v25.4 (2026-02-24)
-#   - FIX: Pre-purchase options no longer credited to campaign effective basis.
-#     Real impact: SMR basis corrected from $16.72 → $20.25/share.
-#   - FIX: Prior period P/L double-counting.
-#   - FIX: CSV validation, negative currency formatting, trade log date sort.
-#   - NEW: How Closed column (Expired / Assigned / Exercised / Closed).
-#   - NEW: Total Realized P/L by Week & Month charts.
-#   - NEW: Window date label on all section headers.
-#
-# v25.3 (2026-02-23)
-#   - NEW: Expiry alert strip (21-day lookahead, colour-coded urgency).
-#   - NEW: Period comparison card (current vs prior window with deltas).
-#   - NEW: Weekly / Monthly P/L bar charts.
-#   - NEW: Open Positions card grid with strategy badges and DTE progress bars.
-#   - UI: IBM Plex Sans + Mono typography, dark theme (#0a0e17).
+# v25.3–v25.10 — foundational releases
+#   Core FIFO engine, campaign tracking, stock split handling, zero-cost exclusion,
+#   windowed P/L, period comparison, DTE charts, equity curve, Sharpe, drawdown,
+#   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
 APP_VERSION = "v25.12"
@@ -569,15 +451,9 @@ def main():
         pure_opts_per_ticker = {t: v for t, v in pure_opts_per_ticker.items() if t not in _zc_excluded}
 
         # Recalculate aggregates from the filtered campaigns
-        closed_camp_pnl      = sum(realized_pnl(c, use_lifetime)
-                                   for camps in all_campaigns.values()
-                                   for c in camps if c.status == 'closed')
-        open_premiums_banked = sum(realized_pnl(c, use_lifetime)
-                                   for camps in all_campaigns.values()
-                                   for c in camps if c.status == 'open')
-        capital_deployed     = sum(c.total_shares * c.blended_basis
-                                   for camps in all_campaigns.values()
-                                   for c in camps if c.status == 'open')
+        closed_camp_pnl, open_premiums_banked, capital_deployed = _aggregate_campaign_pnl(
+            all_campaigns, use_lifetime
+        )
         pure_opts_pnl        = sum(pure_opts_per_ticker.values())
 
         # Recalculate pure-options tickers contribution (non-wheel equity/options)
