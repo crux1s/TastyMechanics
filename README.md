@@ -2,7 +2,7 @@
   <img src="icon.png" width="120" alt="TastyMechanics icon"/>
 </p>
 
-# 📟 TastyMechanics &nbsp; [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/Cruxis)
+# 📟 TastyMechanics
 
 A Streamlit dashboard for **theta and wheel strategy traders** on TastyTrade. Built around premium selling — short puts, covered calls, strangles, and the wheel — with metrics that matter for multi-day holds: capture %, annualised return, banked $/day, effective basis, and campaign tracking.
 
@@ -15,6 +15,15 @@ Upload your CSV export and get a full breakdown of realized P/L, wheel campaigns
 
 ---
 
+## Welcome Screen
+
+![Welcome Screen](https://github.com/crux1s/TastyMechanics/blob/main/docs/SS.png?raw=true)
+
+![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Streamlit](https://img.shields.io/badge/streamlit-1.30%2B-red) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
+
+<a href="https://www.buymeacoffee.com/Cruxis" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="45">
+</a>
 
 ---
 
@@ -239,6 +248,10 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 
 TastyMechanics is free and open source. If it's saved you time or helped you trade smarter, a coffee goes a long way toward covering the 5-sigma moves.
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Cruxis-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/Cruxis)
-
-Not on TastyTrade yet? [Open an account here](https://tastytrade.com/welcome/?referralCode=NT57Z3P85B) — it costs you nothing extra and helps fund continued development.
+<a href="https://www.buymeacoffee.com/Cruxis" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50">
+</a>
+&nbsp;&nbsp;
+<a href="https://tastytrade.com/welcome/?referralCode=NT57Z3P85B" target="_blank">
+  <img src="https://img.shields.io/badge/Open%20a%20TastyTrade%20Account-1a1a2e?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iI2ZmNjYwMCIgZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTEgMTVoLTJ2LTZoMnY2em0wLThoLTJWN2gydjJ6Ii8+PC9zdmc+" alt="Open a TastyTrade Account" height="35">
+</a>
