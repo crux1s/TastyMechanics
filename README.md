@@ -34,7 +34,7 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 - Defined vs Undefined Risk breakdown by strategy
 - Performance by ticker table
 - DTE at open distribution, rolling win rate chart
-- Options P/L by week and month
+- Options P/L by week and month (candlestick — shows equity curve OHLC per period)
 
 **Trade Analysis tab**
 - ThetaGang metrics: management rate, median DTE at open/close, top-3 concentration score
@@ -48,15 +48,21 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 - Per-ticker campaign cards: entry basis, effective basis, premiums banked, realised P/L
 - Option roll chain visualisation — calls and puts tracked as separate chains
 - Share and dividend event log per campaign
-- Lifetime "House Money" mode toggle
+- Lifetime "House Money" mode toggle (in-tab, right of heading)
 
 **All Trades tab**
 - Full ticker breakdown: premiums, dividends, options P/L, capital deployed
-- Total portfolio P/L by week and month (FIFO-correct, includes equity sales)
+- Total portfolio P/L by week and month (FIFO-correct, candlestick charts)
 - Volatility metrics: avg week P/L, weekly std dev, Sharpe-equivalent, profitable weeks %, max drawdown + recovery
 
 **Deposits, Dividends & Fees tab**
 - Full income and cash movement log with colour-coded row types
+
+**HTML Report Export**
+- Download button in sidebar generates a self-contained dark-theme HTML file
+- Includes: Portfolio Overview scorecard, Options Trading scorecard (credit trades only), equity curve, weekly/monthly candle charts, performance by ticker table
+- Reflects the currently selected time window
+- No external dependencies — Plotly charts embedded via CDN
 
 ---
 
@@ -108,6 +114,23 @@ Then open `http://localhost:8501` in your browser.
 
 ---
 
+## Docker
+
+A standard Python slim image works. Ensure Python 3.10+ is used:
+
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+COPY . .
+RUN pip install streamlit pandas plotly
+EXPOSE 8501
+CMD ["streamlit", "run", "tastymechanics.py", "--server.port=8501", "--server.address=0.0.0.0"]
+```
+
+> **Note:** Python 3.10 and 3.11 are supported. Python 3.12 is recommended.
+
+---
+
 ## Disclaimer
 
 This tool is for personal record-keeping only. It is not financial advice.
@@ -133,7 +156,7 @@ P/L figures are cash-flow based (what actually hit your account) and use FIFO co
 The codebase is split into focused modules with a strict one-way dependency chain. No module imports from the one above it.
 
 ```
-config.py          Constants only — OPT_TYPES, TRADE_TYPES, thresholds, patterns
+config.py          Constants + COLOURS palette — OPT_TYPES, TRADE_TYPES, thresholds, patterns
 models.py          Dataclasses — Campaign, AppData, ParsedData
 ingestion.py       CSV parsing — pure Python, no Streamlit dependency
 mechanics.py       Analytics engine — FIFO, campaigns, trade classification
@@ -151,79 +174,46 @@ CSV upload
               └── window slices recomputed on time window change (fast, uncached)
 ```
 
-**Key design decisions**
-
-- **Pure analytics layer** — `mechanics.py` has zero Streamlit imports. Every function in it is independently importable and testable without a running server.
-
-- **Thin cache wrappers** — `@st.cache_data` lives only in the app layer. DataFrame and `ParsedData` parameters are prefixed with `_` to tell Streamlit not to hash them — hashing a 50k-row DataFrame on every rerun costs more CPU than running the math cold. Only small scalar arguments like `use_lifetime: bool` are hashed.
-
-- **`main()` entry point** — all rendering code runs inside `main()` so that figure objects, intermediate DataFrames, and local variables are freed when the function returns rather than persisting as module globals for the lifetime of the server process.
-
-- **Naive UTC everywhere** — TastyTrade exports UTC timestamps. Parsed as UTC then immediately stripped to naive. No browser-local timezone conversion.
-
-- **Single FIFO engine** — `_iter_fifo_sells()` in `mechanics.py` is the sole source of truth for equity cost basis. Handles long and short positions via parallel deques per ticker. Yields `(date, proceeds, cost_basis)` — callers apply their own window and bucketing.
-
-- **AppData dataclass** — `build_all_data()` returns a typed dataclass, not a positional tuple. Safe to extend without breaking callers.
-
-- **LEAPS separation** — trades with DTE > 90 at open are excluded from ThetaGang metrics and surfaced as a separate callout.
-
-- **Campaign accounting** — options traded before the first share purchase (pre-campaign) are classified as standalone P/L, not campaign premiums. Assignment STOs stay in the outside-window bucket to prevent double-counting.
-
-**Test suite**
-
-`test_tastymechanics.py` contains 258 tests across 23 sections covering all P/L figures, campaign accounting, windowed views, FIFO edge cases, closed trade pairing, strategy breakdowns, and structural invariants. Tests import directly from `mechanics.py` and `ingestion.py` — no Streamlit server required, no exec hacks, no parallel reimplementations that can drift.
-
-```bash
-python test_tastymechanics.py
-```
-
-Place your TastyTrade CSV (named `tastytrade_*.csv` or `tastymechanics_*.csv`) in the same folder as the script. Expected values are pinned to real account data — a failing test means the app's math has changed, intentionally or not. Three tests are marked **VERIFIED** — cross-checked screenshot-by-screenshot against the live TastyTrade UI.
+See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/Architecture) for full detail.
 
 ---
 
 ## Changelog
 
+**v25.12 — Charts, Report Export & Fixes** (2026-03-01)
+- Weekly and Monthly P/L bar charts replaced with **candlestick charts** — candles show cumulative P/L equity curve OHLC per period; wicks reveal intra-period swings
+- **HTML report export** — sidebar download button generates a self-contained dark-theme HTML file with two scorecard sections (Portfolio Overview and Options Trading — Credit Trades Only), equity curve, candle charts, and performance by ticker table
+- Lifetime "House Money" toggle moved from sidebar into the Wheel Campaigns tab header
+- f-string quote conflicts fixed in `ui_components.py` — resolves `SyntaxError` on Python < 3.12 (Unraid Docker and similar deployments)
+- `datetime.utcnow()` replaced with `datetime.now(timezone.utc)` — removes deprecation warning on Python 3.12+
+- 13-colour `COLOURS` palette added to `config.py`; `ui_components.py` fully migrated — all hex codes replaced with named references
+- Test suite expanded from 258 to **294 tests** (Section 24: `xe()`, `identify_pos_type()`, `detect_strategy()`)
+- `detect_strategy()` Call Butterfly false positive fixed — was matching Call Debit Spread on `lc==2, sc==1, 3 strikes`
+- `detect_strategy()` Long Call false positive fixed — `lc>0` matched 2+ lone calls; corrected to `lc==1`
+- TSLA Call Debit Spread VERIFIED test added — cross-checked against TastyTrade UI
+
 **v25.11 — Refactor & Testing** (2026-02-28)
 - Six tab render functions extracted from `main()` into module-level scope — `main()` reduced from 2,191 to 875 lines
-- Union-Find helpers (`_uf_find`, `_uf_union`, `_group_symbols_by_order`) extracted from `build_closed_trades` to module level — now independently testable
+- Union-Find helpers extracted from `build_closed_trades` to module level — now independently testable
 - `_write_test_snapshot` refactored from 22 positional parameters to a single `ctx` dict
 - Time window selection replaced 7-branch `if/elif` chain with `_WINDOW_START` dict lookup
 - Test suite expanded from 185 to 258 tests (23 sections)
-- Four new test sections: closed trade core aggregates, strategy breakdown, close types & debit trades, window filtering
-- Three **VERIFIED** tests added — P/L figures cross-checked screenshot-by-screenshot against live TastyTrade UI
-- CSV discovery updated to accept `tastymechanics_*.csv` filename pattern in addition to `tastytrade_*.csv`
-- Duplicate section numbers (9, 10, 11) in test output corrected to 21, 22, 23
-- Portfolio Overview metric captions rewritten — consistent length, Cap Efficiency description halved
-- `build_option_chains` empty-DataFrame guard added (prevented crash on tickers with no option history)
+- Three **VERIFIED** tests added — P/L figures cross-checked against live TastyTrade UI
 
 **v25.10 — Bug Fixes** (2026-02-27)
-- `realized_ror` recomputed after zero-cost exclusion filter (was using stale pre-filter value)
-- `pure_options_pnl()` boundary condition fixed — options on campaign start date now correctly classified
-- Dependency chain restored: `build_campaigns` result passed through correctly to downstream callers
-- FIFO zero-quantity guard added — prevents division by zero on degenerate lot sequences
-- Column rename: `_dsc` → `dsc_upper` (leading underscore caused `itertuples` access failure on Windows)
-- Type annotation corrected: `Optional[Campaign]` (was missing `Optional` wrapper)
-- Version bumped to v25.10
+- `realized_ror` recomputed after zero-cost exclusion filter
+- `pure_options_pnl()` boundary condition fixed
+- FIFO zero-quantity guard added
+- Column rename: `_dsc` → `dsc_upper` (Windows `itertuples` fix)
 
 **v25.9 — Refactor** (2026-02-27)
-- Extracted pure analytics into `mechanics.py` (no Streamlit dependency)
-- Extracted data models into `models.py` (`Campaign`, `AppData`, `ParsedData`)
-- Extracted CSV parsing into `ingestion.py`
-- Extracted constants into `config.py`, UI helpers into `ui_components.py`
-- All `@st.cache_data` wrappers moved to app layer; DataFrame params prefixed with `_` to skip hashing
-- All rendering code wrapped in `main()` — figure and DataFrame locals freed on each rerun
-- Test suite updated to import directly from `mechanics.py` — exec hack removed
-- Main app reduced from ~2,940 lines to ~1,730 lines
+- Extracted pure analytics into `mechanics.py`, models into `models.py`, CSV parsing into `ingestion.py`, constants into `config.py`, UI helpers into `ui_components.py`
+- All `@st.cache_data` wrappers moved to app layer
+- Main app reduced from ~2,940 to ~1,730 lines
 
-**v25.9 — Features** (2026-02-26)
-- Assignment STO double-count fix
-- Windowed P/L income fix
-- Standalone equity FIFO fix
-- 153-test suite — all P/L figures verified against real account data
+**v25.6** (2026-02-26) — Stock split handling, zero-cost delivery warnings, short equity FIFO fix, LEAPS separation, timezone architecture unification.
 
-**v25.6** (2026-02-26) — Stock split handling, zero-cost delivery warnings, short equity FIFO fix, LEAPS separation, timezone architecture unification, full code review.
-
-**v25.4** (2026-02-24) — Pre-purchase option campaign fix (SMR basis $16.72 → $20.25), prior period double-count fix, How Closed column, weekly/monthly P/L charts.
+**v25.4** (2026-02-24) — Pre-purchase option campaign fix, prior period double-count fix, weekly/monthly P/L charts.
 
 **v25.3** (2026-02-23) — Expiry alert strip, period comparison card, open positions card grid, dark theme.
 

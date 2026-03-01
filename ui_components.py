@@ -12,6 +12,7 @@ constants used in colour lookups).
 import html as _html
 import pandas as pd
 from config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT, WIN_RATE_GREEN, WIN_RATE_ORANGE, DTE_PROGRESS_MAX, COLOURS
+_C = COLOURS  # short alias — avoids quote conflicts in f-strings on Python < 3.12
 # is_share_row / is_option_row live in ingestion.py — that is the correct home
 # for anything that encodes TastyTrade field values.  Re-exported here so that
 # tastymechanics.py can continue to import them from ui_components without change.
@@ -113,14 +114,14 @@ def detect_strategy(ticker_df):
 def color_win_rate(v):
     """Green / amber / red for win-rate cells in st.dataframe."""
     if not isinstance(v, (int, float)) or pd.isna(v): return ''
-    if v >= WIN_RATE_GREEN:  return f"color: {COLOURS['green']}; font-weight: bold"
-    if v >= WIN_RATE_ORANGE: return f"color: {COLOURS['orange']}"
-    return f"color: {COLOURS['red']}"
+    if v >= WIN_RATE_GREEN:  return 'color: ' + COLOURS['green'] + '; font-weight: bold'
+    if v >= WIN_RATE_ORANGE: return 'color: ' + COLOURS['orange']
+    return 'color: ' + COLOURS['red']
 
 def color_pnl_cell(val):
     """Green/red colouring for P/L columns in st.dataframe."""
     if not isinstance(val, (int, float)) or pd.isna(val): return ''
-    return f"color: {COLOURS['green']}" if val > 0 else f"color: {COLOURS['red']}" if val < 0 else ''
+    return 'color: ' + COLOURS['green'] if val > 0 else 'color: ' + COLOURS['red'] if val < 0 else ''
 
 def _fmt_ann_ret(row):
     """Format Ann Ret % cell — appends * for trades held < 4 days."""
@@ -136,7 +137,7 @@ def _style_ann_ret(row):
     try:
         idx = list(row.index).index('Ann Ret %')
         if pd.notna(row.get('Days Held')) and row.get('Days Held', 99) < 4:
-            styles[idx] = f"color: {COLOURS['tan']}"
+            styles[idx] = 'color: ' + COLOURS['tan']
     except (ValueError, KeyError):
         pass  # column not present in this table variant — safe to skip
     return styles
@@ -164,7 +165,7 @@ def _color_cash_row(row):
 def _color_cash_total(val):
     """Green/red for the Total column in the cash-flow table."""
     if not isinstance(val, (int, float)): return ''
-    return f"color:{COLOURS['green']}" if val > 0 else f"color:{COLOURS['red']}" if val < 0 else ''
+    return 'color:' + COLOURS['green'] if val > 0 else 'color:' + COLOURS['red'] if val < 0 else ''
 
 
 # ── Plotly chart layout ───────────────────────────────────────────────────────
@@ -254,11 +255,12 @@ def _badge_inline_style(strat):
         'font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;'
         'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;'
     )
+    _g = COLOURS['green']; _r = COLOURS['red']; _o = COLOURS['orange']; _b = COLOURS['blue']
     _COLORS = {
-        'bullish': f"background:rgba(0,204,150,0.1);color:{COLOURS['green']};border:1px solid rgba(0,204,150,0.25);",
-        'bearish': f"background:rgba(239,85,59,0.1);color:{COLOURS['red']};border:1px solid rgba(239,85,59,0.25);",
-        'covered': f"background:rgba(255,165,0,0.1);color:{COLOURS['orange']};border:1px solid rgba(255,165,0,0.25);",
-        'default': f"background:rgba(88,166,255,0.12);color:{COLOURS['blue']};border:1px solid rgba(88,166,255,0.25);",
+        'bullish': 'background:rgba(0,204,150,0.1);color:' + _g + ';border:1px solid rgba(0,204,150,0.25);',
+        'bearish': 'background:rgba(239,85,59,0.1);color:'  + _r + ';border:1px solid rgba(239,85,59,0.25);',
+        'covered': 'background:rgba(255,165,0,0.1);color:'  + _o + ';border:1px solid rgba(255,165,0,0.25);',
+        'default': 'background:rgba(88,166,255,0.12);color:'+ _b + ';border:1px solid rgba(88,166,255,0.25);',
     }
     s = strat.lower()
     if any(k in s for k in ['put', 'strangle', 'condor', 'lizard', 'reversal']):
@@ -276,29 +278,32 @@ def render_position_card(ticker, t_df):
     strat       = detect_strategy(t_df)
     badge_style = _badge_inline_style(strat)
 
+    _bg1 = COLOURS['card_bg']; _bg2 = COLOURS['card_bg2']
+    _bdr = COLOURS['border'];   _wht = COLOURS['white']
+    _mut = COLOURS['text_muted']; _txt = COLOURS['text']
     CARD = (
-        f"background:linear-gradient(135deg,{COLOURS['card_bg']} 0%,{COLOURS['card_bg2']} 100%);"
-        f"border:1px solid {COLOURS['border']};border-radius:12px;padding:18px 20px 14px 20px;"
+        'background:linear-gradient(135deg,' + _bg1 + ' 0%,' + _bg2 + ' 100%);'
+        'border:1px solid ' + _bdr + ';border-radius:12px;padding:18px 20px 14px 20px;'
         'margin-bottom:16px;box-shadow:0 2px 12px rgba(0,0,0,0.4);'
     )
     HDR = (
         'display:flex;align-items:center;justify-content:space-between;'
-        f"margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid {COLOURS['border']};"
+        'margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid ' + _bdr + ';'
     )
     TICK = (
         'font-family:monospace;font-size:1.3rem;font-weight:600;'
-        f"color:{COLOURS['white']};letter-spacing:0.04em;"
+        'color:' + _wht + ';letter-spacing:0.04em;'
     )
     LEG = (
         'display:flex;align-items:flex-start;justify-content:space-between;'
         'padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05);'
     )
-    LBL  = f"color:{COLOURS['text_muted']};font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:2px;"
-    VAL  = f"font-family:monospace;color:{COLOURS['text']};font-size:0.88rem;"
+    LBL  = 'color:' + _mut + ';font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:2px;'
+    VAL  = 'font-family:monospace;color:' + _txt + ';font-size:0.88rem;'
     CHIP = (
         'display:inline-block;margin-top:6px;background:rgba(255,255,255,0.04);'
-        f"border:1px solid {COLOURS['border']};border-radius:6px;padding:3px 10px;"
-        f"font-family:monospace;font-size:0.8rem;color:{COLOURS['text_muted']};"
+        'border:1px solid ' + _bdr + ';border-radius:6px;padding:3px 10px;'
+        'font-family:monospace;font-size:0.8rem;color:' + _mut + ';'
     )
 
     legs_html   = ''
