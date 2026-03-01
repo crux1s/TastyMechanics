@@ -59,6 +59,7 @@ from mechanics import (
 
 import json as _json
 import os as _os
+import hashlib as _hashlib
 
 # ==========================================
 # TastyMechanics v25.12
@@ -440,31 +441,33 @@ def main():
 
 
     @st.cache_data(show_spinner='⚙️ Building campaigns…')
-    def build_all_data(_parsed: ParsedData, use_lifetime: bool) -> AppData:
+    def build_all_data(_parsed: ParsedData, use_lifetime: bool, file_hash: int) -> AppData:
         """
         Thin Streamlit cache wrapper around mechanics.compute_app_data().
         Cached separately from load_and_parse so that toggling Lifetime mode
         only re-runs campaign logic, not the CSV parse.
-        _parsed is prefixed with _ so Streamlit skips hashing the full DataFrame
-        (only the tiny use_lifetime bool is hashed). Hashing a 50k-row DataFrame
-        on every rerun would cost more CPU than just running the math cold.
+        _parsed is prefixed with _ so Streamlit skips hashing the full DataFrame.
+        file_hash is a hashable int derived from the raw bytes — ensures the cache
+        invalidates when a new file is uploaded, even if use_lifetime is unchanged.
         """
         return compute_app_data(_parsed, use_lifetime)
 
     @st.cache_data(show_spinner=False)
-    def get_daily_pnl(_df: pd.DataFrame) -> pd.DataFrame:
+    def get_daily_pnl(_df: pd.DataFrame, file_hash: int) -> pd.DataFrame:
         """
         Daily realized P/L series — FIFO-correct, whole portfolio.
         Cached on the full df — re-runs only when a new file is uploaded.
         Window slicing is done downstream by the caller.
         _df is prefixed with _ so Streamlit skips hashing the full DataFrame.
+        file_hash ensures cache invalidation when a new CSV is uploaded.
         """
         return calculate_daily_realized_pnl(_df, _df['Date'].min())
 
 
 
     # ── Validate + load ────────────────────────────────────────────────────────────
-    _raw_bytes = uploaded_file.getvalue()
+    _raw_bytes  = uploaded_file.getvalue()
+    _file_hash  = _hashlib.md5(_raw_bytes).hexdigest()  # content-stable hash — safe across processes and Streamlit Cloud restarts
     _missing   = validate_columns(_raw_bytes)
     if _missing:
         st.error(
@@ -498,7 +501,7 @@ def main():
     use_lifetime = st.session_state.get('use_lifetime', False)
 
     # ── Unpack cached heavy computation ───────────────────────────────────────────
-    _d = build_all_data(_parsed, use_lifetime)
+    _d = build_all_data(_parsed, use_lifetime, _file_hash)
     all_campaigns          = _d.all_campaigns
     wheel_tickers          = _d.wheel_tickers
     pure_options_tickers   = _d.pure_options_tickers
@@ -710,7 +713,7 @@ def main():
         if not closed_trades_df.empty else pd.DataFrame()
 
     # Slice the cached all-time daily P/L series to the current window
-    _daily_pnl_all = get_daily_pnl(df)
+    _daily_pnl_all = get_daily_pnl(df, _file_hash)
     _daily_pnl     = _daily_pnl_all[
         _daily_pnl_all['Date'] >= start_date
     ].copy()
