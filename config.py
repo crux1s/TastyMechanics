@@ -100,7 +100,9 @@ WIN_RATE_ORANGE = 50   # %
 # ── DTE progress bar ──────────────────────────────────────────────────────────
 # Max DTE shown as full bar in the open positions DTE progress widget.
 # 45 DTE is TastyTrade's standard short-premium entry target.
-DTE_PROGRESS_MAX = 45  # days
+DTE_PROGRESS_MAX = 45  # days — TastyTrade standard short-premium entry target
+DTE_ALERT_WARN   = 14  # days — orange warning threshold on DTE progress bar
+DTE_ALERT_CRIT   =  5  # days — red critical threshold on DTE progress bar
 
 # ── Close reason labels ───────────────────────────────────────────────────────
 CLOSE_EXPIRED    = '⏹️ Expired'

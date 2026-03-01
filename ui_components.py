@@ -9,9 +9,9 @@ Dependencies: pandas (for isna / pd.to_datetime), config (for sub-type
 constants used in colour lookups).
 """
 
-import html as _html
+import html
 import pandas as pd
-from config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT, WIN_RATE_GREEN, WIN_RATE_ORANGE, DTE_PROGRESS_MAX, COLOURS
+from config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT, WIN_RATE_GREEN, WIN_RATE_ORANGE, DTE_PROGRESS_MAX, DTE_ALERT_WARN, DTE_ALERT_CRIT, COLOURS
 _C = COLOURS  # short alias — avoids quote conflicts in f-strings on Python < 3.12
 # is_share_row / is_option_row live in ingestion.py — that is the correct home
 # for anything that encodes TastyTrade field values.  Re-exported here so that
@@ -23,7 +23,7 @@ from ingestion import is_share_row, is_option_row
 
 def xe(s):
     """Escape a string for safe HTML interpolation. Prevents XSS from CSV data."""
-    return _html.escape(str(s), quote=True)
+    return html.escape(str(s), quote=True)
 
 
 # ── Position type helpers (pure classification, no math) ──────────────────────
@@ -139,25 +139,27 @@ def _style_ann_ret(row):
         if pd.notna(row.get('Days Held')) and row.get('Days Held', 99) < 4:
             styles[idx] = 'color: ' + COLOURS['tan']
     except (ValueError, KeyError):
-        pass  # column not present in this table variant — safe to skip
+        pass  # 'Ann Ret %' column absent in this table variant — safe to skip
     return styles
 
 def _style_chain_row(row):
     """Highlight the open leg in a roll-chain detail table."""
     if row.get('_open', False):
-        return ['background-color: rgba(0,204,150,0.12); font-weight:600'] * len(row)
+        return ['background-color: rgba(0,204,150,0.12); font-weight:600'] * len(row)  # COLOURS['green'] @ 12% opacity
     return [''] * len(row)
 
 def _color_cash_row(row):
     """Row background tint for the Deposits/Dividends table."""
     sub = str(row.get('Sub Type', ''))
+    _g = COLOURS['green']; _r = COLOURS['red']
+    _b = COLOURS['blue'];  _o = COLOURS['orange']
     tints = {
-        'Deposit':            'rgba(0,204,150,0.08)',
-        'Withdrawal':         'rgba(239,85,59,0.08)',
-        SUB_DIVIDEND:         'rgba(88,166,255,0.08)',
-        SUB_CREDIT_INT:       'rgba(88,166,255,0.05)',
-        SUB_DEBIT_INT:        'rgba(239,85,59,0.05)',
-        'Balance Adjustment': 'rgba(255,165,0,0.07)',
+        'Deposit':            f'rgba({int(_g[1:3],16)},{int(_g[3:5],16)},{int(_g[5:7],16)},0.08)',
+        'Withdrawal':         f'rgba({int(_r[1:3],16)},{int(_r[3:5],16)},{int(_r[5:7],16)},0.08)',
+        SUB_DIVIDEND:         f'rgba({int(_b[1:3],16)},{int(_b[3:5],16)},{int(_b[5:7],16)},0.08)',
+        SUB_CREDIT_INT:       f'rgba({int(_b[1:3],16)},{int(_b[3:5],16)},{int(_b[5:7],16)},0.05)',
+        SUB_DEBIT_INT:        f'rgba({int(_r[1:3],16)},{int(_r[3:5],16)},{int(_r[5:7],16)},0.05)',
+        'Balance Adjustment': f'rgba({int(_o[1:3],16)},{int(_o[3:5],16)},{int(_o[5:7],16)},0.07)',
     }
     c = tints.get(sub, '')
     return [f'background-color:{c}' if c else ''] * len(row)
@@ -240,7 +242,7 @@ def _cmp_block(label, curr, prev, is_pct=False):
 def _dte_chip(a):
     """Inline HTML chip for an expiry alert item."""
     dte = a['dte']
-    fg  = COLOURS['red'] if dte <= 5 else COLOURS['orange'] if dte <= 14 else COLOURS['green']
+    fg  = COLOURS['red'] if dte <= DTE_ALERT_CRIT else COLOURS['orange'] if dte <= DTE_ALERT_WARN else COLOURS['green']
     _bdr = COLOURS['border']; _dim = COLOURS['text_dim']; _mut = COLOURS['text_muted']
     return (
         '<span style="display:inline-flex;align-items:center;gap:5px;'
@@ -326,7 +328,7 @@ def render_position_card(ticker, t_df):
             try:
                 dte_val   = int(str(dte).replace('d', ''))
                 pct       = min(dte_val / DTE_PROGRESS_MAX * 100, 100)
-                bar_color = COLOURS['green'] if dte_val > 14 else COLOURS['orange'] if dte_val > 5 else COLOURS['red']
+                bar_color = COLOURS['green'] if dte_val > DTE_ALERT_WARN else COLOURS['orange'] if dte_val > DTE_ALERT_CRIT else COLOURS['red']
                 _bdr = COLOURS['border']; _dim = COLOURS['text_dim']
                 dte_html  = (
                     '<div style="margin-top:6px;">'
@@ -339,7 +341,7 @@ def render_position_card(ticker, t_df):
                     '</div>'
                 )
             except (ValueError, TypeError):
-                pass  # non-numeric DTE value — leave cell unstyled
+                pass  # DTE string is non-numeric (e.g. 'N/A') — leave progress bar absent
 
         legs_html += (
             f'<div style="{leg_style}">'

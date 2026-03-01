@@ -20,7 +20,7 @@ Internal helpers (also importable for use in analysis functions)
 
 from __future__ import annotations
 
-import io as _io
+import io
 from typing import Any
 
 import pandas as pd
@@ -237,7 +237,7 @@ def validate_columns(file_bytes: bytes) -> set[str]:
     An empty set means the file looks like a valid TastyTrade export.
     Reads only the header row — fast and does not parse the full file.
     """
-    header_df = pd.read_csv(_io.BytesIO(file_bytes), nrows=0)
+    header_df = pd.read_csv(io.BytesIO(file_bytes), nrows=0)
     return REQUIRED_COLUMNS - set(header_df.columns)
 
 
@@ -278,7 +278,7 @@ def parse_csv(file_bytes: bytes) -> ParsedData:
         )
 
     try:
-        df = pd.read_csv(_io.BytesIO(file_bytes))
+        df = pd.read_csv(io.BytesIO(file_bytes))
     except (pd.errors.ParserError, UnicodeDecodeError, ValueError) as exc:
         raise CSVStructureError(
             f"Could not parse the file as a CSV: {exc}. "

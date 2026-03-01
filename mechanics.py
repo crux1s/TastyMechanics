@@ -128,7 +128,7 @@ def _iter_fifo_sells(equity_rows: pd.DataFrame) -> Iterator[tuple[pd.Timestamp, 
             # Guard: qty > 0 is guaranteed by the branch condition, but a row
             # with qty=0 and total!=0 (e.g. a misclassified fee) would cause
             # ZeroDivisionError without this check.
-            pps = abs(total) / qty if qty != 0 else 0.0  # cost per share on this buy
+            pps = abs(total) / qty if abs(qty) > FIFO_EPSILON else 0.0  # cost per share on this buy
 
             while remaining > FIFO_EPSILON and sq:
                 s_qty, s_pps = sq[0]
@@ -271,7 +271,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
             premiums   = 0.0
             dividends  = 0.0
             events     = []
-            start_date = t['Date'].iloc[0]
+            start_date = t['Date'].iloc[0] if not t.empty else pd.NaT
             for row in t.itertuples(index=False):
                 inst     = str(row.Instrument_Type)
                 total    = row.Total
@@ -387,7 +387,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
             if current and running_shares > FIFO_EPSILON:
                 current.exit_proceeds += total
                 running_shares        += qty
-                pps = abs(total) / abs(qty) if qty != 0 else 0
+                pps = abs(total) / abs(qty) if abs(qty) > FIFO_EPSILON else 0
                 current.events.append({'date': row.Date, 'type': 'Exit',
                     'detail': 'Sold %.0f @ $%.2f/sh' % (abs(qty), pps), 'cash': total})
                 if running_shares < FIFO_EPSILON:
@@ -733,7 +733,7 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
         open_date   = opens['Date'].min()
         close_date  = grp['Date'].max()
         days_held   = max((close_date - open_date).days, 1)
-        ticker      = grp['Ticker'].iloc[0]
+        ticker      = grp['Ticker'].iloc[0] if not grp.empty else ''
         cp_vals     = grp['Call or Put'].dropna().str.upper().unique().tolist()
         cp          = cp_vals[0] if len(cp_vals) == 1 else 'Mixed'
         n_long      = (opens['Net_Qty_Row'] > 0).sum()
