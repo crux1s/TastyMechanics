@@ -73,7 +73,7 @@ import os as _os
 #     Hover shows net P/L, trade count, open, close for each period.
 #   - FEATURE: HTML report export. Download button in sidebar generates a
 #     self-contained dark-theme HTML file with two scorecard sections
-#     (Portfolio Overview and Options Trading — Credit Trades Only), equity curve,
+#     (Portfolio Overview and Premium Selling Performance), equity curve,
 #     weekly/monthly candles, and performance by ticker table. Filename includes
 #     window start date. No external dependencies beyond Plotly CDN.
 #   - FEATURE: Lifetime "House Money" toggle moved from sidebar Campaign Settings
@@ -340,10 +340,11 @@ def main():
             st.image(str(_icon_path), width=80)
         st.header('⚙️ Data Control')
         uploaded_file = st.file_uploader('Upload TastyTrade History CSV', type='csv')
+        _td = COLOURS['text_dim']; _bl = COLOURS['blue']
         st.markdown(
-            '<div style="font-size:0.75rem;color:#6e7681;margin-top:0.5rem;">'
+            '<div style="font-size:0.75rem;color:' + _td + ';margin-top:0.5rem;">'
             'New to TastyTrade? <a href="https://tastytrade.com/welcome/?referralCode=NT57Z3P85B" '
-            'target="_blank" style="color:#58a6ff;">Open an account</a>'
+            'target="_blank" style="color:' + _bl + ';">Open an account</a>'
             ' &nbsp;·&nbsp; <a href="https://www.buymeacoffee.com/Cruxis" '
             'target="_blank" style="color:#ffdd00;">Buy me a coffee</a>'
             '</div>',
@@ -352,63 +353,79 @@ def main():
 
 
     if not uploaded_file:
+        _ht = COLOURS["header_text"]; _tm = COLOURS["text_muted"]
+        _td = COLOURS["text_dim"];    _bl = COLOURS["blue"]
+        _cb = COLOURS["card_bg"];     _or = COLOURS["orange"] + "55"
         st.markdown(f"""
-        <div style="max-width:760px;margin:2rem auto 0 auto;">
+        <div style="max-width:780px;margin:2rem auto 0 auto;">
 
-        <p style="color:#8b949e;font-size:0.95rem;line-height:1.7;">
-        Upload your TastyTrade transaction history CSV using the sidebar to get started.
-        All processing happens locally in your browser — your data is never sent anywhere.
+        <p style="color:{_tm};font-size:1rem;line-height:1.75;">
+        Built for <b style="color:{_ht};">wheel traders and theta harvesters</b> — short puts,
+        covered calls, strangles, iron condors, and the full wheel cycle. General options
+        trading is fully supported. Upload your TastyTrade CSV and get a complete picture
+        of your realized P/L, premium selling performance, wheel campaigns, and portfolio health.
+        Your data is processed locally and never sent anywhere.
         </p>
 
-        <h3 style="color:#c9d1d9;margin-top:2rem;">How to export from TastyTrade</h3>
-        <p style="color:#8b949e;font-size:0.95rem;line-height:1.7;">
-        <b style="color:#c9d1d9;">History → Transactions → set date range → Download CSV</b><br>
-        Export your <b style="color:#c9d1d9;">full account history</b> for accurate results —
+        <h3 style="color:{_ht};margin-top:2rem;">What you get</h3>
+        <ul style="color:{_tm};font-size:0.92rem;line-height:1.9;padding-left:1.2rem;margin-top:0.5rem;">
+        <li><b style="color:{_ht};">Open Positions</b> — live view of all open options and equity positions with DTE, strategy label, and expiry alerts</li>
+        <li><b style="color:{_ht};">Premium Selling Performance</b> — win rate, capture %, annualised return, profit factor, and trade breakdown by ticker and strategy</li>
+        <li><b style="color:{_ht};">Trade Analysis</b> — equity curve, weekly/monthly P/L candles, DTE distributions, day-of-week and hour-of-day heat maps</li>
+        <li><b style="color:{_ht};">Wheel Campaigns</b> — per-ticker campaign cards tracking entry basis, effective basis, premiums banked, and realised P/L across full roll chains</li>
+        <li><b style="color:{_ht};">All Trades</b> — portfolio equity curve, drawdown, Sharpe, capital deployed, and income breakdown</li>
+        <li><b style="color:{_ht};">Deposits, Dividends &amp; Fees</b> — full cash flow ledger with deposited capital, dividend income, and fee summary</li>
+        </ul>
+
+        <h3 style="color:{_ht};margin-top:2rem;">How to export from TastyTrade</h3>
+        <p style="color:{_tm};font-size:0.92rem;line-height:1.75;">
+        <b style="color:{_ht};">History → Transactions → set date range → Download CSV</b><br>
+        Export your <b style="color:{_ht};">full account history</b> for best results —
         not just a recent window. FIFO cost basis for equity P/L requires all prior buy
-        transactions to be present, even if the shares were purchased years ago. A partial
-        export will produce incorrect basis and P/L figures for any position that has earlier
-        lots outside the date range.
+        transactions to be present. A partial export will produce incorrect basis and
+        P/L figures for positions with earlier lots outside the date range.
         </p>
 
-        <h3 style="color:#c9d1d9;margin-top:2rem;">⚠️ Disclaimer</h3>
-        <div style="background:#161b22;border:1px solid #f0883e55;border-radius:8px;padding:1.2rem 1.4rem;font-size:0.88rem;color:#8b949e;line-height:1.75;">
+        <h3 style="color:{_ht};margin-top:2rem;">⚠️ Disclaimer &amp; Known Limitations</h3>
+        <div style="background:{_cb};border:1px solid {_or};border-radius:8px;padding:1.2rem 1.4rem;font-size:0.88rem;color:{_tm};line-height:1.75;">
 
-        <p style="margin:0 0 0.75rem 0;color:#c9d1d9;font-weight:600;">
+        <p style="margin:0 0 0.75rem 0;color:{_ht};font-weight:600;">
         This tool is for personal record-keeping only. It is not financial advice.
         </p>
 
-        <b style="color:#c9d1d9;">Known limitations — verify these manually:</b>
-        <ul style="margin:0.5rem 0 0.75rem 0;padding-left:1.2rem;">
-        <li><b style="color:#c9d1d9;">Covered calls assigned away</b> — if your shares are called away by assignment, verify the campaign closes and P/L is recorded correctly.</li>
-        <li><b style="color:#c9d1d9;">Multiple assignments on the same ticker</b> — each new buy-in starts a new campaign. Blended basis across campaigns is not currently combined.</li>
-        <li><b style="color:#c9d1d9;">Long options exercised by you</b> — exercising a long call or put into shares is untested. Check the resulting position and cost basis.</li>
-        <li><b style="color:#c9d1d9;">Futures options delivery</b> — cash-settled futures options (like /MES, /ZS) are included in P/L totals, but in-the-money expiry into a futures contract is not handled.</li>
-        <li><b style="color:#c9d1d9;">Stock splits</b> — forward and reverse splits are detected and adjusted, but TastyTrade-issued post-split option symbols are not automatically stitched to pre-split contracts.</li>
-        <li><b style="color:#c9d1d9;">Spin-offs and zero-cost deliveries</b> — shares received at $0 cost (spin-offs, ACATS transfers) trigger a warning. Use the sidebar toggle to exclude those tickers from P/L metrics if the inflated basis distorts your numbers.</li>
-        <li><b style="color:#c9d1d9;">Mergers and acquisitions</b> — if a ticker you hold is acquired or merged, the original campaign may be orphaned with no exit recorded. P/L for that position will be incomplete. Reconcile manually against your broker statement.</li>
-        <li><b style="color:#c9d1d9;">Complex multi-leg structures</b> — PMCC, diagonals, calendars, and ratio spreads may not be classified correctly in the trade log. P/L totals are correct; labels may not be.</li>
-        <li><b style="color:#c9d1d9;">Non-US accounts</b> — built and tested on a US TastyTrade account. Currency, tax treatment, and CSV format differences for other regions are unknown.</li>
-        </ul>
-
-        <p style="margin:0;color:#6e7681;">
-        P/L figures are cash-flow based (what actually hit your account) and use FIFO cost basis
-        for equity. They do not account for unrealised gains/losses, wash sale rules, or tax adjustments.
-        Always reconcile against your official TastyTrade statements for tax purposes.
+        <p style="margin:0 0 0.5rem 0;color:{_tm};">
+        P/L figures are cash-flow based (what actually hit your account) and use FIFO cost
+        basis for equity. They do not account for unrealised gains/losses, wash sale rules,
+        or tax adjustments. Always reconcile against your official TastyTrade statements.
         </p>
+
+        <b style="color:{_ht};">Verify these scenarios manually:</b>
+        <ul style="margin:0.5rem 0 0.75rem 0;padding-left:1.2rem;">
+        <li><b style="color:{_ht};">Covered calls assigned away</b> — if your shares are called away, verify the campaign closes and P/L is recorded correctly.</li>
+        <li><b style="color:{_ht};">Multiple assignments on the same ticker</b> — each new buy-in starts a new campaign. Blended basis across campaigns is not combined.</li>
+        <li><b style="color:{_ht};">Long options exercised by you</b> — exercising a long call or put into shares is untested. Check the resulting position and cost basis.</li>
+        <li><b style="color:{_ht};">Futures options delivery</b> — cash-settled futures (/MES, /ZS etc.) are included in P/L totals, but in-the-money expiry into a futures contract is not handled.</li>
+        <li><b style="color:{_ht};">Stock splits</b> — forward and reverse splits are detected and adjusted, but post-split option symbols are not automatically stitched to pre-split contracts.</li>
+        <li><b style="color:{_ht};">Spin-offs and zero-cost deliveries</b> — shares received at $0 cost trigger a warning. Use the sidebar toggle to exclude those tickers if the inflated basis distorts your numbers.</li>
+        <li><b style="color:{_ht};">Mergers and acquisitions</b> — if a ticker is acquired or merged, the campaign may be orphaned with no exit recorded. Reconcile manually.</li>
+        <li><b style="color:{_ht};">Complex multi-leg structures</b> — PMCC, diagonals, calendars, and ratio spreads may not be labelled correctly. P/L totals are correct; trade type labels may not be.</li>
+        <li><b style="color:{_ht};">Rolled calendars</b> — front-month expiry rolls may appear as separate closed trades rather than one continuous position. Needs real data to verify.</li>
+        <li><b style="color:{_ht};">Reverse Jade Lizard</b> — detected as a Jade Lizard but capital risk may be understated (max loss is on the call side). Verify if you trade this structure.</li>
+        <li><b style="color:{_ht};">0DTE trades</b> — P/L is correct, but Ann Return %, Med Premium/Day, and Wheel Campaigns are less meaningful for same-day holds.</li>
+        <li><b style="color:{_ht};">Non-US accounts</b> — built and tested on a US TastyTrade account. Currency, tax treatment, and CSV format differences for other regions are unknown.</li>
+        </ul>
         </div>
 
-        <p style="color:#444d56;font-size:0.78rem;margin-top:1.5rem;text-align:center;">
+        <p style="color:{_td};font-size:0.78rem;margin-top:1.5rem;text-align:center;">
         TastyMechanics {APP_VERSION} · Open source · AGPL-3.0 ·
-        <a href="https://github.com/crux1s/TastyMechanics" style="color:#58a6ff;">GitHub</a> ·
+        <a href="https://github.com/crux1s/TastyMechanics" style="color:{_bl};">GitHub</a> ·
         <a href="https://www.buymeacoffee.com/Cruxis" style="color:#ffdd00;">Buy me a coffee</a> ·
-        <a href="https://tastytrade.com/welcome/?referralCode=NT57Z3P85B" style="color:#58a6ff;">Open a TastyTrade account</a>
+        <a href="https://tastytrade.com/welcome/?referralCode=NT57Z3P85B" style="color:{_bl};">Open a TastyTrade account</a>
         </p>
 
         </div>
         """, unsafe_allow_html=True)
         st.stop()
-
-
     # ── Cached data loading ────────────────────────────────────────────────────────
 
     @st.cache_data(max_entries=2, show_spinner='📂 Loading CSV…')
@@ -751,7 +768,7 @@ def main():
     # ── Window label helper — used in section titles throughout ───────────────────
     _win_start_str = start_date.strftime('%d/%m/%Y')
     _win_end_str   = latest_date.strftime('%d/%m/%Y')
-    _win_label     = (f'<span style="font-size:0.75rem;font-weight:400;color:#58a6ff;'
+    _win_label     = (f'<span style="font-size:0.75rem;font-weight:400;color:' + COLOURS['blue'] + ';'
                       f'letter-spacing:0.02em;margin-left:8px;">'
                       f'{_win_start_str} → {_win_end_str} ({selected_period})</span>')
     # Plain text version for plotly chart titles (no HTML)
@@ -855,8 +872,8 @@ def main():
             _pnl_chip('Closed Wheel Campaigns', closed_camp_pnl) +
             _pnl_chip('Open Wheel Premiums', open_premiums_banked) +
             _pnl_chip('General Standalone Trading', pure_opts_pnl) +
-            f'<span style="color:#4b5563;margin:0 6px;font-size:0.78rem;">·</span>'
-            f'<span style="color:#8b949e;font-size:0.78rem;font-style:italic;">All Time</span>'
+            f'<span style="color:' + COLOURS['text_dim'] + ';margin:0 6px;font-size:0.78rem;">·</span>'
+            f'<span style="color:' + COLOURS['text_muted'] + ';font-size:0.78rem;font-style:italic;">All Time</span>'
         )
     else:
         _w_opts_only = _w_opts['Total'].sum()
@@ -901,9 +918,9 @@ def main():
         )
 
         st.markdown(
-            f'<div style="background:linear-gradient(135deg,#111827,#0f1520);border:1px solid #1f2937;'
+            f'<div style="background:linear-gradient(135deg,' + COLOURS['card_bg'] + ',' + COLOURS['card_bg2'] + ');border:1px solid ' + COLOURS['border'] + ';'
             f'border-radius:10px;padding:14px 18px;margin:0 0 20px 0;">'
-            f'<div style="color:#8b949e;font-size:0.72rem;text-transform:uppercase;'
+            f'<div style="color:' + COLOURS['text_muted'] + ';font-size:0.72rem;text-transform:uppercase;'
             f'letter-spacing:0.06em;margin-bottom:10px;">'
             f'📅 {selected_period} vs prior {_period_lbl}</div>'
             f'<div style="display:flex;flex-wrap:wrap;gap:0;">{blocks}</div>'
