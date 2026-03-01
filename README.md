@@ -162,7 +162,8 @@ ingestion.py       CSV parsing — pure Python, no Streamlit dependency
 mechanics.py       Analytics engine — FIFO, campaigns, trade classification
 ui_components.py   Visual helpers — formatters, colour functions, chart layout
 report.py          HTML report export — self-contained, no Streamlit dependency
-tastymechanics.py  Streamlit wiring — sidebar, tabs, cached wrappers only
+tabs/              One renderer per tab (tab0–tab5) — imported by tastymechanics.py
+tastymechanics.py  Streamlit wiring — sidebar, cache wrappers, tab orchestration
 ```
 
 **Data flow**
