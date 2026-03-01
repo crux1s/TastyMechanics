@@ -218,7 +218,7 @@ import os as _os
 #   - UI: IBM Plex Sans + Mono typography, dark theme (#0a0e17).
 # ==========================================
 
-APP_VERSION = "v25.11"
+APP_VERSION = "v25.12"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 

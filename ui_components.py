@@ -204,11 +204,12 @@ def _pnl_chip(label, val):
     """Inline HTML chip: labelled P/L value with sign colour."""
     col  = COLOURS['green'] if val >= 0 else COLOURS['red']
     sign = '+' if val >= 0 else ''
+    _bdr = COLOURS['border']; _dim = COLOURS['text_dim']
     return (
         f'<span style="display:inline-flex;align-items:center;gap:5px;'
-        f'background:rgba(255,255,255,0.04);border:1px solid {COLOURS['border']};'
+        f'background:rgba(255,255,255,0.04);border:1px solid {_bdr};'
         f'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
-        f'<span style="color:{COLOURS['text_dim']};">{label}</span>'
+        f'<span style="color:{_dim};">{label}</span>'
         f'<span style="color:{col};font-family:monospace;font-weight:600;">'
         f'{sign}${abs(val):,.2f}</span>'
         f'</span>'
@@ -225,28 +226,30 @@ def _cmp_block(label, curr, prev, is_pct=False):
     else:
         curr_str  = f'${curr:,.2f}' if curr >= 0 else f'-${abs(curr):,.2f}'
         delta_str = f'{dsign}${delta:,.2f}' if delta >= 0 else f'-${abs(delta):,.2f}'
+    _bdr = COLOURS['border']; _dim = COLOURS['text_dim']; _txt = COLOURS['text']
     return (
-        f'<div style="flex:1;min-width:120px;padding:0 16px;'
-        f'border-right:1px solid {COLOURS['border']};">'
-        f'<div style="color:{COLOURS['text_dim']};font-size:0.7rem;text-transform:uppercase;'
-        f'letter-spacing:0.05em;margin-bottom:4px;">{label}</div>'
-        f'<div style="font-family:monospace;font-size:1.05rem;color:{COLOURS['text']};">{curr_str}</div>'
-        f'<div style="font-size:0.78rem;color:{dcol};margin-top:2px;">{delta_str} vs prior</div>'
-        f'</div>'
+        '<div style="flex:1;min-width:120px;padding:0 16px;'
+        'border-right:1px solid ' + _bdr + ';">'
+        '<div style="color:' + _dim + ';font-size:0.7rem;text-transform:uppercase;'
+        'letter-spacing:0.05em;margin-bottom:4px;">' + label + '</div>'
+        '<div style="font-family:monospace;font-size:1.05rem;color:' + _txt + ';">' + curr_str + '</div>'
+        '<div style="font-size:0.78rem;color:' + dcol + ';margin-top:2px;">' + delta_str + ' vs prior</div>'
+        '</div>'
     )
 
 def _dte_chip(a):
     """Inline HTML chip for an expiry alert item."""
     dte = a['dte']
     fg  = COLOURS['red'] if dte <= 5 else COLOURS['orange'] if dte <= 14 else COLOURS['green']
+    _bdr = COLOURS['border']; _dim = COLOURS['text_dim']; _mut = COLOURS['text_muted']
     return (
-        f'<span style="display:inline-flex;align-items:center;gap:5px;'
-        f'background:rgba(255,255,255,0.04);border:1px solid {COLOURS['border']};'
-        f'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
-        f'<span style="color:{fg};font-family:monospace;font-weight:600;">{dte}d</span>'
-        f'<span style="color:{COLOURS['text_dim']};">{xe(a["ticker"])}</span>'
-        f'<span style="color:{COLOURS['text_muted']};font-family:monospace;">{xe(a["label"])}</span>'
-        f'</span>'
+        '<span style="display:inline-flex;align-items:center;gap:5px;'
+        'background:rgba(255,255,255,0.04);border:1px solid ' + _bdr + ';'
+        'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
+        '<span style="color:' + fg + ';font-family:monospace;font-weight:600;">' + str(dte) + 'd</span>'
+        '<span style="color:' + _dim + ';">' + xe(a['ticker']) + '</span>'
+        '<span style="color:' + _mut + ';font-family:monospace;">' + xe(a['label']) + '</span>'
+        '</span>'
     )
 
 def _badge_inline_style(strat):
@@ -324,15 +327,16 @@ def render_position_card(ticker, t_df):
                 dte_val   = int(str(dte).replace('d', ''))
                 pct       = min(dte_val / DTE_PROGRESS_MAX * 100, 100)
                 bar_color = COLOURS['green'] if dte_val > 14 else COLOURS['orange'] if dte_val > 5 else COLOURS['red']
+                _bdr = COLOURS['border']; _dim = COLOURS['text_dim']
                 dte_html  = (
-                    f'<div style="margin-top:6px;">'
-                    f'<div style="background:{COLOURS['border']};border-radius:4px;height:4px;width:100%;">'
-                    f'<div style="width:{pct:.0f}%;background:{bar_color};'
-                    f'border-radius:4px;height:4px;"></div>'
-                    f'</div>'
-                    f'<div style="color:{COLOURS['text_dim']};font-size:0.7rem;margin-top:3px;">'
-                    f'{dte} to expiry</div>'
-                    f'</div>'
+                    '<div style="margin-top:6px;">'
+                    '<div style="background:' + _bdr + ';border-radius:4px;height:4px;width:100%;">'
+                    '<div style="width:' + f'{pct:.0f}' + '%;background:' + bar_color + ';'
+                    'border-radius:4px;height:4px;"></div>'
+                    '</div>'
+                    '<div style="color:' + _dim + ';font-size:0.7rem;margin-top:3px;">'
+                    + str(dte) + ' to expiry</div>'
+                    '</div>'
                 )
             except (ValueError, TypeError):
                 pass  # non-numeric DTE value — leave cell unstyled
