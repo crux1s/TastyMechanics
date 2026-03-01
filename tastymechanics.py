@@ -215,7 +215,16 @@ def main():
 
     # ── MAIN APP ───────────────────────────────────────────────────────────────────
 
-    st.title(f'📟 TastyMechanics {APP_VERSION}')
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;">'
+        f'<span style="font-size:2rem;font-weight:700;color:{COLOURS["header_text"]};">'
+        f'📟 TastyMechanics {APP_VERSION}</span>'
+        f'<a href="https://www.buymeacoffee.com/Cruxis" target="_blank">'
+        f'<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" '
+        f'alt="Buy Me A Coffee" style="height:36px;border-radius:6px;"></a>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
 
     with st.sidebar:
         _icon_path = Path(__file__).parent / 'icon.png'
