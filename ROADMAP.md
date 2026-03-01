@@ -63,6 +63,7 @@ These tests are scoped and ready to write — just waiting for the right CSV dat
 
 ## Completed
 
+- ✅ `_classify_trade_type` and `_calculate_capital_risk` extracted from `build_closed_trades` to module-level pure functions in `mechanics.py` — testable in isolation, orchestrator now clean
 - ✅ High-priced equity index misclassification fixed — `KNOWN_INDEXES` explicit list in `config.py` replaces strike > $500 heuristic
 - ✅ Wheel Campaigns waterfall chart removed (was redundant with card metrics)
 - ✅ Closed campaigns hidden behind collapsed expander in Wheel Campaigns tab
