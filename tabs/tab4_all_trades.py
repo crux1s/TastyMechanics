@@ -188,7 +188,8 @@ def render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
         st.dataframe(deep_df.style.format({
             'Premiums': fmt_dollar, 'Divs': fmt_dollar,
             'Options P/L': fmt_dollar, 'Deployed': fmt_dollar, 'P/L': fmt_dollar,
-        }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
+        }).bar(subset=['Deployed'], color='rgba(88,166,255,0.20)', vmin=0
+        ).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
 
     st.markdown('---')
     st.markdown(

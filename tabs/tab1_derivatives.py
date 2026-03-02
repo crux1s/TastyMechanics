@@ -15,6 +15,7 @@ from config import (
     PAT_CLOSE, PAT_EXPIR, PAT_ASSIGN, PAT_EXERCISE, PAT_CLOSING,
     WHEEL_MIN_SHARES, LEAPS_DTE_THRESHOLD, ROLL_CHAIN_GAP_DAYS,
     ANN_RETURN_CAP, COLOURS,
+    WIN_RATE_GREEN, WIN_RATE_ORANGE,
 )
 from ui_components import (
     xe, is_share_row, is_option_row,
@@ -57,7 +58,7 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         window_days = max((latest_date - start_date).days, 1)
         dm1.metric('Win Rate',           '%.1f%%' % (credit_cdf['Won'].mean() * 100))
         dm2.metric('Median Capture %',   '%.1f%%' % credit_cdf['Capture %'].median())
-        dm3.metric('Median Days Held',   '%.0f'   % credit_cdf['Days Held'].median())
+        dm3.metric('Median Days in Trade', '%.0f' % credit_cdf['Days Held'].median())
         dm4.metric('Median Ann. Return', '%.0f%%' % credit_cdf['Ann Return %'].median())
         dm5.metric('Med Premium/Day',    fmt_dollar(credit_cdf['Prem/Day'].median()))
         dm6.metric('Banked $/Day', fmt_dollar(total_net_pnl_closed / window_days),
@@ -129,15 +130,15 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                     Med_Days=('Days Held', 'median'),
                     Med_DTE=('DTE at Open', 'median'),
                 ).reset_index().round(1)
-                type_df.columns = ['Type', 'Trades', 'Win %', 'Capture %', 'P/L', 'Prem/Day', 'Days', 'DTE']
+                type_df.columns = ['Type', 'Trades', 'Win %', 'Capture %', 'P/L', 'Prem/Day', 'Med Days in Trade', 'DTE at Entry']
                 st.markdown(f'##### 📊 Call vs Put Performance {_win_label}', unsafe_allow_html=True)
                 st.dataframe(type_df.style.format({
                     'Win %':     lambda x: '{:.1f}%'.format(x),
                     'Capture %': lambda x: '{:.1f}%'.format(x),
                     'P/L':       fmt_dollar,
                     'Prem/Day':  lambda x: '${:.2f}'.format(x),
-                    'Days':      lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                    'DTE':       lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                    'Med Days in Trade': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                    'DTE at Entry':       lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                 }).map(color_win_rate, subset=['Win %'])
                 .map(lambda v: 'color: #00cc96' if isinstance(v, (int, float)) and v > 0
                     else ('color: #ef553b' if isinstance(v, (int, float)) and v < 0 else ''),
@@ -153,14 +154,14 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                 Med_Days=('Days Held', 'median'),
                 Med_DTE=('DTE at Open', 'median'),
             ).reset_index().sort_values('Total_PNL', ascending=False).round(1)
-            strat_df.columns = ['Strategy', 'Trades', 'Win %', 'P/L', 'Capture %', 'Days', 'DTE']
+            strat_df.columns = ['Strategy', 'Trades', 'Win %', 'P/L', 'Capture %', 'Med Days in Trade', 'DTE at Entry']
             st.markdown(f'##### 🧩 Defined vs Undefined Risk — by Strategy {_win_label}', unsafe_allow_html=True)
             st.dataframe(strat_df.style.format({
                 'Win %':     lambda x: '{:.1f}%'.format(x),
                 'Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
                 'P/L':       fmt_dollar,
-                'Days':      lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                'DTE':       lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                'Med Days in Trade': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                'DTE at Entry':       lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
             }).map(color_win_rate, subset=['Win %'])
             .map(lambda v: 'color: #00cc96' if isinstance(v, (int, float)) and v > 0
                 else ('color: #ef553b' if isinstance(v, (int, float)) and v < 0 else ''),
@@ -168,22 +169,35 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
             width='stretch', hide_index=True)
 
         st.markdown('---')
-        st.markdown(f'#### Performance by Ticker {_win_label}', unsafe_allow_html=True)
+        st.markdown(f'#### 📊 Performance by Ticker {_win_label}', unsafe_allow_html=True)
         st.caption((
             'All closed trades grouped by underlying. '
-            '**Win %%** counts any trade that closed positive. '
-            '**Med Capture %%** = median %% of opening credit kept — credit trades only. '
-            '**Med Ann Ret %%** = median annualised return on capital at risk, capped at ±%d%% '
-            'to prevent 0DTE and short-dated trades producing meaningless numbers — '
-            'values shown in orange hit the cap. '
-            '**Total Prem Sold** = gross cash received opening credit trades, before buybacks.'
-        ) % ANN_RETURN_CAP)
+            '**W/L** = wins and losses as separate counts. '
+            '**Win %%** colour-coded: green ≥ %d%%, orange ≥ %d%%, red below. '
+            '**Premium Capture** = median %% of opening credit kept at close — TastyTrade targets 50%%. '
+            '**P/L per DTE** = total P/L ÷ avg days in trade — theta efficiency per ticker. '
+            '**Med Ann Ret %%** capped at ±%d%% — orange = capped. '
+            '**Dim rows** = fewer than 3 trades, small sample size.'
+        ) % (WIN_RATE_GREEN, WIN_RATE_ORANGE, ANN_RETURN_CAP))
+
         all_by_ticker = all_cdf.groupby('Ticker').agg(
+            Wins=('Won', 'sum'),
+            Losses=('Won', lambda x: (x == 0).sum()),
             Trades=('Net P/L', 'count'),
             Win_Rate=('Won', lambda x: x.mean() * 100),
             Total_PNL=('Net P/L', 'sum'),
-            Med_Days=('Days Held', 'median'),
+            Avg_Days=('Days Held', 'mean'),
         ).round(1)
+        # W/L display string
+        all_by_ticker['W/L'] = (
+            all_by_ticker['Wins'].astype(int).astype(str) + '/' +
+            all_by_ticker['Losses'].astype(int).astype(str)
+        )
+        # P/L per DTE — theta efficiency
+        all_by_ticker['PnL_per_DTE'] = (
+            all_by_ticker['Total_PNL'] / all_by_ticker['Avg_Days'].replace(0, float('nan'))
+        ).round(2)
+
         if has_credit:
             credit_by_ticker = credit_cdf.groupby('Ticker').agg(
                 Med_Capture=('Capture %', 'median'),
@@ -196,9 +210,25 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
             ticker_df['Med_Capture'] = None
             ticker_df['Med_Ann']     = None
             ticker_df['Total_Prem']  = None
+
         ticker_df = ticker_df.sort_values('Total_PNL', ascending=False)
-        ticker_df.columns = ['Ticker', 'Trades', 'Win %', 'P/L', 'Days Held',
-                              'Capture %', 'Ann Ret %', 'Total Net Prem']
+        ticker_df = ticker_df[[
+            'Ticker', 'W/L', 'Win_Rate', 'Total_PNL', 'Avg_Days',
+            'PnL_per_DTE', 'Med_Capture', 'Med_Ann', 'Total_Prem'
+        ]]
+        ticker_df.columns = [
+            'Ticker', 'W/L', 'Win %', 'P/L',
+            'Avg Days in Trade', 'P/L per DTE',
+            'Premium Capture', 'Ann Ret %', 'Total Net Prem'
+        ]
+
+        def _style_ticker_row(row):
+            """Dim low-sample rows (< 3 trades)."""
+            wins, losses = row['W/L'].split('/')
+            total = int(wins) + int(losses)
+            if total < 3:
+                return ['color: rgba(200,200,200,0.35); font-style:italic'] * len(row)
+            return [''] * len(row)
 
         def _style_ticker_ann_ret(col):
             return [
@@ -206,17 +236,30 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                 for v in col
             ]
 
+        def _color_capture(val):
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                return ''
+            if v >= 50: return f'color: {COLOURS["green"]}'
+            if v >= 25: return f'color: {COLOURS["orange"]}'
+            return f'color: {COLOURS["red"]}'
+
         st.dataframe(
             ticker_df.style.format({
-                'Win %':           lambda x: '{:.1f}%'.format(x),
-                'P/L':             fmt_dollar,
-                'Days Held':       lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                'Capture %':       lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
-                'Ann Ret %':       lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
-                'Total Net Prem': lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—',
-            }).apply(_style_ticker_ann_ret, subset=['Ann Ret %'])
+                'Win %':            lambda x: '{:.1f}%'.format(x),
+                'P/L':              fmt_dollar,
+                'Avg Days in Trade': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                'P/L per DTE':      lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—',
+                'Premium Capture':  lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
+                'Ann Ret %':        lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
+                'Total Net Prem':   lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—',
+            }).bar(subset=['Win %'], color='rgba(88,166,255,0.18)', vmin=0, vmax=100)
+             .apply(_style_ticker_ann_ret, subset=['Ann Ret %'])
+             .apply(_style_ticker_row, axis=1)
              .map(color_win_rate, subset=['Win %'])
-             .map(color_pnl_cell, subset=['P/L']),
+             .map(color_pnl_cell, subset=['P/L'])
+             .map(_color_capture, subset=['Premium Capture']),
             width='stretch', hide_index=True
         )
 

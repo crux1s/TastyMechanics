@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 from datetime import timedelta
 
 from config import (
+    TRADE_LOSS_HIGHLIGHT,
     OPT_TYPES, EQUITY_TYPE, TRADE_TYPES, MONEY_TYPES,
     SUB_SELL_OPEN, SUB_ASSIGNMENT, SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT,
     INCOME_SUB_TYPES, DEPOSIT_SUB_TYPES,
@@ -30,6 +31,20 @@ from mechanics import (
     _iter_fifo_sells, build_option_chains,
     effective_basis, realized_pnl, calc_dte,
 )
+
+
+
+def _style_pnl_row(row):
+    """Tint entire row red/green based on P/L magnitude."""
+    try:
+        v = float(row.get('P/L', 0))
+    except (TypeError, ValueError):
+        return [''] * len(row)
+    if v < TRADE_LOSS_HIGHLIGHT:
+        return ['background-color: rgba(239,85,59,0.10)'] * len(row)
+    if v > abs(TRADE_LOSS_HIGHLIGHT):
+        return ['background-color: rgba(0,204,150,0.08)'] * len(row)
+    return [''] * len(row)
 
 
 def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
@@ -541,7 +556,7 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         best = all_cdf.nlargest(5, 'Net P/L')[
             ['Ticker', 'Trade Type', 'Type', 'Days Held', 'Net Premium', 'Net P/L']
         ].copy()
-        best.columns = ['Ticker', 'Strategy', 'C/P', 'Days', 'Net Premium', 'P/L']
+        best.columns = ['Ticker', 'Strategy', 'C/P', 'Days in Trade', 'Net Premium', 'P/L']
         st.dataframe(best.style.format({
             'Net Premium': lambda x: '${:.2f}'.format(x), 'P/L': lambda x: '${:.2f}'.format(x)
         }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
@@ -550,7 +565,7 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         worst = all_cdf.nsmallest(5, 'Net P/L')[
             ['Ticker', 'Trade Type', 'Type', 'Days Held', 'Net Premium', 'Net P/L']
         ].copy()
-        worst.columns = ['Ticker', 'Strategy', 'C/P', 'Days', 'Net Premium', 'P/L']
+        worst.columns = ['Ticker', 'Strategy', 'C/P', 'Days in Trade', 'Net Premium', 'P/L']
         st.dataframe(worst.style.format({
             'Net Premium': lambda x: '${:.2f}'.format(x), 'P/L': lambda x: '${:.2f}'.format(x)
         }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
@@ -567,6 +582,7 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         log.rename(columns={
             'Trade Type': 'Strategy', 'Type': 'Call/Put', 'Close Reason': 'Close Reason',
             'Open Date': 'Open', 'Close Date': 'Close',
+            'Days Held': 'Days in Trade',
             'Net P/L': 'P/L',
             'Capital at Risk': 'Cap at Risk', 'Ann Return %': 'Ann Ret %'
         }, inplace=True)
@@ -576,6 +592,7 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
             log.style.format({
                 'Net Premium':    lambda x: '${:.2f}'.format(x),
                 '50% Target': lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—',
+                'Days in Trade': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                 'DTE at Close': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                 'Contracts':  lambda v: '{:.0f}'.format(v) if pd.notna(v) else '—',
                 'P/L':       lambda x: '${:.2f}'.format(x),
@@ -583,7 +600,7 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                 'Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
                 'Ann Ret %': lambda v: v if isinstance(v, str) else
                              ('{:.0f}%'.format(v) if pd.notna(v) else '—'),
-            }).apply(_style_ann_ret, axis=1).map(color_pnl_cell, subset=['P/L']),
+            }).apply(_style_ann_ret, axis=1).apply(_style_pnl_row, axis=1).map(color_pnl_cell, subset=['P/L']),
             width='stretch', hide_index=True,
             column_config={
                 'Open':        st.column_config.DateColumn('Open',        format='DD/MM/YY'),
