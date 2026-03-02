@@ -216,12 +216,11 @@ def main():
     # ── MAIN APP ───────────────────────────────────────────────────────────────────
 
     st.markdown(
-        f'<div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;">'
+        f'<div style="display:flex;align-items:center;gap:1.25rem;margin-bottom:0.5rem;">'
         f'<span style="font-size:2rem;font-weight:700;color:{COLOURS["header_text"]};">'
         f'📟 TastyMechanics {APP_VERSION}</span>'
-        f'<a href="https://www.buymeacoffee.com/Cruxis" target="_blank">'
-        f'<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" '
-        f'alt="Buy Me A Coffee" style="height:36px;border-radius:6px;"></a>'
+        f'<span style="font-size:0.82rem;color:{COLOURS["text_dim"]};font-style:italic;">Like the app? No pressure, but...</span>'
+        '<a href="https://www.buymeacoffee.com/Cruxis" target="_blank" style="display:inline-block;padding:6px 16px;background:#40DCA5;color:#000000;font-weight:700;font-size:0.85rem;border-radius:8px;text-decoration:none;font-family:Cookie,cursive;letter-spacing:0.3px;">😅 Cover my margin call</a>'
         f'</div>',
         unsafe_allow_html=True
     )
@@ -237,8 +236,8 @@ def main():
             '<div style="font-size:0.75rem;color:' + _td + ';margin-top:0.5rem;">'
             'New to TastyTrade? <a href="https://tastytrade.com/welcome/?referralCode=NT57Z3P85B" '
             'target="_blank" style="color:' + _bl + ';">Open an account</a>'
-            ' &nbsp;·&nbsp; <a href="https://www.buymeacoffee.com/Cruxis" '
-            'target="_blank" style="color:#ffdd00;">Buy me a coffee</a>'
+            ' &nbsp;·&nbsp; <span style="font-style:italic;">Like the app? No pressure, but...</span>'
+            ' <a href="https://www.buymeacoffee.com/Cruxis" target="_blank" style="color:#ffdd00;">☕</a>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -311,8 +310,11 @@ def main():
         <p style="color:{_td};font-size:0.78rem;margin-top:1.5rem;text-align:center;">
         TastyMechanics {APP_VERSION} · Open source · AGPL-3.0 ·
         <a href="https://github.com/crux1s/TastyMechanics" style="color:{_bl};">GitHub</a> ·
-        <a href="https://www.buymeacoffee.com/Cruxis" style="color:#ffdd00;">Buy me a coffee</a> ·
         <a href="https://tastytrade.com/welcome/?referralCode=NT57Z3P85B" style="color:{_bl};">Open a TastyTrade account</a>
+        </p>
+        <p style="text-align:center;margin-top:0.75rem;">
+        <span style="font-size:0.82rem;color:{_td};font-style:italic;">Like the app? No pressure, but...</span><br><br>
+        <a href="https://www.buymeacoffee.com/Cruxis" target="_blank" style="display:inline-block;padding:6px 16px;background:#40DCA5;color:#000000;font-weight:700;font-size:0.85rem;border-radius:8px;text-decoration:none;font-family:Cookie,cursive;letter-spacing:0.3px;">😅 Cover my margin call</a>
         </p>
 
         </div>
