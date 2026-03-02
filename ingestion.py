@@ -28,6 +28,7 @@ import pandas as pd
 from config import (
     SPLIT_DSC_PATTERNS,
     REQUIRED_COLUMNS,
+    FIFO_EPSILON,
     FIFO_ROUND,
 )
 
@@ -222,7 +223,7 @@ def apply_split_adjustments(df: pd.DataFrame, split_events: list) -> pd.DataFram
             (df['Ticker'] == ev['ticker']) &
             (equity_mask(df['Instrument Type'])) &
             (df['Date'] < ev['date']) &
-            (df['Net_Qty_Row'] != 0)
+            (df['Net_Qty_Row'].abs() > FIFO_EPSILON)
         )
         df.loc[mask, 'Quantity']    = (df.loc[mask, 'Quantity']    * ev['ratio']).round(FIFO_ROUND)
         df.loc[mask, 'Net_Qty_Row'] = (df.loc[mask, 'Net_Qty_Row'] * ev['ratio']).round(FIFO_ROUND)
