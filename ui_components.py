@@ -128,7 +128,8 @@ def _fmt_ann_ret(row):
     v = row['Ann Ret %']
     if pd.isna(v):
         return '—'
-    suffix = '*' if pd.notna(row['Days Held']) and row['Days Held'] < 4 else ''
+    _days = row.get('Days in Trade', row.get('Days Held'))
+    suffix = '*' if pd.notna(_days) and _days < 4 else ''
     return '{:.0f}%{}'.format(v, suffix)
 
 def _style_ann_ret(row):
@@ -136,7 +137,8 @@ def _style_ann_ret(row):
     styles = [''] * len(row)
     try:
         idx = list(row.index).index('Ann Ret %')
-        if pd.notna(row.get('Days Held')) and row.get('Days Held', 99) < 4:
+        _days = row.get('Days in Trade', row.get('Days Held', 99))
+        if pd.notna(_days) and _days < 4:
             styles[idx] = 'color: ' + COLOURS['tan']
     except (ValueError, KeyError):
         pass  # 'Ann Ret %' column absent in this table variant — safe to skip

@@ -84,6 +84,11 @@ REQUIRED_COLUMNS = {
 FIFO_EPSILON  = 1e-9
 FIFO_ROUND    = 9
 
+# ── Trade log row highlighting ───────────────────────────────────────────────
+# Trades with P/L below this threshold get a full red row tint in the trade log.
+# Trades above the absolute value get a full green row tint.
+TRADE_LOSS_HIGHLIGHT = -200   # dollars
+
 # ── Display caps ──────────────────────────────────────────────────────────────
 # Annualised return is capped at ±ANN_RETURN_CAP % to prevent a 1-day trade
 # from producing a meaningless 50,000 % figure in the trade log.
