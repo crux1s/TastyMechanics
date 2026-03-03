@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import timedelta
+from typing import List, Dict, Any
 
 from config import (
     OPT_TYPES, EQUITY_TYPE, TRADE_TYPES, MONEY_TYPES,
@@ -32,7 +33,7 @@ from mechanics import (
 )
 
 
-def render_tab0(df_open, _expiry_alerts, latest_date):
+def render_tab0(df_open: pd.DataFrame, _expiry_alerts: List[Dict[str, Any]], latest_date: pd.Timestamp) -> None:
     """Tab 0 — Active Positions: open position cards + expiry alert strip."""
     st.subheader('📡 Open Positions')
     if df_open.empty:

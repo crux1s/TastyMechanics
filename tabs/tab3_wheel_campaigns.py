@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import timedelta
+from typing import Dict, List
 
 from config import (
     OPT_TYPES, EQUITY_TYPE, TRADE_TYPES, MONEY_TYPES,
@@ -30,9 +31,16 @@ from mechanics import (
     _iter_fifo_sells, build_option_chains,
     effective_basis, realized_pnl, calc_dte,
 )
+from models import Campaign
 
 
-def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
+def render_tab3(
+    all_campaigns: Dict[str, List[Campaign]],
+    df: pd.DataFrame,
+    latest_date: pd.Timestamp,
+    start_date: pd.Timestamp,
+    use_lifetime: bool
+) -> None:
     """Tab 3 — Wheel Campaigns: summary table, per-campaign cards, roll chains, waterfall."""
     _col_hdr, _col_tog = st.columns([4, 1])
     with _col_hdr:

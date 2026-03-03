@@ -33,8 +33,19 @@ from mechanics import (
 )
 
 
-def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
-                df_window, start_date, latest_date, window_label, _win_label, _win_suffix):
+def render_tab1(
+    closed_trades_df: pd.DataFrame,
+    all_cdf: pd.DataFrame,
+    credit_cdf: pd.DataFrame,
+    has_credit: bool,
+    has_data: bool,
+    df_window: pd.DataFrame,
+    start_date: pd.Timestamp,
+    latest_date: pd.Timestamp,
+    window_label: str,
+    _win_label: str,
+    _win_suffix: str
+) -> None:
     """Tab 1 — Derivatives Performance: scorecard, call/put breakdown, per-ticker table."""
     if closed_trades_df.empty:
         st.info('No closed trades found.')

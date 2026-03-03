@@ -32,7 +32,14 @@ from mechanics import (
 )
 
 
-def render_tab5(df_window, total_deposited, total_withdrawn, div_income, int_net, _win_label):
+def render_tab5(
+    df_window: pd.DataFrame,
+    total_deposited: float,
+    total_withdrawn: float,
+    div_income: float,
+    int_net: float,
+    _win_label: str
+) -> None:
     """Tab 5 — Deposits, Dividends & Fees: money movement table for the selected window."""
     st.markdown(f'### 💰 Deposits, Dividends & Fees {_win_label}', unsafe_allow_html=True)
     ic1, ic2, ic3, ic4 = st.columns(4)

@@ -123,7 +123,7 @@ def _iter_fifo_sells(equity_rows: pd.DataFrame) -> Iterator[tuple[pd.Timestamp, 
 
         if qty > 0:
             # ── BUY row ───────────────────────────────────────────────────────
-            # Cover shorts first (FIFO); any residual qty opens/adds to a long.
+            # BUY: cover shorts first (FIFO), then open/add long
             remaining = qty
             # Guard: qty > 0 is guaranteed by the branch condition, but a row
             # with qty=0 and total!=0 (e.g. a misclassified fee) would cause
@@ -150,7 +150,7 @@ def _iter_fifo_sells(equity_rows: pd.DataFrame) -> Iterator[tuple[pd.Timestamp, 
 
         elif qty < 0:
             # ── SELL row ──────────────────────────────────────────────────────
-            # Close longs first (FIFO); any residual qty opens/adds to a short.
+            # SELL: close longs first (FIFO), then open/add short
             remaining       = abs(qty)
             pps             = abs(total) / remaining   # proceeds per share — remaining == abs(qty) > 0 always
             sale_cost_basis = 0.0
@@ -345,8 +345,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 current.events.append({
                     'date':   row.Date,
                     'type':   'Stock Split',
-                    'detail': '%.6gx split: %.0f → %.0f shares @ $%.4f/sh basis' % (
-                        ratio, split_qty / ratio, split_qty, current.blended_basis),
+                    'detail': f'{ratio:.6g}x split: {split_qty / ratio:.0f} → {split_qty:.0f} shares @ ${current.blended_basis:.4f}/sh basis',
                     'cash':   0.0,
                 })
             continue
@@ -357,8 +356,8 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
             if running_shares < FIFO_EPSILON:
                 # New campaign entry — check if arrival was via put assignment
                 assignment_premium, assignment_events = _find_assignment_premium(t, row)
-                entry_label = 'Bought %.0f @ $%.2f/sh%s' % (
-                    qty, pps, ' (Assigned)' if assignment_events else '')
+                assigned_suffix = ' (Assigned)' if assignment_events else ''
+                entry_label = f'Bought {qty:.0f} @ ${pps:.2f}/sh{assigned_suffix}'
                 current = Campaign(
                     ticker=ticker, total_shares=qty, total_cost=abs(total),
                     blended_basis=pps, premiums=assignment_premium, dividends=0.0,
@@ -379,7 +378,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 current.blended_basis = new_basis
                 running_shares        = new_shares
                 current.events.append({'date': row.Date, 'type': 'Add',
-                    'detail': 'Added %.0f @ $%.2f → blended $%.2f/sh' % (qty, pps, new_basis),
+                    'detail': f'Added {qty:.0f} @ ${pps:.2f} → blended ${new_basis:.2f}/sh',
                     'cash': total})
 
         # ── Share sale / partial exit ──────────────────────────────────────
@@ -389,7 +388,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 running_shares        += qty
                 pps = abs(total) / abs(qty) if abs(qty) > FIFO_EPSILON else 0
                 current.events.append({'date': row.Date, 'type': 'Exit',
-                    'detail': 'Sold %.0f @ $%.2f/sh' % (abs(qty), pps), 'cash': total})
+                    'detail': f'Sold {abs(qty):.0f} @ ${pps:.2f}/sh', 'cash': total})
                 if running_shares < FIFO_EPSILON:
                     current.end_date = row.Date
                     current.status   = 'closed'
@@ -663,9 +662,9 @@ def _classify_trade_type(
             return ('Covered Straddle' if 'Straddle' in base else 'Covered Strangle') if in_campaign else base
         elif has_sc:
             if in_campaign: return 'Covered Call'
-            return 'Short Call' if n_contracts == 1 else 'Short Call (x%d)' % n_contracts
+            return 'Short Call' if n_contracts == 1 else f'Short Call (x{n_contracts})'
         elif has_sp:
-            return 'Short Put' if n_contracts == 1 else 'Short Put (x%d)' % n_contracts
+            return 'Short Put' if n_contracts == 1 else f'Short Put (x{n_contracts})'
         else:
             return 'Short (other)'
 
@@ -925,7 +924,8 @@ def calc_dte(row: pd.Series, reference_date: pd.Timestamp) -> str:
         if pd.isna(exp_date):
             return 'N/A'
         exp_plain = exp_date.date() if hasattr(exp_date, 'date') else exp_date
-        return '%dd' % max((exp_plain - reference_date.date()).days, 0)
+        dte = max((exp_plain - reference_date.date()).days, 0)
+        return f"{dte}d"
     except (ValueError, TypeError, AttributeError):
         return 'N/A'
 

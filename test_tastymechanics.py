@@ -1010,7 +1010,7 @@ check_int('CT 7d: no out-of-window close dates', int(_w7_outside.sum()), 0)
 # ══════════════════════════════════════════════════════════════════════════════
 from ui_components import xe, identify_pos_type, detect_strategy
 
-def _make_row(inst_type, cp, qty, strike=100.0, exp='2026-06-20'):
+def _make_row(inst_type, cp, qty, strike=100.0, exp='2026-06-20', cost=0.0):
     """Helper — build a minimal Series for identify_pos_type / detect_strategy."""
     return pd.Series({
         'Instrument Type': inst_type,
@@ -1019,6 +1019,7 @@ def _make_row(inst_type, cp, qty, strike=100.0, exp='2026-06-20'):
         'Strike Price':    strike,
         'Expiration Date': exp,
         'Ticker':          'TEST',
+        'Cost Basis':      cost,
     })
 
 def _make_df(*rows):
@@ -1152,6 +1153,36 @@ check_int('ds: Long Stock',
       detect_strategy(_make_df(
           _make_row('Equity', '', 100)
       )), 'Long Stock')
+
+# Short Straddle - short call + short put, same strike
+check_int('ds: Short Straddle',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL', -1, 100),
+          _make_row('Equity Option', 'PUT',  -1, 100),
+      )), 'Short Strangle') # Note: detect_strategy currently groups straddle into strangle
+
+# Put Credit Spread - 1 short put, 1 long put (lower strike)
+check_int('ds: Put Credit Spread',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'PUT', -1, 100, cost=-100),
+          _make_row('Equity Option', 'PUT',  1,  95, cost=50),
+      )), 'Put Credit Spread')
+
+# Call Credit Spread - 1 short call, 1 long call (higher strike)
+check_int('ds: Call Credit Spread',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL', -1, 100, cost=-150),
+          _make_row('Equity Option', 'CALL',  1, 105, cost=50),
+      )), 'Call Credit Spread')
+
+# Iron Condor
+check_int('ds: Iron Condor',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL', -1, 110),
+          _make_row('Equity Option', 'CALL',  1, 115),
+          _make_row('Equity Option', 'PUT',  -1,  90),
+          _make_row('Equity Option', 'PUT',   1,  85),
+      )), 'Iron Condor')
 
 # Custom/Mixed — unrecognised combination
 check_int('ds: Custom/Mixed fallback',

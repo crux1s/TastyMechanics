@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import timedelta
+from typing import Dict, List
 
 from config import (
     OPT_TYPES, EQUITY_TYPE, TRADE_TYPES, MONEY_TYPES,
@@ -30,13 +31,25 @@ from mechanics import (
     _iter_fifo_sells, build_option_chains,
     effective_basis, realized_pnl, calc_dte,
 )
+from models import Campaign
 
 
-def render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
-                pure_options_tickers, pure_opts_per_ticker,
-                capital_deployed, start_date, latest_date,
-                _is_all_time, selected_period, _win_label, _win_suffix,
-                use_lifetime):
+def render_tab4(
+    all_campaigns: Dict[str, List[Campaign]],
+    df: pd.DataFrame,
+    _daily_pnl: pd.DataFrame,
+    _daily_pnl_all: pd.DataFrame,
+    pure_options_tickers: List[str],
+    pure_opts_per_ticker: Dict[str, float],
+    capital_deployed: float,
+    start_date: pd.Timestamp,
+    latest_date: pd.Timestamp,
+    _is_all_time: bool,
+    selected_period: str,
+    _win_label: str,
+    _win_suffix: str,
+    use_lifetime: bool
+) -> None:
     """Tab 4 — All Trades: equity curve, per-ticker table, period charts, volatility metrics."""
     st.markdown(f'### 🔍 Realized P/L — All Tickers {_win_label}', unsafe_allow_html=True)
     st.markdown(

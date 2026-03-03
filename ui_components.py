@@ -42,7 +42,7 @@ def identify_pos_type(row):
 def translate_readable(row):
     """Human-readable label for an open position row (e.g. 'STO 1 @ 25P (14/03)')."""
     if not is_option_row(str(row['Instrument Type'])):
-        return '%s Shares' % row['Ticker']
+        return f"{row['Ticker']} Shares"
     try:
         exp_dt = pd.to_datetime(
             row['Expiration Date'], format='mixed', errors='coerce'
@@ -51,13 +51,14 @@ def translate_readable(row):
         exp_dt = 'N/A'
     cp     = 'C' if 'CALL' in str(row['Call or Put']).upper() else 'P'
     action = 'STO' if row['Net_Qty'] < 0 else 'BTO'
-    return '%s %d @ %.0f%s (%s)' % (
-        action, abs(int(row['Net_Qty'])), row['Strike Price'], cp, exp_dt
-    )
+    qty    = abs(int(row['Net_Qty']))
+    strike = row['Strike Price']
+    return f"{action} {qty} @ {strike:.0f}{cp} ({exp_dt})"
 
 def format_cost_basis(val):
     """Format a cost-basis value as '$12.34 Cr' or '$12.34 Db'."""
-    return '$%.2f %s' % (abs(val), 'Cr' if val < 0 else 'Db')
+    side = 'Cr' if val < 0 else 'Db'
+    return f"${abs(val):.2f} {side}"
 
 def fmt_dollar(val, decimals=2):
     """
@@ -85,8 +86,16 @@ def detect_strategy(ticker_df):
     lp = (types == 'Long Put').sum()
     strikes = ticker_df['Strike Price'].dropna().unique()
     exps    = ticker_df['Expiration Date'].dropna().unique()
+
+    # Net cost of all option legs in this ticker.
+    # Cost Basis > 0 means debit paid, < 0 means credit received.
+    opt_df = ticker_df[ticker_df['Instrument Type'].str.contains('Option', na=False)]
+    net_cost = opt_df['Cost Basis'].sum() if not opt_df.empty and 'Cost Basis' in opt_df.columns else 0
+    is_credit = net_cost < 0
+
     if lc > 0 and sc > 0 and len(exps) >= 2 and len(strikes) == 1: return 'Calendar Spread'
     if lp > 0 and sp > 0 and len(exps) >= 2 and len(strikes) == 1: return 'Calendar Spread'
+
     # Butterfly: 2 longs + 1 short, 3 strikes, 1 expiry AND short strike must be the middle strike
     if lc == 2 and sc == 1 and len(strikes) == 3 and len(exps) == 1:
         _sc_strikes = ticker_df[ticker_df.apply(identify_pos_type, axis=1) == 'Short Call']['Strike Price'].dropna()
@@ -96,15 +105,25 @@ def detect_strategy(ticker_df):
         _sp_strikes = ticker_df[ticker_df.apply(identify_pos_type, axis=1) == 'Short Put']['Strike Price'].dropna()
         if not _sp_strikes.empty and sorted(strikes)[0] < _sp_strikes.iloc[0] < sorted(strikes)[-1]:
             return 'Put Butterfly'
+
     if ls > 0 and sc > 0 and sp > 0: return 'Covered Strangle'
     if ls > 0 and sc > 0:            return 'Covered Call'
+
+    if sp >= 1 and sc >= 1 and lc >= 1 and lp >= 1: return 'Iron Condor'
     if sp >= 1 and sc >= 1 and lc >= 1: return 'Jade Lizard'
     if sc >= 1 and sp >= 1 and lp >= 1: return 'Big Lizard'
     if sc >= 1 and sp >= 1:             return 'Short Strangle'
     if lc >= 1 and sp >= 1:             return 'Risk Reversal'
-    if lc > 1  and sc > 0:             return 'Call Debit Spread'
+
+    if lc >= 1 and sc >= 1:
+        return 'Call Credit Spread' if is_credit else 'Call Debit Spread'
+    if lp >= 1 and sp >= 1:
+        return 'Put Credit Spread' if is_credit else 'Put Debit Spread'
+
     if sp > 0:       return 'Short Put'
-    if lc == 1:      return 'Long Call'   # exactly 1 long call — not 2+ unmatched
+    if sc > 0:       return 'Short Call'
+    if lc == 1:      return 'Long Call'
+    if lp == 1:      return 'Long Put'
     if ls > 0:       return 'Long Stock'
     return 'Custom/Mixed'
 
@@ -130,7 +149,7 @@ def _fmt_ann_ret(row):
         return '—'
     _days = row.get('Days in Trade', row.get('Days Held'))
     suffix = '*' if pd.notna(_days) and _days < 4 else ''
-    return '{:.0f}%{}'.format(v, suffix)
+    return f"{v:.0f}%{suffix}"
 
 def _style_ann_ret(row):
     """Row-level style: dim Ann Ret % for very short-hold trades."""
@@ -232,13 +251,13 @@ def _cmp_block(label, curr, prev, is_pct=False):
         delta_str = f'{dsign}${delta:,.2f}' if delta >= 0 else f'-${abs(delta):,.2f}'
     _bdr = COLOURS['border']; _dim = COLOURS['text_dim']; _txt = COLOURS['text']
     return (
-        '<div style="flex:1;min-width:120px;padding:0 16px;'
-        'border-right:1px solid ' + _bdr + ';">'
-        '<div style="color:' + _dim + ';font-size:0.7rem;text-transform:uppercase;'
-        'letter-spacing:0.05em;margin-bottom:4px;">' + label + '</div>'
-        '<div style="font-family:monospace;font-size:1.05rem;color:' + _txt + ';">' + curr_str + '</div>'
-        '<div style="font-size:0.78rem;color:' + dcol + ';margin-top:2px;">' + delta_str + ' vs prior</div>'
-        '</div>'
+        f'<div style="flex:1;min-width:120px;padding:0 16px;'
+        f'border-right:1px solid {_bdr};">'
+        f'<div style="color:{_dim};font-size:0.7rem;text-transform:uppercase;'
+        f'letter-spacing:0.05em;margin-bottom:4px;">{label}</div>'
+        f'<div style="font-family:monospace;font-size:1.05rem;color:{_txt};">{curr_str}</div>'
+        f'<div style="font-size:0.78rem;color:{dcol};margin-top:2px;">{delta_str} vs prior</div>'
+        f'</div>'
     )
 
 def _dte_chip(a):
@@ -246,14 +265,16 @@ def _dte_chip(a):
     dte = a['dte']
     fg  = COLOURS['red'] if dte <= DTE_ALERT_CRIT else COLOURS['orange'] if dte <= DTE_ALERT_WARN else COLOURS['green']
     _bdr = COLOURS['border']; _dim = COLOURS['text_dim']; _mut = COLOURS['text_muted']
+    ticker = xe(a['ticker'])
+    label = xe(a['label'])
     return (
-        '<span style="display:inline-flex;align-items:center;gap:5px;'
-        'background:rgba(255,255,255,0.04);border:1px solid ' + _bdr + ';'
-        'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
-        '<span style="color:' + fg + ';font-family:monospace;font-weight:600;">' + str(dte) + 'd</span>'
-        '<span style="color:' + _dim + ';">' + xe(a['ticker']) + '</span>'
-        '<span style="color:' + _mut + ';font-family:monospace;">' + xe(a['label']) + '</span>'
-        '</span>'
+        f'<span style="display:inline-flex;align-items:center;gap:5px;'
+        f'background:rgba(255,255,255,0.04);border:1px solid {_bdr};'
+        f'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
+        f'<span style="color:{fg};font-family:monospace;font-weight:600;">{dte}d</span>'
+        f'<span style="color:{_dim};">{ticker}</span>'
+        f'<span style="color:{_mut};font-family:monospace;">{label}</span>'
+        f'</span>'
     )
 
 def _badge_inline_style(strat):
