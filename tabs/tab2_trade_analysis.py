@@ -106,7 +106,20 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         _roll_cdf = all_cdf.sort_values('Close Date').copy()
         _roll_cdf['Rolling_WR'] = _roll_cdf['Won'].rolling(10, min_periods=5).mean() * 100
 
-        tg1, tg2, tg3, tg4 = st.columns(4)
+        # ── Assignment Rate ───────────────────────────────────────────────────────
+        # Short put trades that ended in assignment vs all short put closes
+        _sp_cdf       = _short_cdf[_short_cdf['Type'].str.upper().str.contains('PUT', na=False)]                         if 'Type' in _short_cdf.columns else pd.DataFrame()
+        _n_assigned   = (_sp_cdf['Close Reason'].str.contains('Assign', na=False)).sum()                         if not _sp_cdf.empty and 'Close Reason' in _sp_cdf.columns else 0
+        _n_sp_total   = len(_sp_cdf)
+        _assign_rate  = _n_assigned / _n_sp_total * 100 if _n_sp_total > 0 else 0
+
+        # ── Early Management Rate (closed before 21 DTE) ──────────────────────────
+        # TastyTrade rule: take profits or cut losses before 21 DTE to avoid gamma risk
+        _EARLY_DTE    = 21
+        _n_early      = (_dte_valid['DTE_close'] >= _EARLY_DTE).sum()
+        _early_rate   = _n_early / len(_dte_valid) * 100 if not _dte_valid.empty else 0
+
+        tg1, tg2, tg3, tg4, tg5, tg6 = st.columns(6)
         tg1.metric('Management Rate',    '%.0f%%' % _mgmt_rate,
             delta='%d managed, %d expired/assigned' % (_n_managed, _n_expired), delta_color='off')
         tg1.caption('% of trades actively closed early vs left to expire/assign. LEAPS excluded.')
@@ -117,6 +130,14 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         _conc_icon = '⚠️' if _top3_pct > 60 else '✅'
         tg4.metric('Top 3 Concentration', '%.0f%%' % _top3_pct)
         tg4.caption(f'{_conc_icon} {_top3_names} — above 60%% = concentration risk.')
+        _assign_icon = '📋' if _assign_rate > 0 else '✅'
+        tg5.metric('Assignment Rate', '%.0f%%' % _assign_rate,
+            delta='%d of %d short puts' % (_n_assigned, _n_sp_total), delta_color='off')
+        tg5.caption(f'{_assign_icon} % of short puts that resulted in assignment. Wheel traders expect and welcome this.')
+        _early_icon = '✅' if _early_rate >= 50 else '⚠️'
+        tg6.metric('Early Mgmt Rate', '%.0f%%' % _early_rate,
+            delta='closed ≥ %dd DTE' % _EARLY_DTE, delta_color='off')
+        tg6.caption('{} % of trades closed before {} DTE - TastyTrade rule: avoid gamma risk.'.format(_early_icon, _EARLY_DTE))
 
         if not _leaps_cdf.empty:
             _lc = COLOURS['green'] if _leaps_cdf['Net P/L'].sum() >= 0 else COLOURS['red']

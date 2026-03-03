@@ -280,16 +280,22 @@ def render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
 
             vc1, vc2, vc3, vc4, vc5 = st.columns(5)
             vc1.metric('Avg Week P/L',    fmt_dollar(_avg_week))
+            vc1.caption('Mean realized P/L per calendar week. Positive = capital compounding.')
             vc2.metric('Weekly Std Dev',  fmt_dollar(_std_week))
+            vc2.caption('Week-to-week P/L variability. Lower = more consistent income stream.')
             vc3.metric('Sharpe-Equiv',    '%.2f' % _sharpe_eq)
+            vc3.caption('Avg Week P/L divided by Weekly Std Dev. Above 0.5 is solid for theta strategies. Not annualised.')
             vc4.metric('Profitable Weeks',
                 '%.0f%% (%d/%d)' % (_consistency, _pos_weeks, _total_weeks))
+            vc4.caption('Weeks with positive realized P/L. ThetaGang target: above 60%%.')
             if _max_dd < 0:
                 vc5.metric('Max Drawdown', fmt_dollar(_max_dd),
                     delta='Recovery: %s' % ('%dd' % _recovery_days if _recovery_days else 'Not yet'),
                     delta_color='off')
+                vc5.caption('Largest peak-to-trough drop in cumulative P/L. Delta shows days to recover to prior peak.')
             else:
                 vc5.metric('Max Drawdown', '$0.00')
+                vc5.caption('No drawdown in this window — cumulative P/L never fell below a prior peak.')
 
             _fig_vol = go.Figure()
             _fig_vol.add_trace(go.Bar(
