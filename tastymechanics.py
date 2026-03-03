@@ -334,19 +334,19 @@ def main():
 
 
     @st.cache_data(show_spinner='⚙️ Building campaigns…')
-    def build_all_data(_parsed: ParsedData, use_lifetime: bool, file_hash: int) -> AppData:
+    def build_all_data(_parsed: ParsedData, use_lifetime: bool, file_hash: str) -> AppData:
         """
         Thin Streamlit cache wrapper around mechanics.compute_app_data().
         Cached separately from load_and_parse so that toggling Lifetime mode
         only re-runs campaign logic, not the CSV parse.
         _parsed is prefixed with _ so Streamlit skips hashing the full DataFrame.
-        file_hash is a hashable int derived from the raw bytes — ensures the cache
+        file_hash is a content-stable hash string (md5 hexdigest) — ensures the cache
         invalidates when a new file is uploaded, even if use_lifetime is unchanged.
         """
         return compute_app_data(_parsed, use_lifetime)
 
     @st.cache_data(show_spinner=False)
-    def get_daily_pnl(_df: pd.DataFrame, file_hash: int) -> pd.DataFrame:
+    def get_daily_pnl(_df: pd.DataFrame, file_hash: str) -> pd.DataFrame:
         """
         Daily realized P/L series — FIFO-correct, whole portfolio.
         Cached on the full df — re-runs only when a new file is uploaded.

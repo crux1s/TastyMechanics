@@ -4,33 +4,14 @@ tabs/tab0_open_positions.py — Tab0 Open Positions tab renderer.
 
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import timedelta
 from typing import List, Dict, Any
 
-from config import (
-    OPT_TYPES, EQUITY_TYPE, TRADE_TYPES, MONEY_TYPES,
-    SUB_SELL_OPEN, SUB_ASSIGNMENT, SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT,
-    INCOME_SUB_TYPES, DEPOSIT_SUB_TYPES,
-    PAT_CLOSE, PAT_EXPIR, PAT_ASSIGN, PAT_EXERCISE, PAT_CLOSING,
-    WHEEL_MIN_SHARES, LEAPS_DTE_THRESHOLD, ROLL_CHAIN_GAP_DAYS,
-    ANN_RETURN_CAP, COLOURS,
-)
 from ui_components import (
-    xe, is_share_row, is_option_row,
-    identify_pos_type, translate_readable, format_cost_basis, detect_strategy,
-    fmt_dollar, color_win_rate, color_pnl_cell,
-    _pnl_chip, _cmp_block, _dte_chip,
-    _fmt_ann_ret, _style_ann_ret, _style_chain_row,
-    _color_cash_row, _color_cash_total,
-    chart_layout, _badge_inline_style, render_position_card,
+    identify_pos_type, translate_readable, detect_strategy,
+    _dte_chip, render_position_card,
 )
 from ingestion import equity_mask, option_mask
-from mechanics import (
-    _iter_fifo_sells, build_option_chains,
-    effective_basis, realized_pnl, calc_dte,
-)
+from mechanics import calc_dte
 
 
 def render_tab0(df_open: pd.DataFrame, _expiry_alerts: List[Dict[str, Any]], latest_date: pd.Timestamp) -> None:

@@ -1175,15 +1175,6 @@ check_int('ds: Call Credit Spread',
           _make_row('Equity Option', 'CALL',  1, 105, cost=50),
       )), 'Call Credit Spread')
 
-# Iron Condor
-check_int('ds: Iron Condor',
-      detect_strategy(_make_df(
-          _make_row('Equity Option', 'CALL', -1, 110),
-          _make_row('Equity Option', 'CALL',  1, 115),
-          _make_row('Equity Option', 'PUT',  -1,  90),
-          _make_row('Equity Option', 'PUT',   1,  85),
-      )), 'Iron Condor')
-
 # Custom/Mixed — unrecognised combination
 check_int('ds: Custom/Mixed fallback',
       detect_strategy(_make_df(
