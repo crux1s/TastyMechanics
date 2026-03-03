@@ -345,8 +345,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 current.events.append({
                     'date':   row.Date,
                     'type':   'Stock Split',
-                    'detail': '%.6gx split: %.0f → %.0f shares @ $%.4f/sh basis' % (
-                        ratio, split_qty / ratio, split_qty, current.blended_basis),
+                    'detail': f'{ratio:.6g}x split: {split_qty / ratio:.0f} → {split_qty:.0f} shares @ ${current.blended_basis:.4f}/sh basis',
                     'cash':   0.0,
                 })
             continue
@@ -925,7 +924,7 @@ def calc_dte(row: pd.Series, reference_date: pd.Timestamp) -> str:
         if pd.isna(exp_date):
             return 'N/A'
         exp_plain = exp_date.date() if hasattr(exp_date, 'date') else exp_date
-        return '%dd' % max((exp_plain - reference_date.date()).days, 0)
+        return f'{max((exp_plain - reference_date.date()).days, 0)}d'
     except (ValueError, TypeError, AttributeError):
         return 'N/A'
 

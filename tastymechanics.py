@@ -826,37 +826,11 @@ def main():
     has_credit = not credit_cdf.empty
     has_data   = not all_cdf.empty
 
-    # ── TABS ───────────────────────────────────────────────────────────────────────
-    tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        '📡 Open Positions',
-        '📈 Derivatives Performance',
-        '🔬 Trade Analysis',
-        '🎯 Wheel Campaigns',
-        '🔍 All Trades',
-        '💰 Deposits, Dividends & Fees'
-    ])
-
-    with tab0: render_tab0(df_open, _expiry_alerts, latest_date)
-    with tab1: render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
-                           df_window, start_date, latest_date, window_label,
-                           _win_label, _win_suffix)
-    with tab2: render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
-                           df_window, _win_label, _win_suffix, _win_start_str, _win_end_str)
-    with tab3: render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime)
-    with tab4: render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
-                           pure_options_tickers, pure_opts_per_ticker,
-                           capital_deployed, start_date, latest_date,
-                           _is_all_time, selected_period, _win_label, _win_suffix,
-                           use_lifetime)
-    with tab5: render_tab5(df_window, total_deposited, total_withdrawn,
-                           div_income, int_net, _win_label)
-
-    # ── Report download (sidebar) ─────────────────────────────────────────────
+    # ── Report download sidebar — here all window data is ready ──────────────────
     with st.sidebar:
         st.markdown('---')
         st.markdown('#### 📄 Export Report')
         if has_data:
-            # Fees computed same way as render_tab1
             _rpt_opt_rows = df_window[
                 df_window['Instrument Type'].isin(OPT_TYPES) &
                 df_window['Type'].isin(TRADE_TYPES)
@@ -888,6 +862,33 @@ def main():
             )
         else:
             st.caption('Upload data to enable report export.')
+
+    # ── TABS ───────────────────────────────────────────────────────────────────────
+    tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        '📡 Open Positions',
+        '📈 Derivatives Performance',
+        '🔬 Trade Analysis',
+        '🎯 Wheel Campaigns',
+        '🔍 All Trades',
+        '💰 Deposits, Dividends & Fees'
+    ])
+
+    with tab0: render_tab0(df_open, _expiry_alerts, latest_date)
+    with tab1: render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
+                           df_window, start_date, latest_date, window_label,
+                           _win_label, _win_suffix)
+    with tab2: render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
+                           df_window, _win_label, _win_suffix, _win_start_str, _win_end_str)
+    with tab3: render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime)
+    with tab4: render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
+                           pure_options_tickers, pure_opts_per_ticker,
+                           capital_deployed, start_date, latest_date,
+                           _is_all_time, selected_period, _win_label, _win_suffix,
+                           use_lifetime)
+    with tab5: render_tab5(df_window, total_deposited, total_withdrawn,
+                           div_income, int_net, _win_label)
+
+
 
 
 

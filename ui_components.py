@@ -42,7 +42,7 @@ def identify_pos_type(row):
 def translate_readable(row):
     """Human-readable label for an open position row (e.g. 'STO 1 @ 25P (14/03)')."""
     if not is_option_row(str(row['Instrument Type'])):
-        return '%s Shares' % row['Ticker']
+        return f"{row['Ticker']} Shares"
     try:
         exp_dt = pd.to_datetime(
             row['Expiration Date'], format='mixed', errors='coerce'
@@ -51,13 +51,11 @@ def translate_readable(row):
         exp_dt = 'N/A'
     cp     = 'C' if 'CALL' in str(row['Call or Put']).upper() else 'P'
     action = 'STO' if row['Net_Qty'] < 0 else 'BTO'
-    return '%s %d @ %.0f%s (%s)' % (
-        action, abs(int(row['Net_Qty'])), row['Strike Price'], cp, exp_dt
-    )
+    return f'{action} {abs(int(row["Net_Qty"]))} @ {row["Strike Price"]:.0f}{cp} ({exp_dt})'
 
 def format_cost_basis(val):
     """Format a cost-basis value as '$12.34 Cr' or '$12.34 Db'."""
-    return '$%.2f %s' % (abs(val), 'Cr' if val < 0 else 'Db')
+    return f'${abs(val):.2f} {"Cr" if val < 0 else "Db"}'
 
 def fmt_dollar(val, decimals=2):
     """

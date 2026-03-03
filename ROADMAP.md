@@ -10,13 +10,18 @@ Nothing active right now.
 
 ---
 
-## Readability & Maintainability
+## UX Improvements
 
-- **FIFO branch comments** (`mechanics.py` ~123–175) — the preamble docstring is excellent but the actual `if qty > 0` / `elif qty < 0` branches have no signpost. Add 1–2 lines before each branch: `# BUY: cover shorts first (FIFO), then open/add long` and `# SELL: close longs first (FIFO), then open/add short`. Low priority.
+- **Duplicate date range selector** — add a compact time window dropdown inline near the top of each tab (or at minimum tabs 1, 2, 4) so users don't have to scroll all the way to the top to change the window. The sidebar selector remains the source of truth — the inline one just mirrors/syncs it via `st.session_state`. Medium priority.
+
+- **`Days in Trade` label audit** — verify all remaining tables and metrics use the correct variant: `Days in Trade` (per-trade), `Med Days in Trade` (grouped median), `Avg Days in Trade` (grouped average). Done for main tables — check any future additions follow the same pattern.
+
+---
+
+## Readability & Maintainability
 
 - **Type hints on tab render functions** (`tabs/tab0`–`tab5`) — each takes 8–12 positional arguments with no hints. Add signatures like `def render_tab1(closed_trades_df: pd.DataFrame, ...) -> None`. Low priority.
 
-- **Old-style `%` formatting** (`mechanics.py:347`, `ui_components.py:53–55`) — not a bug, inconsistent with f-strings used everywhere else. Standardise on f-strings when those lines are touched for other reasons. Not worth a dedicated pass.
 
 ---
 
@@ -58,6 +63,16 @@ Waiting on the right CSV scenarios to appear naturally:
 ---
 
 ## Completed
+
+- ✅ Export Report button moved above time window selector in sidebar
+- ✅ FIFO branch signposts added (`# BUY row` / `# SELL row` with routing description)
+- ✅ `%` formatting converted to f-strings in `mechanics.py` and `ui_components.py`
+- ✅ Assignment Rate and Early Mgmt Rate added to ThetaGang metrics
+- ✅ P&L Consistency captions added
+- ✅ Performance by Ticker table — W/L split, bar on Win%, P/L per DTE, dim low-sample rows, Premium Capture colour
+- ✅ `Days in Trade` / `Med Days in Trade` / `Avg Days in Trade` labels consistent across all tables
+- ✅ Full-row tint for large winners/losers in trade log (`TRADE_LOSS_HIGHLIGHT` in config.py)
+- ✅ Capital concentration bar on ticker breakdown table
 
 - ✅ Docstrings for `effective_basis()` and `realized_pnl()` — full formula explanation, house money concept, when each branch fires
 - ✅ `_aggregate_campaign_pnl()` extracted to mechanics.py — eliminates duplicate aggregation between `compute_app_data()` and zero-cost exclusion path
