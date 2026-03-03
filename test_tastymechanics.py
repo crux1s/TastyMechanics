@@ -1154,6 +1154,15 @@ check_int('ds: Long Stock',
           _make_row('Equity', '', 100)
       )), 'Long Stock')
 
+# Iron Condor
+check_int('ds: Iron Condor',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL', -1, 110),
+          _make_row('Equity Option', 'CALL',  1, 115),
+          _make_row('Equity Option', 'PUT',  -1,  90),
+          _make_row('Equity Option', 'PUT',   1,  85),
+      )), 'Iron Condor')
+
 # Short Straddle - short call + short put, same strike
 check_int('ds: Short Straddle',
       detect_strategy(_make_df(
