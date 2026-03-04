@@ -29,7 +29,7 @@ REM ── Launch ────────────────────�
 echo.
 echo Starting TastyMechanics...  ^(press Ctrl+C in this window to stop^)
 echo.
-streamlit run tastymechanics.py
+python -m streamlit run "tastymechanics.py"
 
 REM ── Error handling ────────────────────────────────────────────────────────
 if %ERRORLEVEL% NEQ 0 (
