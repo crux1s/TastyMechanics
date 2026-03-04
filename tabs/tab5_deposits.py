@@ -15,6 +15,7 @@ from config import (
     PAT_CLOSE, PAT_EXPIR, PAT_ASSIGN, PAT_EXERCISE, PAT_CLOSING,
     WHEEL_MIN_SHARES, LEAPS_DTE_THRESHOLD, ROLL_CHAIN_GAP_DAYS,
     ANN_RETURN_CAP, COLOURS,
+    TIME_WINDOW_OPTIONS,
 )
 from ui_components import (
     xe, is_share_row, is_option_row,
@@ -32,9 +33,23 @@ from mechanics import (
 )
 
 
-def render_tab5(df_window, total_deposited, total_withdrawn, div_income, int_net, _win_label):
+def render_tab5(df_window, total_deposited, total_withdrawn, div_income, int_net, _win_label, sync_cb=None):
     """Tab 5 — Deposits, Dividends & Fees: money movement table for the selected window."""
-    st.markdown(f'### 💰 Deposits, Dividends & Fees {_win_label}', unsafe_allow_html=True)
+    _col1, _col2 = st.columns([3, 1])
+    with _col1:
+        st.markdown(f'### 💰 Deposits, Dividends & Fees {_win_label}', unsafe_allow_html=True)
+    with _col2:
+        if sync_cb:
+            st.selectbox(
+                'Window',
+                TIME_WINDOW_OPTIONS,
+                index=TIME_WINDOW_OPTIONS.index(st.session_state.selected_period),
+                key='tab5_period',
+                on_change=sync_cb,
+                args=('tab5_period',),
+                label_visibility='collapsed'
+            )
+
     ic1, ic2, ic3, ic4 = st.columns(4)
     ic1.metric('Deposited',      fmt_dollar(total_deposited))
     ic2.metric('Withdrawn',      fmt_dollar(abs(total_withdrawn)))

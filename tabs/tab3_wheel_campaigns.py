@@ -14,7 +14,7 @@ from config import (
     INCOME_SUB_TYPES, DEPOSIT_SUB_TYPES,
     PAT_CLOSE, PAT_EXPIR, PAT_ASSIGN, PAT_EXERCISE, PAT_CLOSING,
     WHEEL_MIN_SHARES, LEAPS_DTE_THRESHOLD, ROLL_CHAIN_GAP_DAYS,
-    ANN_RETURN_CAP, COLOURS,
+    ANN_RETURN_CAP, COLOURS, TIME_WINDOW_OPTIONS,
 )
 from ui_components import (
     xe, is_share_row, is_option_row,
@@ -32,12 +32,23 @@ from mechanics import (
 )
 
 
-def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
+def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, win_label_html, sync_cb=None):
     """Tab 3 — Wheel Campaigns: summary table, per-campaign cards, roll chains, waterfall."""
-    _col_hdr, _col_tog = st.columns([4, 1])
-    with _col_hdr:
-        st.subheader('🎯 Wheel Campaign Tracker')
-    with _col_tog:
+    _h_col, _s_col, _t_col = st.columns([3, 1, 1])
+    with _h_col:
+        st.markdown(f'### 🎯 Wheel Campaign Tracker {win_label_html}', unsafe_allow_html=True)
+    with _s_col:
+        if sync_cb:
+            st.selectbox(
+                'Select Period',
+                TIME_WINDOW_OPTIONS,
+                index=TIME_WINDOW_OPTIONS.index(st.session_state.selected_period),
+                key='tab3_period',
+                on_change=sync_cb,
+                args=('tab3_period',),
+                label_visibility='collapsed'
+            )
+    with _t_col:
         st.toggle(
             'Lifetime "House Money"',
             key='use_lifetime',
@@ -323,5 +334,3 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                         )
                     else:
                         st.caption('No share/dividend events.')
-
-

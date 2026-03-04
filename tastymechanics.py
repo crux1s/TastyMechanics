@@ -17,6 +17,7 @@ from config import (
     SPLIT_DSC_PATTERNS, ZERO_COST_WARN_TYPES,
     REQUIRED_COLUMNS,
     ANN_RETURN_CAP,
+    TIME_WINDOW_OPTIONS,
     COLOURS,
 )
 
@@ -102,11 +103,24 @@ import hashlib as _hashlib
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v25.12"
+APP_VERSION = "v25.12-jules"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 
+def sync_period(key: str) -> None:
+    """Callback to synchronize all time window selectors via session_state."""
+    val = st.session_state[key]
+    st.session_state.selected_period = val
+    # Update all other selectors to match
+    for k in ['sb_period', 'hdr_period', 'tab0_period', 'tab1_period', 'tab2_period', 'tab3_period', 'tab4_period', 'tab5_period']:
+        if k in st.session_state:
+            st.session_state[k] = val
+
+
 def main():
+    # Initialize session state for synced time window
+    if 'selected_period' not in st.session_state:
+        st.session_state.selected_period = TIME_WINDOW_OPTIONS[-1]  # 'All Time'
     st.markdown("""
         <style>
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
@@ -231,6 +245,19 @@ def main():
             st.image(str(_icon_path), width=80)
         st.header('⚙️ Data Control')
         uploaded_file = st.file_uploader('Upload TastyTrade History CSV', type='csv')
+
+        if uploaded_file:
+            st.markdown('---')
+            st.header('🗓 Time Window')
+            st.selectbox(
+                'Select Period',
+                TIME_WINDOW_OPTIONS,
+                index=TIME_WINDOW_OPTIONS.index(st.session_state.selected_period),
+                key='sb_period',
+                on_change=sync_period,
+                args=('sb_period',),
+                label_visibility='collapsed'
+            )
         _td = COLOURS['text_dim']; _bl = COLOURS['blue']
         st.markdown(
             '<div style="font-size:0.75rem;color:' + _td + ';margin-top:0.5rem;">'
@@ -561,10 +588,17 @@ def main():
 
     # ── Window-dependent slices (re-run on every window change, fast) ─────────────
     # ── Time window selector — top right ──────────────────────────────────────────
-    time_options = ['YTD', 'Last 7 Days', 'Last Month', 'Last 3 Months', 'Half Year', '1 Year', 'All Time']
     _hdr_left, _hdr_right = st.columns([3, 1])
     with _hdr_right:
-        selected_period = st.selectbox('Time Window', time_options, index=6, label_visibility='collapsed')
+        selected_period = st.selectbox(
+            'Time Window',
+            TIME_WINDOW_OPTIONS,
+            index=TIME_WINDOW_OPTIONS.index(st.session_state.selected_period),
+            key='hdr_period',
+            on_change=sync_period,
+            args=('hdr_period',),
+            label_visibility='collapsed'
+        )
 
     # Map each period label to the corresponding start_date.
     # lambdas are evaluated lazily so latest_date and df are captured at call time.
@@ -873,20 +907,21 @@ def main():
         '💰 Deposits, Dividends & Fees'
     ])
 
-    with tab0: render_tab0(df_open, _expiry_alerts, latest_date)
+    with tab0: render_tab0(df_open, _expiry_alerts, latest_date, _win_label, sync_cb=sync_period)
     with tab1: render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                            df_window, start_date, latest_date, window_label,
-                           _win_label, _win_suffix)
+                           _win_label, _win_suffix, sync_cb=sync_period)
     with tab2: render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
-                           df_window, _win_label, _win_suffix, _win_start_str, _win_end_str)
-    with tab3: render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime)
+                           df_window, _win_label, _win_suffix, _win_start_str, _win_end_str,
+                           sync_cb=sync_period)
+    with tab3: render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, _win_label, sync_cb=sync_period)
     with tab4: render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
                            pure_options_tickers, pure_opts_per_ticker,
                            capital_deployed, start_date, latest_date,
                            _is_all_time, selected_period, _win_label, _win_suffix,
-                           use_lifetime)
+                           use_lifetime, sync_cb=sync_period)
     with tab5: render_tab5(df_window, total_deposited, total_withdrawn,
-                           div_income, int_net, _win_label)
+                           div_income, int_net, _win_label, sync_cb=sync_period)
 
 
 

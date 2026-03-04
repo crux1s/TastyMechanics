@@ -94,6 +94,12 @@ TRADE_LOSS_HIGHLIGHT = -200   # dollars
 # from producing a meaningless 50,000 % figure in the trade log.
 ANN_RETURN_CAP = 500
 
+# ── Time window options ───────────────────────────────────────────────────────
+# Standard time range labels used for the synced date range selectors.
+TIME_WINDOW_OPTIONS = [
+    'YTD', 'Last 7 Days', 'Last Month', 'Last 3 Months', 'Half Year', '1 Year', 'All Time'
+]
+
 # ── Scorecard colour thresholds ───────────────────────────────────────────────
 # Win rate colouring in Performance by Ticker table:
 #   >= WIN_RATE_GREEN  → green  (strong edge)

@@ -14,7 +14,7 @@ from config import (
     INCOME_SUB_TYPES, DEPOSIT_SUB_TYPES,
     PAT_CLOSE, PAT_EXPIR, PAT_ASSIGN, PAT_EXERCISE, PAT_CLOSING,
     WHEEL_MIN_SHARES, LEAPS_DTE_THRESHOLD, ROLL_CHAIN_GAP_DAYS,
-    ANN_RETURN_CAP, COLOURS,
+    ANN_RETURN_CAP, COLOURS, TIME_WINDOW_OPTIONS,
 )
 from ui_components import (
     xe, is_share_row, is_option_row,
@@ -32,9 +32,23 @@ from mechanics import (
 )
 
 
-def render_tab0(df_open, _expiry_alerts, latest_date):
+def render_tab0(df_open, _expiry_alerts, latest_date, win_label_html, sync_cb=None):
     """Tab 0 — Active Positions: open position cards + expiry alert strip."""
-    st.subheader('📡 Open Positions')
+    _h_col, _s_col = st.columns([3, 1])
+    with _h_col:
+        st.markdown(f'### 📡 Open Positions {win_label_html}', unsafe_allow_html=True)
+    with _s_col:
+        if sync_cb:
+            st.selectbox(
+                'Select Period',
+                TIME_WINDOW_OPTIONS,
+                index=TIME_WINDOW_OPTIONS.index(st.session_state.selected_period),
+                key='tab0_period',
+                on_change=sync_cb,
+                args=('tab0_period',),
+                label_visibility='collapsed'
+            )
+
     if df_open.empty:
         st.info('No active positions.')
         return
@@ -78,5 +92,3 @@ def render_tab0(df_open, _expiry_alerts, latest_date):
             col_a.markdown(card_html, unsafe_allow_html=True)
         else:
             col_b.markdown(card_html, unsafe_allow_html=True)
-
-

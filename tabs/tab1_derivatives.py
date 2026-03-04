@@ -16,6 +16,7 @@ from config import (
     WHEEL_MIN_SHARES, LEAPS_DTE_THRESHOLD, ROLL_CHAIN_GAP_DAYS,
     ANN_RETURN_CAP, COLOURS,
     WIN_RATE_GREEN, WIN_RATE_ORANGE,
+    TIME_WINDOW_OPTIONS,
 )
 from ui_components import (
     xe, is_share_row, is_option_row,
@@ -34,12 +35,27 @@ from mechanics import (
 
 
 def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
-                df_window, start_date, latest_date, window_label, _win_label, _win_suffix):
+                df_window, start_date, latest_date, window_label, _win_label, _win_suffix, sync_cb=None):
     """Tab 1 — Derivatives Performance: scorecard, call/put breakdown, per-ticker table."""
     if closed_trades_df.empty:
         st.info('No closed trades found.')
         return
-    st.info(window_label)
+
+    _col1, _col2 = st.columns([3, 1])
+    with _col1:
+        st.info(window_label)
+    with _col2:
+        if sync_cb:
+            st.selectbox(
+                'Window',
+                TIME_WINDOW_OPTIONS,
+                index=TIME_WINDOW_OPTIONS.index(st.session_state.selected_period),
+                key='tab1_period',
+                on_change=sync_cb,
+                args=('tab1_period',),
+                label_visibility='collapsed'
+            )
+
     st.markdown(f'#### 🎯 Premium Selling Scorecard {_win_label}', unsafe_allow_html=True)
     st.caption((
         'Credit trades only. '

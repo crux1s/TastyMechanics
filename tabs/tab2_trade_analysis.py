@@ -16,6 +16,7 @@ from config import (
     PAT_CLOSE, PAT_EXPIR, PAT_ASSIGN, PAT_EXERCISE, PAT_CLOSING,
     WHEEL_MIN_SHARES, LEAPS_DTE_THRESHOLD, ROLL_CHAIN_GAP_DAYS,
     ANN_RETURN_CAP, COLOURS,
+    TIME_WINDOW_OPTIONS,
 )
 from ui_components import (
     xe, is_share_row, is_option_row,
@@ -48,12 +49,27 @@ def _style_pnl_row(row):
 
 
 def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
-                df_window, _win_label, _win_suffix, _win_start_str, _win_end_str):
+                df_window, _win_label, _win_suffix, _win_start_str, _win_end_str, sync_cb=None):
     """Tab 2 — Trade Analysis: ThetaGang metrics, period charts, heatmap, best/worst, trade log."""
     if closed_trades_df.empty:
         st.info('No closed trades found.')
         return
-    st.markdown(f'### 🔬 Trade Analysis {_win_label}', unsafe_allow_html=True)
+
+    _col1, _col2 = st.columns([3, 1])
+    with _col1:
+        st.markdown(f'### 🔬 Trade Analysis {_win_label}', unsafe_allow_html=True)
+    with _col2:
+        if sync_cb:
+            st.selectbox(
+                'Window',
+                TIME_WINDOW_OPTIONS,
+                index=TIME_WINDOW_OPTIONS.index(st.session_state.selected_period),
+                key='tab2_period',
+                on_change=sync_cb,
+                args=('tab2_period',),
+                label_visibility='collapsed'
+            )
+
     st.markdown('---')
     st.markdown(
         f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'

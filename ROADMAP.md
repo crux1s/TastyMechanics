@@ -12,7 +12,7 @@ Nothing active right now.
 
 ## UX Improvements
 
-- **Duplicate date range selector** — add a compact time window dropdown inline near the top of each tab (or at minimum tabs 1, 2, 4) so users don't have to scroll all the way to the top to change the window. The sidebar selector remains the source of truth — the inline one just mirrors/syncs it via `st.session_state`. Medium priority.
+- ✅ **Duplicate date range selector** — added a compact time window dropdown inline near the top of each tab so users don't have to scroll to the top or sidebar to change the window. All selectors are synchronized via `st.session_state`. Done across all tabs.
 
 - **`Days in Trade` label audit** — verify all remaining tables and metrics use the correct variant: `Days in Trade` (per-trade), `Med Days in Trade` (grouped median), `Avg Days in Trade` (grouped average). Done for main tables — check any future additions follow the same pattern.
 
@@ -64,6 +64,7 @@ Waiting on the right CSV scenarios to appear naturally:
 
 ## Completed
 
+- ✅ Duplicate date range selector synchronized across all tabs (Sidebar, Header, Tabs 0-5)
 - ✅ Export Report button moved above time window selector in sidebar
 - ✅ FIFO branch signposts added (`# BUY row` / `# SELL row` with routing description)
 - ✅ `%` formatting converted to f-strings in `mechanics.py` and `ui_components.py`
