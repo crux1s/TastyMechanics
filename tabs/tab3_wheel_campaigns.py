@@ -34,36 +34,19 @@ from mechanics import (
 
 def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
     """Tab 3 — Wheel Campaigns: summary table, per-campaign cards, roll chains, waterfall."""
-    _col_hdr, _col_tog = st.columns([4, 1])
-    with _col_hdr:
-        st.subheader('🎯 Wheel Campaign Tracker')
-    with _col_tog:
-        st.toggle(
-            'Lifetime "House Money"',
-            key='use_lifetime',
-            help='ON — combines ALL history for a ticker into one campaign. '
-                 'OFF — resets breakeven every time shares hit zero.',
-        )
+    # Read toggle state early — required for data computation and the CSV export button.
+    # Session state already holds the user's last toggle interaction before any widget renders.
     use_lifetime = st.session_state.get('use_lifetime', False)
-    if use_lifetime:
-        st.info('💡 **Lifetime mode** — all history for a ticker combined into one campaign.')
-    else:
-        st.caption(
-            ('Tracks each share-holding period as a campaign — starting when you buy %d+ shares, '
-             'ending when you exit. Premiums banked from covered calls, covered strangles, and '
-             'short puts are credited against your cost basis. Campaigns reset when shares hit '
-             'zero — toggle Lifetime mode to see your full history as one continuous position.')
-            % WHEEL_MIN_SHARES
-        )
-    if not all_campaigns:
-        st.info('No wheel campaigns found.')
-        return
 
-    # ── Split into open / closed ─────────────────────────────────────────────
+    # ── Split into open / closed ──────────────────────────────────────────────
+    # Computed here (before the header) so the CSV export button can reference
+    # the open-campaign rows without a second pass over the data later.
     open_camps   = [(t, i, c) for t, cs in sorted(all_campaigns.items())
-                    for i, c in enumerate(cs) if c.status == 'open']
+                    for i, c in enumerate(cs) if c.status == 'open'] if all_campaigns else []
     closed_camps = [(t, i, c) for t, cs in sorted(all_campaigns.items())
-                    for i, c in enumerate(cs) if c.status == 'closed']
+                    for i, c in enumerate(cs) if c.status == 'closed'] if all_campaigns else []
+
+    # ── Data helpers ──────────────────────────────────────────────────────────
 
     def _summary_rows(camp_list):
         rows = []
@@ -82,6 +65,22 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             })
         return rows
 
+    def _open_camps_csv(rows):
+        """Convert open campaign summary rows to a UTF-8 CSV string for download.
+
+        Emojis are stripped from the Status column so spreadsheet software
+        (Excel, Google Sheets) receives plain text rather than Unicode symbols.
+        Numeric columns are kept as raw values — no dollar formatting — so the
+        file is immediately usable for further analysis.
+        """
+        df_csv = pd.DataFrame(rows)
+        df_csv['Status'] = (
+            df_csv['Status']
+            .str.replace('🟢 ', '', regex=False)
+            .str.replace('✅ ', '', regex=False)
+        )
+        return df_csv.to_csv(index=False)
+
     def _render_summary(rows):
         df = pd.DataFrame(rows)
         st.dataframe(df.style.format({
@@ -90,9 +89,47 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             'Exit': fmt_dollar, 'P/L': fmt_dollar,
         }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
 
+    # Pre-compute open rows once — reused by both the export button and the table.
+    _open_rows = _summary_rows(open_camps) if open_camps else []
+
+    # ── Header: title | CSV export | House Money toggle ───────────────────────
+    _col_hdr, _col_csv, _col_tog = st.columns([4, 1, 1])
+    with _col_hdr:
+        st.subheader('🎯 Wheel Campaign Tracker')
+    with _col_csv:
+        if _open_rows:
+            st.download_button(
+                label='⬇️ Export CSV',
+                data=_open_camps_csv(_open_rows),
+                file_name='open_wheel_campaigns.csv',
+                mime='text/csv',
+                use_container_width=True,
+                help='Download the open Wheel Campaigns table as a CSV file.',
+            )
+    with _col_tog:
+        st.toggle(
+            'Lifetime "House Money"',
+            key='use_lifetime',
+            help='ON — combines ALL history for a ticker into one campaign. '
+                 'OFF — resets breakeven every time shares hit zero.',
+        )
+    if use_lifetime:
+        st.info('💡 **Lifetime mode** — all history for a ticker combined into one campaign.')
+    else:
+        st.caption(
+            ('Tracks each share-holding period as a campaign — starting when you buy %d+ shares, '
+             'ending when you exit. Premiums banked from covered calls, covered strangles, and '
+             'short puts are credited against your cost basis. Campaigns reset when shares hit '
+             'zero — toggle Lifetime mode to see your full history as one continuous position.')
+            % WHEEL_MIN_SHARES
+        )
+    if not all_campaigns:
+        st.info('No wheel campaigns found.')
+        return
+
     # ── Open campaigns summary table ──────────────────────────────────────────
-    if open_camps:
-        _render_summary(_summary_rows(open_camps))
+    if _open_rows:
+        _render_summary(_open_rows)
     else:
         st.info('No open wheel campaigns.')
 
