@@ -171,19 +171,17 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         st.markdown('---')
         # ── Performance by Ticker — header with independent window selector ────
         _col_ticker_hdr, _col_ticker_win = st.columns([3, 2])
-        with _col_ticker_hdr:
-            st.markdown('#### 📊 Performance by Ticker', unsafe_allow_html=True)
         with _col_ticker_win:
             _ticker_period = st.selectbox(
                 'Ticker table window',
-                options=['Match main window', 'All time', 'Year to date', 'Last 90 days', 'Last 30 days'],
+                options=['YTD', 'Last 7 Days', 'Last Month', 'Last 3 Months', 'Half Year', '1 Year', 'All Time'],
+                index=6,
                 key='ticker_perf_window',
                 label_visibility='collapsed',
-                help=(
-                    'Time window for the Performance by Ticker table only — '
-                    'independent of the main window selector at the top of the page.'
-                ),
+                help='Time window for the Performance by Ticker table only.',
             )
+        with _col_ticker_hdr:
+            st.markdown(f'#### 📊 Performance by Ticker — {_ticker_period}', unsafe_allow_html=True)
         st.caption((
             'All closed trades grouped by underlying. '
             '**W/L** = wins and losses as separate counts. '
@@ -195,23 +193,20 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         ) % (WIN_RATE_GREEN, WIN_RATE_ORANGE, ANN_RETURN_CAP))
 
         # ── Slice closed_trades_df to the locally selected window ─────────────
-        # 'Match main window' reuses all_cdf/credit_cdf (already windowed by the
-        # global selector). All other choices re-filter from closed_trades_df
-        # (the full all-time dataset) so the ticker table is independent.
-        if _ticker_period == 'Match main window':
-            _ticker_cdf        = all_cdf
-            _ticker_credit_cdf = credit_cdf
-        elif _ticker_period == 'All time':
+        if _ticker_period == 'All Time':
             _ticker_cdf        = closed_trades_df
             _ticker_credit_cdf = (closed_trades_df[closed_trades_df['Is Credit']].copy()
                                   if not closed_trades_df.empty else pd.DataFrame())
         else:
-            if _ticker_period == 'Year to date':
-                _ticker_start = pd.Timestamp(year=latest_date.year, month=1, day=1)
-            elif _ticker_period == 'Last 90 days':
-                _ticker_start = latest_date - timedelta(days=90)
-            else:  # Last 30 days
-                _ticker_start = latest_date - timedelta(days=30)
+            _TICKER_WINDOW = {
+                'YTD':           pd.Timestamp(year=latest_date.year, month=1, day=1),
+                'Last 7 Days':   latest_date - timedelta(days=7),
+                'Last Month':    latest_date - timedelta(days=30),
+                'Last 3 Months': latest_date - timedelta(days=90),
+                'Half Year':     latest_date - timedelta(days=182),
+                '1 Year':        latest_date - timedelta(days=365),
+            }
+            _ticker_start = _TICKER_WINDOW[_ticker_period]
             _ticker_cdf = closed_trades_df[
                 closed_trades_df['Close Date'] >= _ticker_start
             ].copy()
