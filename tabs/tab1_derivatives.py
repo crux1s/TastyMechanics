@@ -187,7 +187,7 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
             '**W/L** = wins and losses as separate counts. '
             '**Win %%** colour-coded: green ≥ %d%%, orange ≥ %d%%, red below. '
             '**Premium Capture** = median %% of opening credit kept at close — TastyTrade targets 50%%. '
-            '**P/L per DTE** = total P/L ÷ avg days in trade — theta efficiency per ticker. '
+            '**P/L per DIT** = total P/L ÷ avg days in trade — theta efficiency per ticker. '
             '**Med Ann Ret %%** capped at ±%d%% — orange = capped. '
             '**Dim rows** = fewer than 3 trades, small sample size.'
         ) % (WIN_RATE_GREEN, WIN_RATE_ORANGE, ANN_RETURN_CAP))
@@ -230,7 +230,7 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                 all_by_ticker['Wins'].astype(int).astype(str) + '/' +
                 all_by_ticker['Losses'].astype(int).astype(str)
             )
-            # P/L per DTE — theta efficiency
+            # P/L per DIT — theta efficiency
             all_by_ticker['PnL_per_DTE'] = (
                 all_by_ticker['Total_PNL'] / all_by_ticker['Avg_Days'].replace(0, float('nan'))
             ).round(2)
@@ -255,7 +255,7 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
             ]]
             ticker_df.columns = [
                 'Ticker', 'W/L', 'Win %', 'P/L',
-                'Avg Days in Trade', 'P/L per DTE',
+                'Avg Days in Trade', 'P/L per DIT',
                 'Premium Capture', 'Ann Ret %', 'Total Net Prem'
             ]
 
@@ -287,7 +287,7 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                     'Win %':            lambda x: '{:.1f}%'.format(x),
                     'P/L':              fmt_dollar,
                     'Avg Days in Trade': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                    'P/L per DTE':      lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—',
+                    'P/L per DIT':      lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—',
                     'Premium Capture':  lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
                     'Ann Ret %':        lambda v: '{:.0f}%'.format(v) if pd.notna(v) else '—',
                     'Total Net Prem':   lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—',
