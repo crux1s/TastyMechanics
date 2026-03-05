@@ -173,7 +173,7 @@ def metric_card(label, value, help_text, color="#00cc96"):
 
 def sidebar():
     return rx.vstack(
-        rx.hbox(
+        rx.hstack(
             rx.image(src="/icon.png", width="30px", height="30px"),
             rx.heading("TastyMechanics", size="6", color="white"),
             spacing="3",
@@ -181,11 +181,11 @@ def sidebar():
             margin_bottom="2.5rem",
         ),
         rx.vstack(
-            rx.button(rx.hbox(rx.icon(tag="layout-dashboard", size=18), rx.text("Dashboard")), variant="soft", width="100%", justify_content="start", color_scheme="blue"),
-            rx.button(rx.hbox(rx.icon(tag="activity", size=18), rx.text("Open Positions")), variant="ghost", width="100%", justify_content="start", color="gray"),
-            rx.button(rx.hbox(rx.icon(tag="trending-up", size=18), rx.text("Performance")), variant="ghost", width="100%", justify_content="start", color="gray"),
-            rx.button(rx.hbox(rx.icon(tag="microscope", size=18), rx.text("Trade Analysis")), variant="ghost", width="100%", justify_content="start", color="gray"),
-            rx.button(rx.hbox(rx.icon(tag="target", size=18), rx.text("Wheel Campaigns")), variant="ghost", width="100%", justify_content="start", color="gray"),
+            rx.button(rx.hstack(rx.icon(tag="layout-dashboard", size=18), rx.text("Dashboard")), variant="soft", width="100%", justify_content="start", color_scheme="blue"),
+            rx.button(rx.hstack(rx.icon(tag="activity", size=18), rx.text("Open Positions")), variant="ghost", width="100%", justify_content="start", color="gray"),
+            rx.button(rx.hstack(rx.icon(tag="trending-up", size=18), rx.text("Performance")), variant="ghost", width="100%", justify_content="start", color="gray"),
+            rx.button(rx.hstack(rx.icon(tag="microscope", size=18), rx.text("Trade Analysis")), variant="ghost", width="100%", justify_content="start", color="gray"),
+            rx.button(rx.hstack(rx.icon(tag="target", size=18), rx.text("Wheel Campaigns")), variant="ghost", width="100%", justify_content="start", color="gray"),
             align_items="start",
             width="100%",
             spacing="1",
@@ -218,11 +218,11 @@ def sidebar():
     )
 
 def index() -> rx.Component:
-    return rx.hbox(
+    return rx.hstack(
         sidebar(),
         rx.box(
             rx.vstack(
-                rx.hbox(
+                rx.hstack(
                     rx.vstack(
                         rx.heading(f"Portfolio Overview", size="7", color="white"),
                         rx.text("Real-time performance metrics and equity tracking", color="#8b949e", font_size="0.9rem"),
@@ -257,7 +257,7 @@ def index() -> rx.Component:
                         ),
                         rx.box(
                             rx.vstack(
-                                rx.hbox(
+                                rx.hstack(
                                     rx.heading("Equity Curve", size="4", color="white"),
                                     rx.spacer(),
                                     rx.badge("Realized", color_scheme="green", variant="surface"),
