@@ -6,10 +6,10 @@ import os
 import base64
 import io
 
-from .ingestion import parse_csv, validate_columns
-from .mechanics import compute_app_data, calculate_windowed_equity_pnl, _aggregate_campaign_pnl, calculate_daily_realized_pnl
-from .config import COLOURS, INCOME_SUB_TYPES, OPT_TYPES, TRADE_TYPES
-from .ui_components import fmt_dollar
+from reflex_app.ingestion import parse_csv, validate_columns
+from reflex_app.mechanics import compute_app_data, calculate_windowed_equity_pnl, _aggregate_campaign_pnl, calculate_daily_realized_pnl
+from reflex_app.config import COLOURS, INCOME_SUB_TYPES, OPT_TYPES, TRADE_TYPES
+from reflex_app.ui_components import fmt_dollar
 
 class State(rx.State):
     has_data: bool = False

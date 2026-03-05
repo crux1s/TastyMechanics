@@ -11,12 +11,12 @@ constants used in colour lookups).
 
 import html
 import pandas as pd
-from .config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT, WIN_RATE_GREEN, WIN_RATE_ORANGE, DTE_PROGRESS_MAX, DTE_ALERT_WARN, DTE_ALERT_CRIT, COLOURS
+from reflex_app.config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT, WIN_RATE_GREEN, WIN_RATE_ORANGE, DTE_PROGRESS_MAX, DTE_ALERT_WARN, DTE_ALERT_CRIT, COLOURS
 _C = COLOURS  # short alias — avoids quote conflicts in f-strings on Python < 3.12
 # is_share_row / is_option_row live in ingestion.py — that is the correct home
 # for anything that encodes TastyTrade field values.  Re-exported here so that
 # tastymechanics.py can continue to import them from ui_components without change.
-from .ingestion import is_share_row, is_option_row
+from reflex_app.ingestion import is_share_row, is_option_row
 
 
 # ── XSS safety ────────────────────────────────────────────────────────────────
