@@ -25,14 +25,14 @@ from typing import Any
 
 import pandas as pd
 
-from config import (
+from .config import (
     SPLIT_DSC_PATTERNS,
     REQUIRED_COLUMNS,
     FIFO_EPSILON,
     FIFO_ROUND,
 )
 
-from models import ParsedData
+from .models import ParsedData
 
 
 # ── CSV parse exceptions ──────────────────────────────────────────────────────
