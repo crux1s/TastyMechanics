@@ -1,0 +1,368 @@
+"""
+TastyMechanics — UI Components
+================================
+Pure visual helpers: HTML generators, chart layouts, DataFrame stylers.
+No business logic or math lives here — these functions only produce
+strings, dicts, and style values for rendering.
+
+Dependencies: pandas (for isna / pd.to_datetime), config (for sub-type
+constants used in colour lookups).
+"""
+
+import html
+import pandas as pd
+from config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT, WIN_RATE_GREEN, WIN_RATE_ORANGE, DTE_PROGRESS_MAX, DTE_ALERT_WARN, DTE_ALERT_CRIT, COLOURS
+_C = COLOURS  # short alias — avoids quote conflicts in f-strings on Python < 3.12
+# is_share_row / is_option_row live in ingestion.py — that is the correct home
+# for anything that encodes TastyTrade field values.  Re-exported here so that
+# tastymechanics.py can continue to import them from ui_components without change.
+from ingestion import is_share_row, is_option_row
+
+
+# ── XSS safety ────────────────────────────────────────────────────────────────
+
+def xe(s):
+    """Escape a string for safe HTML interpolation. Prevents XSS from CSV data."""
+    return html.escape(str(s), quote=True)
+
+
+# ── Position type helpers (pure classification, no math) ──────────────────────
+
+def identify_pos_type(row):
+    """Classify a single open-position row as Long/Short Stock/Call/Put."""
+    qty  = row['Net_Qty']
+    inst = str(row['Instrument Type'])
+    cp   = str(row.get('Call or Put', '')).upper()
+    if is_share_row(inst):  return 'Long Stock' if qty > 0 else 'Short Stock'
+    if is_option_row(inst):
+        if 'CALL' in cp: return 'Long Call' if qty > 0 else 'Short Call'
+        if 'PUT'  in cp: return 'Long Put'  if qty > 0 else 'Short Put'
+    return 'Asset'
+
+def translate_readable(row):
+    """Human-readable label for an open position row (e.g. 'STO 1 @ 25P (14/03)')."""
+    if not is_option_row(str(row['Instrument Type'])):
+        return f"{row['Ticker']} Shares"
+    try:
+        exp_dt = pd.to_datetime(
+            row['Expiration Date'], format='mixed', errors='coerce'
+        ).strftime('%d/%m')
+    except (ValueError, TypeError, AttributeError):
+        exp_dt = 'N/A'
+    cp     = 'C' if 'CALL' in str(row['Call or Put']).upper() else 'P'
+    action = 'STO' if row['Net_Qty'] < 0 else 'BTO'
+    return f'{action} {abs(int(row["Net_Qty"]))} @ {row["Strike Price"]:.0f}{cp} ({exp_dt})'
+
+def format_cost_basis(val):
+    """Format a cost-basis value as '$12.34 Cr' or '$12.34 Db'."""
+    return f'${abs(val):.2f} {"Cr" if val < 0 else "Db"}'
+
+def fmt_dollar(val, decimals=2):
+    """
+    Format a dollar value with sign, commas, and configurable decimal places.
+    Negative values render as '-$1,234.56' (not '$-1,234.56').
+    Use decimals=0 for whole-dollar chart labels.
+
+    Examples:
+        fmt_dollar(1234.56)   → '$1,234.56'
+        fmt_dollar(-99.5)     → '-$99.50'
+        fmt_dollar(1500, 0)   → '$1,500'
+    """
+    fmt = f'{{:,.{decimals}f}}'
+    if val >= 0:
+        return f'${fmt.format(val)}'
+    return f'-${fmt.format(abs(val))}'
+
+def detect_strategy(ticker_df):
+    """Infer the current strategy name for an open-position ticker DataFrame."""
+    types = ticker_df.apply(identify_pos_type, axis=1)
+    ls = (types == 'Long Stock').sum()
+    sc = (types == 'Short Call').sum()
+    lc = (types == 'Long Call').sum()
+    sp = (types == 'Short Put').sum()
+    lp = (types == 'Long Put').sum()
+    strikes = ticker_df['Strike Price'].dropna().unique()
+    exps    = ticker_df['Expiration Date'].dropna().unique()
+    if lc > 0 and sc > 0 and len(exps) >= 2 and len(strikes) == 1: return 'Calendar Spread'
+    if lp > 0 and sp > 0 and len(exps) >= 2 and len(strikes) == 1: return 'Calendar Spread'
+    # Butterfly: 2 longs + 1 short, 3 strikes, 1 expiry AND short strike must be the middle strike
+    if lc == 2 and sc == 1 and len(strikes) == 3 and len(exps) == 1:
+        _sc_strikes = ticker_df[ticker_df.apply(identify_pos_type, axis=1) == 'Short Call']['Strike Price'].dropna()
+        if not _sc_strikes.empty and sorted(strikes)[0] < _sc_strikes.iloc[0] < sorted(strikes)[-1]:
+            return 'Call Butterfly'
+    if lp == 2 and sp == 1 and len(strikes) == 3 and len(exps) == 1:
+        _sp_strikes = ticker_df[ticker_df.apply(identify_pos_type, axis=1) == 'Short Put']['Strike Price'].dropna()
+        if not _sp_strikes.empty and sorted(strikes)[0] < _sp_strikes.iloc[0] < sorted(strikes)[-1]:
+            return 'Put Butterfly'
+    if ls > 0 and sc > 0 and sp > 0: return 'Covered Strangle'
+    if ls > 0 and sc > 0:            return 'Covered Call'
+    if sp >= 1 and sc >= 1 and lc >= 1: return 'Jade Lizard'
+    if sc >= 1 and sp >= 1 and lp >= 1: return 'Big Lizard'
+    if sc >= 1 and sp >= 1:             return 'Short Strangle'
+    if lc >= 1 and sp >= 1:             return 'Risk Reversal'
+    if lc > 1  and sc > 0:             return 'Call Debit Spread'
+    if sp > 0:       return 'Short Put'
+    if lc == 1:      return 'Long Call'   # exactly 1 long call — not 2+ unmatched
+    if ls > 0:       return 'Long Stock'
+    return 'Custom/Mixed'
+
+
+# ── DataFrame stylers ─────────────────────────────────────────────────────────
+
+def color_win_rate(v):
+    """Green / amber / red for win-rate cells in st.dataframe."""
+    if not isinstance(v, (int, float)) or pd.isna(v): return ''
+    if v >= WIN_RATE_GREEN:  return 'color: ' + COLOURS['green'] + '; font-weight: bold'
+    if v >= WIN_RATE_ORANGE: return 'color: ' + COLOURS['orange']
+    return 'color: ' + COLOURS['red']
+
+def color_pnl_cell(val):
+    """Green/red colouring for P/L columns in st.dataframe."""
+    if not isinstance(val, (int, float)) or pd.isna(val): return ''
+    return 'color: ' + COLOURS['green'] if val > 0 else 'color: ' + COLOURS['red'] if val < 0 else ''
+
+def _fmt_ann_ret(row):
+    """Format Ann Ret % cell — appends * for trades held < 4 days."""
+    v = row['Ann Ret %']
+    if pd.isna(v):
+        return '—'
+    _days = row.get('Days in Trade', row.get('Days Held'))
+    suffix = '*' if pd.notna(_days) and _days < 4 else ''
+    return '{:.0f}%{}'.format(v, suffix)
+
+def _style_ann_ret(row):
+    """Row-level style: dim Ann Ret % for very short-hold trades."""
+    styles = [''] * len(row)
+    try:
+        idx = list(row.index).index('Ann Ret %')
+        _days = row.get('Days in Trade', row.get('Days Held', 99))
+        if pd.notna(_days) and _days < 4:
+            styles[idx] = 'color: ' + COLOURS['tan']
+    except (ValueError, KeyError):
+        pass  # 'Ann Ret %' column absent in this table variant — safe to skip
+    return styles
+
+def _style_chain_row(row):
+    """Highlight the open leg in a roll-chain detail table."""
+    if row.get('_open', False):
+        return ['background-color: rgba(0,204,150,0.12); font-weight:600'] * len(row)  # COLOURS['green'] @ 12% opacity
+    return [''] * len(row)
+
+def _color_cash_row(row):
+    """Row background tint for the Deposits/Dividends table."""
+    sub = str(row.get('Sub Type', ''))
+    _g = COLOURS['green']; _r = COLOURS['red']
+    _b = COLOURS['blue'];  _o = COLOURS['orange']
+    tints = {
+        'Deposit':            f'rgba({int(_g[1:3],16)},{int(_g[3:5],16)},{int(_g[5:7],16)},0.08)',
+        'Withdrawal':         f'rgba({int(_r[1:3],16)},{int(_r[3:5],16)},{int(_r[5:7],16)},0.08)',
+        SUB_DIVIDEND:         f'rgba({int(_b[1:3],16)},{int(_b[3:5],16)},{int(_b[5:7],16)},0.08)',
+        SUB_CREDIT_INT:       f'rgba({int(_b[1:3],16)},{int(_b[3:5],16)},{int(_b[5:7],16)},0.05)',
+        SUB_DEBIT_INT:        f'rgba({int(_r[1:3],16)},{int(_r[3:5],16)},{int(_r[5:7],16)},0.05)',
+        'Balance Adjustment': f'rgba({int(_o[1:3],16)},{int(_o[3:5],16)},{int(_o[5:7],16)},0.07)',
+    }
+    c = tints.get(sub, '')
+    return [f'background-color:{c}' if c else ''] * len(row)
+
+def _color_cash_total(val):
+    """Green/red for the Total column in the cash-flow table."""
+    if not isinstance(val, (int, float)): return ''
+    return 'color:' + COLOURS['green'] if val > 0 else 'color:' + COLOURS['red'] if val < 0 else ''
+
+
+# ── Plotly chart layout ───────────────────────────────────────────────────────
+
+def chart_layout(title='', height=300, margin_t=36, margin_b=20):
+    """Consistent base layout dict for all Plotly charts."""
+    return dict(
+        template='plotly_dark',
+        height=height,
+        paper_bgcolor='rgba(10,14,23,0)',
+        plot_bgcolor='rgba(10,14,23,0)',
+        font=dict(family='IBM Plex Sans, sans-serif', size=12, color=COLOURS['text_muted']),
+        title=dict(
+            text=title,
+            font=dict(size=13, color=COLOURS['header_text'], family='IBM Plex Sans'),
+            x=0, xanchor='left', pad=dict(l=0, b=8),
+        ) if title else None,
+        margin=dict(l=8, r=8, t=margin_t if title else 16, b=margin_b),
+        xaxis=dict(
+            gridcolor='rgba(255,255,255,0.05)',
+            linecolor='rgba(255,255,255,0.08)',
+            tickfont=dict(size=11),
+        ),
+        yaxis=dict(
+            gridcolor='rgba(255,255,255,0.05)',
+            linecolor='rgba(255,255,255,0.08)',
+            tickfont=dict(size=11),
+        ),
+        legend=dict(bgcolor='rgba(0,0,0,0)', borderwidth=0, font=dict(size=11)),
+    )
+
+
+# ── Inline HTML components ────────────────────────────────────────────────────
+
+def _pnl_chip(label, val):
+    """Inline HTML chip: labelled P/L value with sign colour."""
+    col  = COLOURS['green'] if val >= 0 else COLOURS['red']
+    sign = '+' if val >= 0 else ''
+    _bdr = COLOURS['border']; _dim = COLOURS['text_dim']
+    return (
+        f'<span style="display:inline-flex;align-items:center;gap:5px;'
+        f'background:rgba(255,255,255,0.04);border:1px solid {_bdr};'
+        f'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
+        f'<span style="color:{_dim};">{label}</span>'
+        f'<span style="color:{col};font-family:monospace;font-weight:600;">'
+        f'{sign}${abs(val):,.2f}</span>'
+        f'</span>'
+    )
+
+def _cmp_block(label, curr, prev, is_pct=False):
+    """One column block in the period-comparison card."""
+    delta = curr - prev
+    dcol  = COLOURS['green'] if delta >= 0 else COLOURS['red']
+    dsign = '+' if delta >= 0 else ''
+    if is_pct:
+        curr_str  = f'{curr:.1f}%'
+        delta_str = f'{dsign}{delta:.1f}%'
+    else:
+        curr_str  = f'${curr:,.2f}' if curr >= 0 else f'-${abs(curr):,.2f}'
+        delta_str = f'{dsign}${delta:,.2f}' if delta >= 0 else f'-${abs(delta):,.2f}'
+    _bdr = COLOURS['border']; _dim = COLOURS['text_dim']; _txt = COLOURS['text']
+    return (
+        '<div style="flex:1;min-width:120px;padding:0 16px;'
+        'border-right:1px solid ' + _bdr + ';">'
+        '<div style="color:' + _dim + ';font-size:0.7rem;text-transform:uppercase;'
+        'letter-spacing:0.05em;margin-bottom:4px;">' + label + '</div>'
+        '<div style="font-family:monospace;font-size:1.05rem;color:' + _txt + ';">' + curr_str + '</div>'
+        '<div style="font-size:0.78rem;color:' + dcol + ';margin-top:2px;">' + delta_str + ' vs prior</div>'
+        '</div>'
+    )
+
+def _dte_chip(a):
+    """Inline HTML chip for an expiry alert item."""
+    dte = a['dte']
+    fg  = COLOURS['red'] if dte <= DTE_ALERT_CRIT else COLOURS['orange'] if dte <= DTE_ALERT_WARN else COLOURS['green']
+    _bdr = COLOURS['border']; _dim = COLOURS['text_dim']; _mut = COLOURS['text_muted']
+    return (
+        '<span style="display:inline-flex;align-items:center;gap:5px;'
+        'background:rgba(255,255,255,0.04);border:1px solid ' + _bdr + ';'
+        'border-radius:6px;padding:3px 10px;margin:2px 4px 2px 0;font-size:0.78rem;">'
+        '<span style="color:' + fg + ';font-family:monospace;font-weight:600;">' + str(dte) + 'd</span>'
+        '<span style="color:' + _dim + ';">' + xe(a['ticker']) + '</span>'
+        '<span style="color:' + _mut + ';font-family:monospace;">' + xe(a['label']) + '</span>'
+        '</span>'
+    )
+
+def _badge_inline_style(strat):
+    """Fully inlined CSS string for a strategy badge span."""
+    _BASE = (
+        'font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:20px;'
+        'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;'
+    )
+    _g = COLOURS['green']; _r = COLOURS['red']; _o = COLOURS['orange']; _b = COLOURS['blue']
+    _COLORS = {
+        'bullish': 'background:rgba(0,204,150,0.1);color:' + _g + ';border:1px solid rgba(0,204,150,0.25);',
+        'bearish': 'background:rgba(239,85,59,0.1);color:'  + _r + ';border:1px solid rgba(239,85,59,0.25);',
+        'covered': 'background:rgba(255,165,0,0.1);color:'  + _o + ';border:1px solid rgba(255,165,0,0.25);',
+        'default': 'background:rgba(88,166,255,0.12);color:'+ _b + ';border:1px solid rgba(88,166,255,0.25);',
+    }
+    s = strat.lower()
+    if any(k in s for k in ['put', 'strangle', 'condor', 'lizard', 'reversal']):
+        theme = 'bullish'
+    elif any(k in s for k in ['long call', 'bearish']):
+        theme = 'bearish'
+    elif any(k in s for k in ['covered', 'wheel', 'stock']):
+        theme = 'covered'
+    else:
+        theme = 'default'
+    return _BASE + _COLORS[theme]
+
+def render_position_card(ticker, t_df):
+    """Build the full HTML card for one open-position ticker."""
+    strat       = detect_strategy(t_df)
+    badge_style = _badge_inline_style(strat)
+
+    _bg1 = COLOURS['card_bg']; _bg2 = COLOURS['card_bg2']
+    _bdr = COLOURS['border'];   _wht = COLOURS['white']
+    _mut = COLOURS['text_muted']; _txt = COLOURS['text']
+    CARD = (
+        'background:linear-gradient(135deg,' + _bg1 + ' 0%,' + _bg2 + ' 100%);'
+        'border:1px solid ' + _bdr + ';border-radius:12px;padding:18px 20px 14px 20px;'
+        'margin-bottom:16px;box-shadow:0 2px 12px rgba(0,0,0,0.4);'
+    )
+    HDR = (
+        'display:flex;align-items:center;justify-content:space-between;'
+        'margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid ' + _bdr + ';'
+    )
+    TICK = (
+        'font-family:monospace;font-size:1.3rem;font-weight:600;'
+        'color:' + _wht + ';letter-spacing:0.04em;'
+    )
+    LEG = (
+        'display:flex;align-items:flex-start;justify-content:space-between;'
+        'padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05);'
+    )
+    LBL  = 'color:' + _mut + ';font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:2px;'
+    VAL  = 'font-family:monospace;color:' + _txt + ';font-size:0.88rem;'
+    CHIP = (
+        'display:inline-block;margin-top:6px;background:rgba(255,255,255,0.04);'
+        'border:1px solid ' + _bdr + ';border-radius:6px;padding:3px 10px;'
+        'font-family:monospace;font-size:0.8rem;color:' + _mut + ';'
+    )
+
+    legs_html   = ''
+    rows_sorted = t_df.sort_values('Status').rename(columns={'Cost Basis': 'Cost_Basis'})
+    for i, row in enumerate(rows_sorted.itertuples(index=False)):
+        pos_type  = row.Status
+        detail    = row.Details
+        dte       = row.DTE
+        basis     = format_cost_basis(row.Cost_Basis)
+        is_last   = (i == len(rows_sorted) - 1)
+        leg_style = LEG if not is_last else LEG.replace(
+            'border-bottom:1px solid rgba(255,255,255,0.05);', ''
+        )
+
+        dte_html = ''
+        if dte != 'N/A' and 'd' in str(dte):
+            try:
+                dte_val   = int(str(dte).replace('d', ''))
+                pct       = min(dte_val / DTE_PROGRESS_MAX * 100, 100)
+                bar_color = COLOURS['green'] if dte_val > DTE_ALERT_WARN else COLOURS['orange'] if dte_val > DTE_ALERT_CRIT else COLOURS['red']
+                _bdr = COLOURS['border']; _dim = COLOURS['text_dim']
+                dte_html  = (
+                    '<div style="margin-top:6px;">'
+                    '<div style="background:' + _bdr + ';border-radius:4px;height:4px;width:100%;">'
+                    '<div style="width:' + f'{pct:.0f}' + '%;background:' + bar_color + ';'
+                    'border-radius:4px;height:4px;"></div>'
+                    '</div>'
+                    '<div style="color:' + _dim + ';font-size:0.7rem;margin-top:3px;">'
+                    + str(dte) + ' to expiry</div>'
+                    '</div>'
+                )
+            except (ValueError, TypeError):
+                pass  # DTE string is non-numeric (e.g. 'N/A') — leave progress bar absent
+
+        legs_html += (
+            f'<div style="{leg_style}">'
+            f'  <div>'
+            f'    <div style="{LBL}">{xe(pos_type)}</div>'
+            f'    <div style="{VAL}">{xe(detail)}</div>'
+            f'    {dte_html}'
+            f'  </div>'
+            f'  <div style="text-align:right;flex-shrink:0;margin-left:12px;">'
+            f'    <div style="{LBL}">Basis</div>'
+            f'    <div style="{CHIP}">{xe(basis)}</div>'
+            f'  </div>'
+            f'</div>'
+        )
+
+    return (
+        f'<div style="{CARD}">'
+        f'  <div style="{HDR}">'
+        f'    <span style="{TICK}">{xe(ticker)}</span>'
+        f'    <span style="{badge_style}">{xe(strat)}</span>'
+        f'  </div>'
+        f'  {legs_html}'
+        f'</div>'
+    )
