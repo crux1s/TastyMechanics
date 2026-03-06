@@ -24,7 +24,7 @@ def render_landing(app_version: str) -> None:
     </p>
     <p style="margin:0 0 2rem 0;">
     <span style="display:inline-flex;align-items:center;gap:0.4rem;background:{_cb};border:1px solid {_bd};border-radius:20px;padding:4px 12px;font-size:0.8rem;color:{_gr};">
-    🔒 Your data is processed locally and never sent anywhere
+    🔒 Your transaction data is processed locally and never sent anywhere. If you enable Live Prices, ticker symbols are sent to Yahoo Finance's public API.
     </span>
     </p>
 

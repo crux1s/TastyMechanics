@@ -30,6 +30,7 @@ from mechanics import (
     _iter_fifo_sells, build_option_chains,
     effective_basis, realized_pnl, calc_dte,
 )
+from market_data import fetch_live_prices
 
 
 def render_tab0(df_open, _expiry_alerts, latest_date):
@@ -70,13 +71,81 @@ def render_tab0(df_open, _expiry_alerts, latest_date):
             f'{_expiry_chips}</div>',
             unsafe_allow_html=True
         )
+
+    # ── Live prices toggle ────────────────────────────────────────────────────
+    live_on = st.toggle(
+        '📡 Live Prices',
+        key='live_prices_on',
+        help=(
+            'Fetch current equity quotes and option marks from Yahoo Finance. '
+            'Equity prices are near real-time during market hours; '
+            'options are delayed ~15 min. Ticker symbols are sent to Yahoo Finance.'
+        ),
+    )
+
+    live_prices: dict = {}
+    if live_on:
+        tickers_frozen = frozenset(tickers_open)
+
+        # Build (ticker, expiry_ymd, strike, cp) specs for every open option leg,
+        # keeping the original expiry string so we can remap after fetching.
+        specs = []  # (ticker, expiry_original, expiry_ymd, strike, cp)
+        opt_rows = df_open[option_mask(df_open['Instrument Type'])]
+        for _, row in opt_rows.iterrows():
+            try:
+                expiry_ymd = pd.to_datetime(
+                    row['Expiration Date'], dayfirst=False
+                ).strftime('%Y-%m-%d')
+                specs.append((
+                    row['Ticker'],
+                    str(row['Expiration Date']),
+                    expiry_ymd,
+                    float(row['Strike Price']),
+                    str(row['Call or Put']).upper(),
+                ))
+            except Exception:
+                pass
+
+        option_specs_frozen = frozenset(
+            (t, ey, s, cp) for t, _eo, ey, s, cp in specs
+        )
+
+        with st.spinner('Fetching live prices…'):
+            raw_prices = fetch_live_prices(tickers_frozen, option_specs_frozen)
+
+        if raw_prices:
+            # Remap option keys: yfinance uses YYYY-MM-DD; our rows use the
+            # original CSV expiry string.  Build {ticker: {ymd: original}} then
+            # re-key the options dict so render_position_card can look up without
+            # any date parsing.
+            ymd_to_orig: dict = {}
+            for t, eo, ey, s, cp in specs:
+                ymd_to_orig.setdefault(t, {})[ey] = eo
+
+            for ticker, data in raw_prices.items():
+                opts_remapped: dict = {}
+                t_map = ymd_to_orig.get(ticker, {})
+                for (ey, strike, cp), opt_data in data['options'].items():
+                    orig = t_map.get(ey, ey)
+                    opts_remapped[(orig, strike, cp)] = opt_data
+                live_prices[ticker] = {
+                    'last': data['last'],
+                    'prev_close': data['prev_close'],
+                    'options': opts_remapped,
+                }
+            st.caption(
+                '📡 Prices: Yahoo Finance — equity near real-time, options ~15 min delayed. '
+                'Cached 5 min. Ticker symbols sent to Yahoo Finance servers.'
+            )
+        else:
+            st.warning('Live prices unavailable — check your internet connection.')
+
+    # ── Position cards ────────────────────────────────────────────────────────
     col_a, col_b = st.columns(2, gap='medium')
     for i, ticker in enumerate(tickers_open):
         t_df = df_open[df_open['Ticker'] == ticker].copy()
-        card_html = render_position_card(ticker, t_df)
+        card_html = render_position_card(ticker, t_df, ticker_live=live_prices.get(ticker))
         if i % 2 == 0:
             col_a.markdown(card_html, unsafe_allow_html=True)
         else:
             col_b.markdown(card_html, unsafe_allow_html=True)
-
-
