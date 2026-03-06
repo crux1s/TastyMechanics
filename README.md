@@ -208,7 +208,7 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 **v26.3 — Live Prices & UX Polish** (2026-03-06)
 - **Live market prices** on Open Positions tab — opt-in toggle fetches equity quotes and option marks from Yahoo Finance (5-min cache). Shows last price, day change %, mark (bid/ask), and unrealised P/L per leg with a card-level total. Nothing is sent until the toggle is enabled.
 - Open Positions cards now show **share quantity** including fractional holdings (e.g. META 0.2 sh)
-- Roll chain table column order and labels updated — Date first, `Exp` → Expiry, `Cash` → Credit/Debit Rcvd; closed legs gain a **Days in Trade** column
+- Roll chain table column order and labels updated — Date first, `Exp` → Expiry, `Cash` → Credit/Debit Rcvd, `Days` → **Days Held**; closing legs show days the position was held open
 - Landing page extracted to `tabs/landing.py` matching the tab renderer pattern
 - `market_data.py` added — isolated yfinance wrapper with graceful network-error handling
 - `yfinance>=0.2` added to `requirements.txt`

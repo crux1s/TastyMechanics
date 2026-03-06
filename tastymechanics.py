@@ -63,11 +63,23 @@ import os as _os
 import hashlib as _hashlib
 
 # ==========================================
-# TastyMechanics v25.12
+# TastyMechanics v26.3
 # ==========================================
 #
 # Changelog (recent versions — full history in git log)
 # -----------------------------------------------------
+# v26.3 (2026-03-06)
+#   - FEATURE: Live market prices on Open Positions tab — opt-in toggle fetches
+#     equity quotes and option marks from Yahoo Finance (5-min cache). Shows last
+#     price, day change %, mark (bid/ask), and unrealised P/L per leg and card total.
+#   - FEATURE: Open Positions cards show share quantity including fractional holdings.
+#   - REFACTOR: Landing page extracted to tabs/landing.py.
+#   - REFACTOR: market_data.py added — isolated yfinance wrapper.
+#   - UX: Roll chain columns reordered; Exp → Expiry, Cash → Credit/Debit Rcvd,
+#     Days → Days Held; closed legs show Days Held.
+#   - UX: Live prices toggle moved inline with Open Positions heading.
+#   - DEP: yfinance>=0.2 added to requirements.txt.
+#
 # v25.12 (2026-03-01)
 #   - FEATURE: Candlestick charts replace bar charts for weekly/monthly P/L.
 #   - FEATURE: HTML report export (Portfolio Overview + Premium Selling Performance).
