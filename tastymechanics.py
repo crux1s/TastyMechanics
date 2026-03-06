@@ -246,38 +246,104 @@ def main():
     if not uploaded_file:
         _ht = COLOURS["header_text"]; _tm = COLOURS["text_muted"]
         _td = COLOURS["text_dim"];    _bl = COLOURS["blue"]
-        _cb = COLOURS["card_bg"];     _or = COLOURS["orange"] + "55"
+        _cb = COLOURS["card_bg"];     _cb2 = COLOURS["card_bg2"]
+        _or = COLOURS["orange"] + "55"; _gr = COLOURS["green"]
+        _bd = COLOURS["border"]
         st.markdown(f"""
-        <div style="max-width:780px;margin:2rem auto 0 auto;">
+        <div style="max-width:860px;margin:2rem auto 0 auto;">
 
-        <p style="color:{_tm};font-size:1rem;line-height:1.75;">
+        <!-- Hero tagline -->
+        <p style="color:{_tm};font-size:1.05rem;line-height:1.8;margin-bottom:0.25rem;">
         Built for <b style="color:{_ht};">wheel traders and theta harvesters</b> — short puts,
-        covered calls, strangles, iron condors, and the full wheel cycle. General options
-        trading is fully supported. Upload your TastyTrade CSV and get a complete picture
-        of your realized P/L, premium selling performance, wheel campaigns, and portfolio health.
-        Your data is processed locally and never sent anywhere.
+        covered calls, strangles, iron condors, and the full wheel cycle. Upload your
+        TastyTrade CSV and get a complete picture of your realized P/L, premium selling
+        performance, wheel campaigns, and portfolio health.
+        </p>
+        <p style="margin:0 0 2rem 0;">
+        <span style="display:inline-flex;align-items:center;gap:0.4rem;background:{_cb};border:1px solid {_bd};border-radius:20px;padding:4px 12px;font-size:0.8rem;color:{_gr};">
+        🔒 Your data is processed locally and never sent anywhere
+        </span>
         </p>
 
-        <h3 style="color:{_ht};margin-top:2rem;">What you get</h3>
-        <ul style="color:{_tm};font-size:0.92rem;line-height:1.9;padding-left:1.2rem;margin-top:0.5rem;">
-        <li><b style="color:{_ht};">Open Positions</b> — live view of all open options and equity positions with DTE, strategy label, and expiry alerts</li>
-        <li><b style="color:{_ht};">Premium Selling Performance</b> — win rate, capture %, annualised return, profit factor, and trade breakdown by ticker and strategy</li>
-        <li><b style="color:{_ht};">Trade Analysis</b> — equity curve, weekly/monthly P/L candles, DTE distributions, day-of-week and hour-of-day heat maps</li>
-        <li><b style="color:{_ht};">Wheel Campaigns</b> — per-ticker campaign cards tracking entry basis, effective basis, premiums banked, and realised P/L across full roll chains</li>
-        <li><b style="color:{_ht};">All Trades</b> — portfolio equity curve, drawdown, Sharpe, capital deployed, and income breakdown</li>
-        <li><b style="color:{_ht};">Deposits, Dividends &amp; Fees</b> — full cash flow ledger with deposited capital, dividend income, and fee summary</li>
-        </ul>
+        <!-- Upload CTA -->
+        <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bl}33;border-radius:10px;padding:1rem 1.4rem;margin-bottom:2rem;display:flex;align-items:center;gap:1rem;">
+        <span style="font-size:2rem;">⬆️</span>
+        <div>
+            <div style="color:{_ht};font-weight:600;font-size:0.95rem;">Ready to start?</div>
+            <div style="color:{_tm};font-size:0.85rem;">Use the <b style="color:{_bl};">⚙️ Data Control</b> panel in the sidebar to upload your TastyTrade history CSV.</div>
+        </div>
+        </div>
 
-        <h3 style="color:{_ht};margin-top:2rem;">How to export from TastyTrade</h3>
-        <p style="color:{_tm};font-size:0.92rem;line-height:1.75;">
-        <b style="color:{_ht};">History → Transactions → set date range → Download CSV</b><br>
-        Export your <b style="color:{_ht};">full account history</b> for best results —
-        not just a recent window. FIFO cost basis for equity P/L requires all prior buy
-        transactions to be present. A partial export will produce incorrect basis and
-        P/L figures for positions with earlier lots outside the date range.
-        </p>
+        <!-- Feature cards grid -->
+        <h3 style="color:{_ht};margin:0 0 1rem 0;">What you get</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:2rem;">
 
-        <h3 style="color:{_ht};margin-top:2rem;">⚠️ Disclaimer &amp; Known Limitations</h3>
+        <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
+            <div style="font-size:1.4rem;margin-bottom:0.4rem;">📡</div>
+            <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Open Positions</div>
+            <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Live view of all open options and equity with DTE countdown, strategy label, and expiry alerts.</div>
+        </div>
+
+        <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
+            <div style="font-size:1.4rem;margin-bottom:0.4rem;">🎯</div>
+            <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Premium Selling Performance</div>
+            <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Win rate, capture %, annualised return, and profit factor broken down by ticker and strategy.</div>
+        </div>
+
+        <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
+            <div style="font-size:1.4rem;margin-bottom:0.4rem;">📈</div>
+            <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Trade Analysis</div>
+            <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Equity curve, weekly/monthly P/L candles, DTE distributions, and day-of-week heat maps.</div>
+        </div>
+
+        <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
+            <div style="font-size:1.4rem;margin-bottom:0.4rem;">🎡</div>
+            <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Wheel Campaigns</div>
+            <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Per-ticker cards tracking entry basis, effective basis, premiums banked, and P/L across full roll chains.</div>
+        </div>
+
+        <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
+            <div style="font-size:1.4rem;margin-bottom:0.4rem;">💼</div>
+            <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">All Trades</div>
+            <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Portfolio equity curve, drawdown, Sharpe ratio, capital deployed, and full income breakdown.</div>
+        </div>
+
+        <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
+            <div style="font-size:1.4rem;margin-bottom:0.4rem;">💵</div>
+            <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Deposits, Dividends &amp; Fees</div>
+            <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Complete cash flow ledger with deposited capital, dividend income, and fee summary.</div>
+        </div>
+
+        </div>
+
+        <!-- Export instructions -->
+        <h3 style="color:{_ht};margin:0 0 0.75rem 0;">How to export from TastyTrade</h3>
+        <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.4rem;margin-bottom:2rem;">
+        <div style="display:flex;align-items:flex-start;gap:1rem;margin-bottom:0.85rem;">
+            <div style="display:flex;flex-direction:column;gap:0.6rem;flex:1;">
+            <div style="display:flex;align-items:center;gap:0.75rem;">
+                <span style="background:{_bl}22;color:{_bl};font-weight:700;font-size:0.75rem;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">1</span>
+                <span style="color:{_tm};font-size:0.88rem;">In TastyTrade, go to <b style="color:{_ht};">History → Transactions</b></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:0.75rem;">
+                <span style="background:{_bl}22;color:{_bl};font-weight:700;font-size:0.75rem;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">2</span>
+                <span style="color:{_tm};font-size:0.88rem;">Set the date range to cover your <b style="color:{_ht};">full account history</b></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:0.75rem;">
+                <span style="background:{_bl}22;color:{_bl};font-weight:700;font-size:0.75rem;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">3</span>
+                <span style="color:{_tm};font-size:0.88rem;">Click <b style="color:{_ht};">Download CSV</b> and upload the file here</span>
+            </div>
+            </div>
+        </div>
+        <div style="background:{_or};border-radius:6px;padding:0.6rem 0.9rem;font-size:0.82rem;color:{_tm};line-height:1.6;">
+            ⚠️ Always export your <b style="color:{_ht};">full account history</b>, not just a recent window.
+            FIFO cost basis requires all prior buy transactions. A partial export produces incorrect
+            basis and P/L for positions with earlier lots outside the date range.
+        </div>
+        </div>
+
+        <!-- Disclaimer -->
+        <h3 style="color:{_ht};margin:0 0 0.75rem 0;">⚠️ Disclaimer &amp; Known Limitations</h3>
         <div style="background:{_cb};border:1px solid {_or};border-radius:8px;padding:1.2rem 1.4rem;font-size:0.88rem;color:{_tm};line-height:1.75;">
 
         <p style="margin:0 0 0.75rem 0;color:{_ht};font-weight:600;">
