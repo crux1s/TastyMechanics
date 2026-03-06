@@ -138,7 +138,17 @@ def render_tab0(df_open, _expiry_alerts, latest_date):
                 'Cached 5 min. Ticker symbols sent to Yahoo Finance servers.'
             )
         else:
-            st.warning('Live prices unavailable — check your internet connection.')
+            from market_data import _YF_AVAILABLE
+            if not _YF_AVAILABLE:
+                st.warning(
+                    '`yfinance` is not installed. Run `pip install yfinance` '
+                    'in your Python environment and restart the app.'
+                )
+            else:
+                st.warning(
+                    'Live prices unavailable — Yahoo Finance returned no data. '
+                    'Check your internet connection.'
+                )
 
     # ── Position cards ────────────────────────────────────────────────────────
     col_a, col_b = st.columns(2, gap='medium')
