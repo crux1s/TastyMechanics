@@ -215,13 +215,28 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                     )
                     with st.expander(chain_label, expanded=is_open_chain):
                         chain_rows = []
+                        last_open_date = None
                         for leg_i, leg in enumerate(chain):
                             sub = str(leg['sub_type']).lower()
-                            if 'to open' in sub:     action = '↪️ Sell to Open'
-                            elif PAT_CLOSE in sub:   action = '↩️ Buy to Close'
-                            elif PAT_EXPIR in sub:   action = '⏹️ Expired'
-                            elif PAT_ASSIGN in sub:  action = '📋 Assigned'
-                            else:                    action = leg['sub_type']
+                            if 'to open' in sub:
+                                action = '↪️ Sell to Open'
+                                last_open_date = leg['date']
+                                dit_str = ''
+                            elif PAT_CLOSE in sub:
+                                action = '↩️ Buy to Close'
+                                dit_str = '%dd' % (leg['date'] - last_open_date).days if last_open_date else ''
+                                last_open_date = None
+                            elif PAT_EXPIR in sub:
+                                action = '⏹️ Expired'
+                                dit_str = '%dd' % (leg['date'] - last_open_date).days if last_open_date else ''
+                                last_open_date = None
+                            elif PAT_ASSIGN in sub:
+                                action = '📋 Assigned'
+                                dit_str = '%dd' % (leg['date'] - last_open_date).days if last_open_date else ''
+                                last_open_date = None
+                            else:
+                                action = leg['sub_type']
+                                dit_str = ''
                             dte_str = ''
                             if 'to open' in sub:
                                 try:
@@ -231,25 +246,25 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                                     dte_str = ''
                             is_open_leg = is_open_chain and leg_i == len(chain) - 1
                             chain_rows.append({
-                                'Action': ('🟢 ' + action) if is_open_leg else action,
                                 'Date':   leg['date'].strftime('%d/%m/%y'),
+                                'Action': ('🟢 ' + action) if is_open_leg else action,
                                 'Strike': '%.1f%s' % (leg['strike'], cp[0]),
-                                'Exp':    leg['exp'], 'DTE': dte_str,
-                                'Cash':   leg['total'], '_open': is_open_leg,
+                                'Expiry': leg['exp'], 'DTE': dte_str, 'Days': dit_str,
+                                'Credit/Debit Rcvd': leg['total'], '_open': is_open_leg,
                             })
                         ch_df = pd.DataFrame(chain_rows)
                         ch_df = pd.concat([ch_df, pd.DataFrame([{
-                            'Action': '━━ Chain Total', 'Date': '',
-                            'Strike': '', 'Exp': '', 'DTE': '',
-                            'Cash': ch_pnl, '_open': False,
+                            'Date': '', 'Action': '━━ Chain Total',
+                            'Strike': '', 'Expiry': '', 'DTE': '', 'Days': '',
+                            'Credit/Debit Rcvd': ch_pnl, '_open': False,
                         }])], ignore_index=True)
                         st.dataframe(
-                            ch_df[['Action', 'Date', 'Strike', 'Exp', 'DTE', 'Cash', '_open']]
+                            ch_df[['Date', 'Action', 'Strike', 'Expiry', 'DTE', 'Days', 'Credit/Debit Rcvd', '_open']]
                             .style.apply(_style_chain_row, axis=1)
-                            .format({'Cash': lambda x: '${:.2f}'.format(x)})
+                            .format({'Credit/Debit Rcvd': lambda x: '${:.2f}'.format(x)})
                             .map(lambda v: 'color: #00cc96' if isinstance(v, float) and v > 0
                                 else ('color: #ef553b' if isinstance(v, float) and v < 0 else ''),
-                                subset=['Cash']),
+                                subset=['Credit/Debit Rcvd']),
                             width='stretch', hide_index=True,
                             column_config={'_open': None}
                         )
