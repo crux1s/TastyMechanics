@@ -113,7 +113,7 @@ def render_tab0(df_open, _expiry_alerts, latest_date):
         with st.spinner('Fetching live prices…'):
             raw_prices = fetch_live_prices(tickers_frozen, option_specs_frozen)
 
-        if raw_prices:
+        if raw_prices and any(v['last'] > 0 for v in raw_prices.values()):
             # Remap option keys: yfinance uses YYYY-MM-DD; our rows use the
             # original CSV expiry string.  Build {ticker: {ymd: original}} then
             # re-key the options dict so render_position_card can look up without

@@ -50,8 +50,15 @@ def fetch_live_prices(tickers: frozenset, option_specs: frozenset) -> dict:
         try:
             yf_t = yf.Ticker(ticker)
             fi   = yf_t.fast_info
-            last = float(fi.get('last_price') or fi.get('regularMarketPrice') or 0.0)
-            prev = float(fi.get('previous_close') or fi.get('regularMarketPreviousClose') or last)
+            # Attribute access (not .get()) triggers the actual network fetch;
+            # .get() may return None silently when the network is unreachable.
+            last = float(fi.last_price or 0.0)
+            if not last:
+                continue  # no price data — skip rather than store zeros
+            try:
+                prev = float(fi.previous_close or last)
+            except Exception:
+                prev = last
 
             opts: dict = {}
             for expiry, _specs in opt_lookup.get(ticker, {}).items():
