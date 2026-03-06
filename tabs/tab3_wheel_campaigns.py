@@ -249,17 +249,17 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                                 'Date':   leg['date'].strftime('%d/%m/%y'),
                                 'Action': ('🟢 ' + action) if is_open_leg else action,
                                 'Strike': '%.1f%s' % (leg['strike'], cp[0]),
-                                'Expiry': leg['exp'], 'DTE': dte_str, 'Days': dit_str,
+                                'Expiry': leg['exp'], 'DTE': dte_str, 'Days Held': dit_str,
                                 'Credit/Debit Rcvd': leg['total'], '_open': is_open_leg,
                             })
                         ch_df = pd.DataFrame(chain_rows)
                         ch_df = pd.concat([ch_df, pd.DataFrame([{
                             'Date': '', 'Action': '━━ Chain Total',
-                            'Strike': '', 'Expiry': '', 'DTE': '', 'Days': '',
+                            'Strike': '', 'Expiry': '', 'DTE': '', 'Days Held': '',
                             'Credit/Debit Rcvd': ch_pnl, '_open': False,
                         }])], ignore_index=True)
                         st.dataframe(
-                            ch_df[['Date', 'Action', 'Strike', 'Expiry', 'DTE', 'Days', 'Credit/Debit Rcvd', '_open']]
+                            ch_df[['Date', 'Action', 'Strike', 'Expiry', 'DTE', 'Days Held', 'Credit/Debit Rcvd', '_open']]
                             .style.apply(_style_chain_row, axis=1)
                             .format({'Credit/Debit Rcvd': lambda x: '${:.2f}'.format(x)})
                             .map(lambda v: 'color: #00cc96' if isinstance(v, float) and v > 0
