@@ -37,12 +37,16 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 
 ## Features
 
+**Open Positions tab**
+- Position cards per ticker: strategy badge, DTE progress bar, cost basis per leg
+- Live market prices via Yahoo Finance (opt-in toggle) — last price, day change, mark for options, unrealised P/L per leg and card total
+- Expiry alert strip — all options expiring within 21 days, colour-coded by urgency
+
 **Portfolio Overview**
 - Realized P/L, Return on Capital, Capital Efficiency Score (annualised)
 - Capital deployed, margin loan, dividends + interest
 - Inline P/L breakdown chips (campaign type and windowed components)
 - Period comparison card — current vs prior equivalent window with deltas
-- Expiry alert strip — all options expiring within 21 days, colour-coded by urgency
 
 **Derivatives Performance tab**
 - Premium selling scorecard: win rate, median capture %, median days held, annualised return, banked $/day
@@ -92,12 +96,13 @@ python >= 3.10
 streamlit >= 1.30
 pandas >= 2.0
 plotly >= 5.0
+yfinance >= 0.2   # optional — only required for live market prices
 ```
 
 ### Install
 
 ```bash
-pip install streamlit pandas plotly
+pip install -r requirements.txt
 ```
 
 ### Run
@@ -139,7 +144,7 @@ A standard Python slim image works. Ensure Python 3.10+ is used:
 FROM python:3.12-slim
 WORKDIR /app
 COPY . .
-RUN pip install streamlit pandas plotly
+RUN pip install -r requirements.txt
 EXPOSE 8501
 CMD ["streamlit", "run", "tastymechanics.py", "--server.port=8501", "--server.address=0.0.0.0"]
 ```
@@ -178,8 +183,9 @@ models.py          Dataclasses — Campaign, AppData, ParsedData
 ingestion.py       CSV parsing — pure Python, no Streamlit dependency
 mechanics.py       Analytics engine — FIFO, campaigns, trade classification
 ui_components.py   Visual helpers — formatters, colour functions, chart layout
+market_data.py     Live price fetcher — yfinance wrapper, 5-min cache, opt-in only
 report.py          HTML report export — self-contained, no Streamlit dependency
-tabs/              One renderer per tab (tab0–tab5) — imported by tastymechanics.py
+tabs/              One renderer per tab (tab0–tab5) + landing.py — imported by tastymechanics.py
 tastymechanics.py  Streamlit wiring — sidebar, cache wrappers, tab orchestration
 ```
 
@@ -199,42 +205,23 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 
 ## Changelog
 
+**v26.3 — Live Prices & UX Polish** (2026-03-06)
+- **Live market prices** on Open Positions tab — opt-in toggle fetches equity quotes and option marks from Yahoo Finance (5-min cache). Shows last price, day change %, mark (bid/ask), and unrealised P/L per leg with a card-level total. Nothing is sent until the toggle is enabled.
+- Open Positions cards now show **share quantity** including fractional holdings (e.g. META 0.2 sh)
+- Roll chain table column order and labels updated — Date first, `Exp` → Expiry, `Cash` → Credit/Debit Rcvd; closed legs gain a **Days in Trade** column
+- Landing page extracted to `tabs/landing.py` matching the tab renderer pattern
+- `market_data.py` added — isolated yfinance wrapper with graceful network-error handling
+- `yfinance>=0.2` added to `requirements.txt`
+
 **v25.12 — Charts, Report Export & Fixes** (2026-03-01)
-- Weekly and Monthly P/L bar charts replaced with **candlestick charts** — candles show cumulative P/L equity curve OHLC per period; wicks reveal intra-period swings
-- **HTML report export** — sidebar download button generates a self-contained dark-theme HTML file with two scorecard sections (Portfolio Overview and Options Trading — Credit Trades Only), equity curve, candle charts, and performance by ticker table
-- Lifetime "House Money" toggle moved from sidebar into the Wheel Campaigns tab header
-- f-string quote conflicts fixed in `ui_components.py` — resolves `SyntaxError` on Python < 3.12 (Unraid Docker and similar deployments)
-- `datetime.utcnow()` replaced with `datetime.now(timezone.utc)` — removes deprecation warning on Python 3.12+
-- 13-colour `COLOURS` palette added to `config.py`; `ui_components.py` fully migrated — all hex codes replaced with named references
-- Test suite expanded from 258 to **294 tests** (Section 24: `xe()`, `identify_pos_type()`, `detect_strategy()`)
-- `detect_strategy()` Call Butterfly false positive fixed — was matching Call Debit Spread on `lc==2, sc==1, 3 strikes`
-- `detect_strategy()` Long Call false positive fixed — `lc>0` matched 2+ lone calls; corrected to `lc==1`
-- TSLA Call Debit Spread VERIFIED test added — cross-checked against TastyTrade UI
+- Weekly and Monthly P/L bar charts replaced with **candlestick charts**
+- **HTML report export** — self-contained dark-theme HTML with two scorecard sections, equity curve, candle charts, and performance by ticker table
+- Lifetime "House Money" toggle moved into the Wheel Campaigns tab header
+- f-string Python 3.10/3.11 compatibility fix; `datetime.utcnow()` deprecation fixed
+- 13-colour `COLOURS` palette — all hardcoded hex removed from UI layer
+- Test suite expanded to **294 tests** (24 sections); two `detect_strategy()` false positives fixed
 
-**v25.11 — Refactor & Testing** (2026-02-28)
-- Six tab render functions extracted from `main()` into module-level scope — `main()` reduced from 2,191 to 875 lines
-- Union-Find helpers extracted from `build_closed_trades` to module level — now independently testable
-- `_write_test_snapshot` refactored from 22 positional parameters to a single `ctx` dict
-- Time window selection replaced 7-branch `if/elif` chain with `_WINDOW_START` dict lookup
-- Test suite expanded from 185 to 258 tests (23 sections)
-- Three **VERIFIED** tests added — P/L figures cross-checked against live TastyTrade UI
-
-**v25.10 — Bug Fixes** (2026-02-27)
-- `realized_ror` recomputed after zero-cost exclusion filter
-- `pure_options_pnl()` boundary condition fixed
-- FIFO zero-quantity guard added
-- Column rename: `_dsc` → `dsc_upper` (Windows `itertuples` fix)
-
-**v25.9 — Refactor** (2026-02-27)
-- Extracted pure analytics into `mechanics.py`, models into `models.py`, CSV parsing into `ingestion.py`, constants into `config.py`, UI helpers into `ui_components.py`
-- All `@st.cache_data` wrappers moved to app layer
-- Main app reduced from ~2,940 to ~1,730 lines
-
-**v25.6** (2026-02-26) — Stock split handling, zero-cost delivery warnings, short equity FIFO fix, LEAPS separation, timezone architecture unification.
-
-**v25.4** (2026-02-24) — Pre-purchase option campaign fix, prior period double-count fix, weekly/monthly P/L charts.
-
-**v25.3** (2026-02-23) — Expiry alert strip, period comparison card, open positions card grid, dark theme.
+**Earlier releases** — v25.3 through v25.11 covered the initial modular refactor (mechanics.py, ingestion.py, tabs/, config.py), FIFO engine fixes, stock split handling, LEAPS separation, and test suite build-out. See git log for detail.
 
 ---
 

@@ -102,7 +102,7 @@ import hashlib as _hashlib
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v25.12"
+APP_VERSION = "v26.3"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 

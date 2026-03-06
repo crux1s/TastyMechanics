@@ -42,7 +42,9 @@ def identify_pos_type(row):
 def translate_readable(row):
     """Human-readable label for an open position row (e.g. 'STO 1 @ 25P (14/03)')."""
     if not is_option_row(str(row['Instrument Type'])):
-        return f"{row['Ticker']} Shares"
+        qty = row['Net_Qty']
+        qty_str = str(int(qty)) if qty == int(qty) else f'{round(qty, 4):g}'
+        return f'{qty_str} {row["Ticker"]} sh'
     try:
         exp_dt = pd.to_datetime(
             row['Expiration Date'], format='mixed', errors='coerce'
@@ -341,7 +343,7 @@ def render_position_card(ticker, t_df, ticker_live=None):
                 dte_html  = (
                     '<div style="margin-top:6px;">'
                     '<div style="background:' + _bdr + ';border-radius:4px;height:4px;width:100%;">'
-                    '<div style="width:' + f'{dte_val / DTE_PROGRESS_MAX * 100:.0f}' + '%;background:' + bar_color + ';'
+                    '<div style="width:' + f'{pct:.0f}' + '%;background:' + bar_color + ';'
                     'border-radius:4px;height:4px;"></div>'
                     '</div>'
                     '<div style="color:' + _dim + ';font-size:0.7rem;margin-top:3px;">'

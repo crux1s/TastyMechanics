@@ -35,7 +35,19 @@ from market_data import fetch_live_prices
 
 def render_tab0(df_open, _expiry_alerts, latest_date):
     """Tab 0 — Active Positions: open position cards + expiry alert strip."""
-    st.subheader('📡 Open Positions')
+    _c_hdr, _c_tog = st.columns([6, 1])
+    with _c_hdr:
+        st.subheader('📡 Open Positions')
+    with _c_tog:
+        live_on = st.toggle(
+            '📡 Live',
+            key='live_prices_on',
+            help=(
+                'Fetch current equity quotes and option marks from Yahoo Finance. '
+                'Equity prices are near real-time during market hours; '
+                'options are delayed ~15 min. Ticker symbols are sent to Yahoo Finance.'
+            ),
+        )
     if df_open.empty:
         st.info('No active positions.')
         return
@@ -71,17 +83,6 @@ def render_tab0(df_open, _expiry_alerts, latest_date):
             f'{_expiry_chips}</div>',
             unsafe_allow_html=True
         )
-
-    # ── Live prices toggle ────────────────────────────────────────────────────
-    live_on = st.toggle(
-        '📡 Live Prices',
-        key='live_prices_on',
-        help=(
-            'Fetch current equity quotes and option marks from Yahoo Finance. '
-            'Equity prices are near real-time during market hours; '
-            'options are delayed ~15 min. Ticker symbols are sent to Yahoo Finance.'
-        ),
-    )
 
     live_prices: dict = {}
     if live_on:
