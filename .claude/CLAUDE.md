@@ -32,7 +32,9 @@ models.py           Dataclasses — Campaign, AppData, ParsedData
 ingestion.py        CSV parsing — no Streamlit dependency
 mechanics.py        FIFO engine, campaign logic, trade classification
 ui_components.py    Formatters, colour functions, chart helpers
+market_data.py      Live price fetcher — yfinance wrapper, 5-min cache, opt-in only
 report.py           HTML report export — no Streamlit dependency
+tabs/landing.py     Landing page renderer (shown before CSV upload)
 tabs/tab0–tab5      One renderer per tab, imported by tastymechanics.py
 tastymechanics.py   Streamlit wiring — sidebar, cache, tab orchestration
 ```
@@ -63,7 +65,6 @@ tastymechanics.py   Streamlit wiring — sidebar, cache, tab orchestration
 
 - `ROADMAP.md` — pending work, prioritised
 - `Known-Limitations.md` — what doesn't work or is untested
-- `Architecture.md` — full dependency chain and data flow
 - `test_tastymechanics.py` — 294 tests, 24 sections
 - `config.py` — `KNOWN_INDEXES`, `COLOURS`, `DTE_*`, `WIN_RATE_*`, `FIFO_EPSILON`
 
@@ -84,9 +85,7 @@ tastymechanics.py   Streamlit wiring — sidebar, cache, tab orchestration
 ## What's Left (from ROADMAP.md)
 
 **Low priority — code quality:**
-- FIFO branch comments (`mechanics.py` ~123–175) — `# BUY:` and `# SELL:` signposts
 - Type hints on tab render functions (`tabs/tab0–tab5`)
-- `%` formatting → f-strings on contact only, not a dedicated pass
 
 **Waiting on real CSV data:**
 - Closed campaign test

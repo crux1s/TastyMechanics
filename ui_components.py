@@ -42,7 +42,9 @@ def identify_pos_type(row):
 def translate_readable(row):
     """Human-readable label for an open position row (e.g. 'STO 1 @ 25P (14/03)')."""
     if not is_option_row(str(row['Instrument Type'])):
-        return f"{row['Ticker']} Shares"
+        qty = row['Net_Qty']
+        qty_str = str(int(qty)) if qty == int(qty) else f'{round(qty, 4):g}'
+        return f'{qty_str} {row["Ticker"]} sh'
     try:
         exp_dt = pd.to_datetime(
             row['Expiration Date'], format='mixed', errors='coerce'
@@ -278,14 +280,22 @@ def _badge_inline_style(strat):
         theme = 'default'
     return _BASE + _COLORS[theme]
 
-def render_position_card(ticker, t_df):
-    """Build the full HTML card for one open-position ticker."""
+def render_position_card(ticker, t_df, ticker_live=None):
+    """Build the full HTML card for one open-position ticker.
+
+    ticker_live — optional dict from market_data.fetch_live_prices, keyed by ticker:
+        {'last': float, 'prev_close': float,
+         'options': {(expiry_original_str, strike, cp): {'bid', 'ask', 'mark'}}}
+    When provided, each leg gains a live price / mark and unrealised P/L display.
+    """
     strat       = detect_strategy(t_df)
     badge_style = _badge_inline_style(strat)
 
     _bg1 = COLOURS['card_bg']; _bg2 = COLOURS['card_bg2']
     _bdr = COLOURS['border'];   _wht = COLOURS['white']
     _mut = COLOURS['text_muted']; _txt = COLOURS['text']
+    _grn = COLOURS['green'];    _red = COLOURS['red']
+    _dim = COLOURS['text_dim']
     CARD = (
         'background:linear-gradient(135deg,' + _bg1 + ' 0%,' + _bg2 + ' 100%);'
         'border:1px solid ' + _bdr + ';border-radius:12px;padding:18px 20px 14px 20px;'
@@ -312,6 +322,7 @@ def render_position_card(ticker, t_df):
     )
 
     legs_html   = ''
+    total_unreal: float | None = 0.0 if ticker_live else None
     rows_sorted = t_df.sort_values('Status').rename(columns={'Cost Basis': 'Cost_Basis'})
     for i, row in enumerate(rows_sorted.itertuples(index=False)):
         pos_type  = row.Status
@@ -329,7 +340,6 @@ def render_position_card(ticker, t_df):
                 dte_val   = int(str(dte).replace('d', ''))
                 pct       = min(dte_val / DTE_PROGRESS_MAX * 100, 100)
                 bar_color = COLOURS['green'] if dte_val > DTE_ALERT_WARN else COLOURS['orange'] if dte_val > DTE_ALERT_CRIT else COLOURS['red']
-                _bdr = COLOURS['border']; _dim = COLOURS['text_dim']
                 dte_html  = (
                     '<div style="margin-top:6px;">'
                     '<div style="background:' + _bdr + ';border-radius:4px;height:4px;width:100%;">'
@@ -343,12 +353,65 @@ def render_position_card(ticker, t_df):
             except (ValueError, TypeError):
                 pass  # DTE string is non-numeric (e.g. 'N/A') — leave progress bar absent
 
+        # ── Live price section ─────────────────────────────────────────────
+        live_html = ''
+        if ticker_live:
+            is_equity = 'stock' in str(pos_type).lower()
+            if is_equity and ticker_live.get('last', 0.0):
+                last  = ticker_live['last']
+                prev  = ticker_live.get('prev_close', last)
+                chg   = last - prev
+                chg_pct = (chg / prev * 100) if prev else 0.0
+                chg_col = _grn if chg >= 0 else _red
+                chg_sgn = '+' if chg >= 0 else ''
+                qty   = float(getattr(row, 'Net_Qty', 0))
+                unreal = last * qty - float(row.Cost_Basis)
+                if total_unreal is not None:
+                    total_unreal += unreal
+                u_col = _grn if unreal >= 0 else _red
+                u_sgn = '+' if unreal >= 0 else ''
+                live_html = (
+                    f'<div style="margin-top:6px;font-size:0.75rem;">'
+                    f'<span style="color:{_mut};">Last </span>'
+                    f'<span style="font-family:monospace;color:{_txt};">${last:,.2f}</span>'
+                    f'<span style="color:{chg_col};margin-left:6px;">{chg_sgn}{chg_pct:.2f}%</span>'
+                    f'<span style="display:block;color:{u_col};font-family:monospace;margin-top:2px;">'
+                    f'Unreal {u_sgn}${abs(unreal):,.2f}</span>'
+                    f'</div>'
+                )
+            elif not is_equity:
+                expiry = str(getattr(row, 'Expiration_Date', ''))
+                strike = float(getattr(row, 'Strike_Price', 0.0))
+                cp     = str(getattr(row, 'Call_or_Put', '')).upper()
+                opt_data = ticker_live.get('options', {}).get((expiry, strike, cp))
+                if opt_data:
+                    mark  = opt_data['mark']
+                    bid   = opt_data['bid']
+                    ask   = opt_data['ask']
+                    qty   = float(getattr(row, 'Net_Qty', 0))
+                    unreal = mark * qty * 100 - float(row.Cost_Basis)
+                    if total_unreal is not None:
+                        total_unreal += unreal
+                    u_col = _grn if unreal >= 0 else _red
+                    u_sgn = '+' if unreal >= 0 else ''
+                    live_html = (
+                        f'<div style="margin-top:6px;font-size:0.75rem;">'
+                        f'<span style="color:{_mut};">Mark </span>'
+                        f'<span style="font-family:monospace;color:{_txt};">${mark:.2f}</span>'
+                        f'<span style="color:{_dim};margin-left:6px;">'
+                        f'${bid:.2f} / ${ask:.2f}</span>'
+                        f'<span style="display:block;color:{u_col};font-family:monospace;margin-top:2px;">'
+                        f'Unreal {u_sgn}${abs(unreal):,.2f}</span>'
+                        f'</div>'
+                    )
+
         legs_html += (
             f'<div style="{leg_style}">'
             f'  <div>'
             f'    <div style="{LBL}">{xe(pos_type)}</div>'
             f'    <div style="{VAL}">{xe(detail)}</div>'
             f'    {dte_html}'
+            f'    {live_html}'
             f'  </div>'
             f'  <div style="text-align:right;flex-shrink:0;margin-left:12px;">'
             f'    <div style="{LBL}">Basis</div>'
@@ -357,12 +420,46 @@ def render_position_card(ticker, t_df):
             f'</div>'
         )
 
+    # ── Total unrealised P/L footer (only when live prices are active) ─────
+    footer_html = ''
+    if total_unreal is not None:
+        f_col = _grn if total_unreal >= 0 else _red
+        f_sgn = '+' if total_unreal >= 0 else ''
+        footer_html = (
+            f'<div style="margin-top:10px;padding-top:8px;border-top:1px solid {_bdr};'
+            f'display:flex;justify-content:space-between;align-items:center;">'
+            f'<span style="color:{_mut};font-size:0.72rem;text-transform:uppercase;'
+            f'letter-spacing:0.04em;">Unrealised P/L</span>'
+            f'<span style="font-family:monospace;font-size:0.95rem;font-weight:600;'
+            f'color:{f_col};">{f_sgn}${abs(total_unreal):,.2f}</span>'
+            f'</div>'
+        )
+
+    # ── Equity last-price header pill (only when live prices are active) ───
+    live_hdr_html = ''
+    if ticker_live and ticker_live.get('last', 0.0):
+        last = ticker_live['last']
+        prev = ticker_live.get('prev_close', last)
+        chg  = last - prev
+        chg_col = _grn if chg >= 0 else _red
+        chg_sgn = '+' if chg >= 0 else ''
+        live_hdr_html = (
+            f'<span style="font-family:monospace;font-size:0.82rem;color:{_txt};">'
+            f'${last:,.2f} '
+            f'<span style="color:{chg_col};">{chg_sgn}{chg:.2f}</span>'
+            f'</span>'
+        )
+
     return (
         f'<div style="{CARD}">'
         f'  <div style="{HDR}">'
         f'    <span style="{TICK}">{xe(ticker)}</span>'
-        f'    <span style="{badge_style}">{xe(strat)}</span>'
+        f'    <div style="display:flex;align-items:center;gap:10px;">'
+        f'      {live_hdr_html}'
+        f'      <span style="{badge_style}">{xe(strat)}</span>'
+        f'    </div>'
         f'  </div>'
         f'  {legs_html}'
+        f'  {footer_html}'
         f'</div>'
     )

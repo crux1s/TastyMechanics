@@ -14,14 +14,11 @@ Nothing active right now.
 
 - **Duplicate date range selector** — add a compact time window dropdown inline near the top of each tab (or at minimum tabs 1, 2, 4) so users don't have to scroll all the way to the top to change the window. The sidebar selector remains the source of truth — the inline one just mirrors/syncs it via `st.session_state`. Medium priority.
 
-- **`Days in Trade` label audit** — verify all remaining tables and metrics use the correct variant: `Days in Trade` (per-trade), `Med Days in Trade` (grouped median), `Avg Days in Trade` (grouped average). Done for main tables — check any future additions follow the same pattern.
-
 ---
 
 ## Readability & Maintainability
 
-- **Type hints on tab render functions** (`tabs/tab0`–`tab5`) — each takes 8–12 positional arguments with no hints. Add signatures like `def render_tab1(closed_trades_df: pd.DataFrame, ...) -> None`. Low priority.
-
+- **Type hints on tab render functions** (`tabs/tab0`–`tab5`) — each takes several positional arguments with no hints. Low priority.
 
 ---
 
@@ -59,48 +56,3 @@ Waiting on the right CSV scenarios to appear naturally:
 
 - **Vectorise `get_signed_qty`** — row-by-row `df.apply()` during CSV parsing. Only matters at 5+ years / tens of thousands of rows. Not a priority until someone reports slow load times.
 - **Scroll-to on Wheel Campaign table click** — not achievable cleanly in Streamlit (iframe sandboxing). Revisit if the app moves to a custom web framework.
-
----
-
-## Completed
-
-- ✅ Export Report button moved above time window selector in sidebar
-- ✅ FIFO branch signposts added (`# BUY row` / `# SELL row` with routing description)
-- ✅ `%` formatting converted to f-strings in `mechanics.py` and `ui_components.py`
-- ✅ Assignment Rate and Early Mgmt Rate added to ThetaGang metrics
-- ✅ P&L Consistency captions added
-- ✅ Performance by Ticker table — W/L split, bar on Win%, P/L per DTE, dim low-sample rows, Premium Capture colour
-- ✅ `Days in Trade` / `Med Days in Trade` / `Avg Days in Trade` labels consistent across all tables
-- ✅ Full-row tint for large winners/losers in trade log (`TRADE_LOSS_HIGHLIGHT` in config.py)
-- ✅ Capital concentration bar on ticker breakdown table
-
-- ✅ Docstrings for `effective_basis()` and `realized_pnl()` — full formula explanation, house money concept, when each branch fires
-- ✅ `_aggregate_campaign_pnl()` extracted to mechanics.py — eliminates duplicate aggregation between `compute_app_data()` and zero-cost exclusion path
-- ✅ `_classify_trade_type()` and `_calculate_capital_risk()` extracted to module-level pure functions in mechanics.py
-- ✅ Streamlit Cloud stale cache bug fixed — `hashlib.md5` replaces `hash()` for cross-process stable cache key
-- ✅ Report "Deposited" figure corrected — was net (deposits minus withdrawals), now gross deposits
-- ✅ DTE alert thresholds (5d/14d) moved to `config.py` as `DTE_ALERT_CRIT` / `DTE_ALERT_WARN`
-- ✅ `.iloc[0]` unguarded calls guarded in mechanics.py
-- ✅ `qty != 0` → `abs(qty) > FIFO_EPSILON` for consistency with FIFO engine
-- ✅ `import io as _io` / `import html as _html` aliases removed
-- ✅ Silent `except: pass` blocks commented
-- ✅ COLOURS migration complete — all hardcoded hex removed from tastymechanics.py and ui_components.py
-- ✅ Welcome screen rewritten — who it's for, what each tab does, updated limitations list
-- ✅ "Options Trading — Credit Trades Only" renamed to "Premium Selling Performance" throughout
-- ✅ ROADMAP.md added to repo
-- ✅ High-priced equity index misclassification fixed — `KNOWN_INDEXES` explicit list
-- ✅ Wheel Campaigns waterfall chart removed
-- ✅ Closed campaigns hidden behind collapsed expander
-- ✅ File-per-tab split — `tabs/tab0`–`tab5` extracted from `tastymechanics.py`
-- ✅ `report.py` extracted — HTML export has no Streamlit dependency
-- ✅ HTML report export (Portfolio Overview + Premium Selling Performance)
-- ✅ Candlestick charts replace bar charts for weekly/monthly P/L
-- ✅ Lifetime "House Money" toggle moved into Wheel Campaigns tab header
-- ✅ f-string Python 3.10/3.11 compatibility fix
-- ✅ `datetime.utcnow()` deprecation warning fixed
-- ✅ `COLOURS` 13-colour palette added to `config.py`
-- ✅ Test suite expanded to 294 tests (24 sections)
-- ✅ `detect_strategy()` Call Butterfly and Long Call false positives fixed
-- ✅ Six tab render functions extracted from `main()`
-- ✅ Union-Find helpers extracted to module level
-- ✅ Pure analytics layer extracted to `mechanics.py`
