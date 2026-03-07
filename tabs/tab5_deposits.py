@@ -35,6 +35,10 @@ from mechanics import (
 def render_tab5(df_window, total_deposited, total_withdrawn, div_income, int_net, _win_label):
     """Tab 5 — Deposits, Dividends & Fees: money movement table for the selected window."""
     st.markdown(f'### 💰 Deposits, Dividends & Fees {_win_label}', unsafe_allow_html=True)
+    st.caption(
+        'Cash movements for the selected window — deposits, withdrawals, dividends, '
+        'and credit/debit interest. Net deposited = Deposited − Withdrawn.'
+    )
     ic1, ic2, ic3, ic4 = st.columns(4)
     ic1.metric('Deposited',      fmt_dollar(total_deposited))
     ic2.metric('Withdrawn',      fmt_dollar(abs(total_withdrawn)))

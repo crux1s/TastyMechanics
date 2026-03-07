@@ -53,7 +53,13 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
     if closed_trades_df.empty:
         st.info('No closed trades found.')
         return
-    st.markdown(f'### 🔬 Trade Analysis {_win_label}', unsafe_allow_html=True)
+    st.markdown(f'### 🔬 Discipline & Patterns {_win_label}', unsafe_allow_html=True)
+    st.caption(
+        'ThetaGang management discipline — management rate, DTE behaviour at open and close, '
+        'assignment rate, early management rate, and concentration risk. '
+        'Paired with pattern analysis: win rate and avg P/L by DTE at open, P/L by day of week '
+        'and hour, ticker × month heatmap, win/loss distribution, and the full closed trade log.'
+    )
     st.markdown('---')
     st.markdown(
         f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'
