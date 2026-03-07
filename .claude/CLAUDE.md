@@ -4,6 +4,16 @@ A Streamlit dashboard for wheel traders and theta harvesters on TastyTrade. Anal
 
 ---
 
+## Running the App
+
+```bash
+python3 -m streamlit run tastymechanics.py
+```
+
+The `streamlit` binary is not on PATH — always invoke via `python3 -m streamlit`.
+
+---
+
 ## Running the Test Suite
 
 Always run after any change:
@@ -14,11 +24,29 @@ python3 test_tastymechanics.py
 
 Expected: `294 tests | 294 passed | 0 failed` (24 sections)
 
+To debug a failing section, scan stdout for the section header (e.g., `── 17.`) — the test file has no per-section runner.
+
 Syntax check all files before presenting output:
 
 ```bash
 python3 -c "import ast; ast.parse(open('mechanics.py').read()); print('OK')"
 ```
+
+---
+
+## Data Flow
+
+```
+CSV bytes
+  → parse_csv()       → ParsedData(df, split_events, zero_cost_rows)   [ingestion.py]
+  → build_all_data()  → AppData(all_campaigns, closed_trades_df, …)    [mechanics.py]
+  → window slice      → df_window, windowed P/L figures                 [tastymechanics.py]
+  → tab renderers     → display                                          [tabs/]
+```
+
+`load_and_parse` and `build_all_data` are Streamlit-cached. `get_daily_pnl` is cached separately with an explicit `_file_hash` (hashlib md5 of raw bytes) so it invalidates on new uploads.
+
+`ingestion.py` raises `CSVParseError` (base) → `CSVEncodingError`, `CSVStructureError`, `CSVDateParseError`. The Streamlit layer catches `CSVParseError` and surfaces the message to the user.
 
 ---
 
@@ -54,6 +82,8 @@ tastymechanics.py   Streamlit wiring — sidebar, cache, tab orchestration
 **Trade classification** — `_classify_trade_type()` and `_calculate_capital_risk()` are pure module-level functions in `mechanics.py`. Do not embed classification logic back into `build_closed_trades()`.
 
 **DTE thresholds** — `DTE_ALERT_CRIT = 5` and `DTE_ALERT_WARN = 14` live in `config.py`. Never hardcode 5 or 14 in UI code.
+
+**xe()** — `xe(s)` in `ui_components.py` escapes strings for HTML. Every dynamic value interpolated into an f-string HTML template must pass through `xe()`.
 
 **realized_pnl()** — for closed campaigns includes `exit_proceeds`. For open campaigns it's premiums + dividends only. `use_lifetime=True` always returns premiums + dividends regardless of status (strips equity component for House Money mode).
 
