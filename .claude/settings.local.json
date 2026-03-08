@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "Bash(python3 -m streamlit --version)",
+      "Bash(PYTHONIOENCODING=utf-8 python3 test_tastymechanics.py)",
+      "Bash(grep -i \"sofi\" /c/Users/tim_l/Downloads/TastyMechanics/*.csv)",
+      "WebFetch(domain:optopsy.readthedocs.io)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}

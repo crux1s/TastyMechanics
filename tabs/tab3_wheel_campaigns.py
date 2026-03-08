@@ -58,10 +58,10 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                 'Ticker': ticker,
                 'Status': '✅ Closed' if c.status == 'closed' else '🟢 Open',
                 'Qty': int(c.total_shares), 'Avg Price': c.blended_basis,
-                'Eff. Basis': effb, 'Premiums': c.premiums,
+                'Cost Basis': effb, 'Premiums': c.premiums,
                 'Divs': c.dividends, 'Exit': c.exit_proceeds,
                 'P/L': rpnl, 'Days': dur.days,
-                'Opened': c.start_date.strftime('%d/%m/%y'),
+                'Entry': c.start_date.strftime('%d/%m/%y'),
             })
         return rows
 
@@ -84,7 +84,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
     def _render_summary(rows):
         df = pd.DataFrame(rows)
         st.dataframe(df.style.format({
-            'Avg Price': fmt_dollar, 'Eff. Basis': fmt_dollar,
+            'Avg Price': fmt_dollar, 'Cost Basis': fmt_dollar,
             'Premiums': fmt_dollar, 'Divs': fmt_dollar,
             'Exit': fmt_dollar, 'P/L': fmt_dollar,
         }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
@@ -147,6 +147,31 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
         is_open         = True
         pnl_color       = COLOURS['green'] if rpnl >= 0 else COLOURS['red']
         basis_reduction = c.blended_basis - effb
+        _asgn_events = [e for e in c.events if str(e.get('type', '')).startswith('Assignment Put')]
+        if _asgn_events:
+            _excl = sum(e.get('cash', 0) for e in _asgn_events)
+            _assignment_note = (
+                '<div style="margin-top:10px;padding:6px 10px;'
+                'background:rgba(240,165,0,0.08);border-radius:6px;'
+                'font-size:0.72em;color:#f0a500;text-align:left;">'
+                '&#9888;&#65039; Entered via put assignment \u2014 put credit '
+                '($%.2f) is in pre-purchase P/L and is not included in Cost Basis.'
+                '</div>' % abs(_excl)
+            )
+        else:
+            _assignment_note = ''
+        _mid_asgn_events = [e for e in c.events if str(e.get('type', '')).startswith('Mid-campaign Assignment')]
+        if _mid_asgn_events:
+            _mid_dates = ', '.join(e['date'].strftime('%d/%m/%y') for e in _mid_asgn_events)
+            _mid_asgn_note = (
+                '<div style="margin-top:6px;padding:6px 10px;'
+                'background:rgba(99,110,250,0.08);border-radius:6px;'
+                'font-size:0.72em;color:#636efa;text-align:left;">'
+                'ℹ️ Shares added via put assignment on %s \u2014 premium already included in Cost Basis.'
+                '</div>' % _mid_dates
+            )
+        else:
+            _mid_asgn_note = ''
         card_html = (
             '<div style="border:1px solid {border};border-radius:10px;padding:16px 20px 12px 20px;'
             'margin-bottom:12px;background:rgba(255,255,255,0.03);">'
@@ -157,29 +182,34 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             '<span style="font-size:0.8em;font-weight:600;padding:3px 10px;border-radius:20px;'
             'background:{badge_bg};color:{badge_col};">{status}</span>'
             '</div>'
-            '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;text-align:center;">'
+            '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;text-align:center;">'
+            '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">ENTRY</div>'
+            '<div style="font-size:1.0em;font-weight:600;">{acquired}</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">SHARES</div>'
             '<div style="font-size:1.0em;font-weight:600;">{shares}</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">ENTRY BASIS</div>'
             '<div style="font-size:1.0em;font-weight:600;">${entry_basis:.2f}/sh</div></div>'
-            '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">EFF. BASIS</div>'
+            '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">COST BASIS</div>'
             '<div style="font-size:1.0em;font-weight:600;">${eff_basis:.2f}/sh</div>'
             '<div style="font-size:0.7em;color:#00cc96;">▼ ${reduction:.2f} saved</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">PREMIUMS</div>'
             '<div style="font-size:1.0em;font-weight:600;">${premiums:.2f}</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">REALIZED P/L</div>'
             '<div style="font-size:1.1em;font-weight:700;color:{pnl_color};">${pnl:+.2f}</div></div>'
-            '</div></div>'
+            '</div>{assignment_note}{mid_asgn_note}</div>'
         ).format(
             border=COLOURS['green'] if is_open else '#444',
             ticker=xe(ticker), camp_n=i + 1,
             status=xe('🟢 OPEN' if is_open else '✅ CLOSED'),
             badge_bg='rgba(0,204,150,0.15)' if is_open else 'rgba(100,100,100,0.2)',
             badge_col=COLOURS['green'] if is_open else '#888',
+            acquired=c.start_date.strftime('%d/%m/%y'),
             shares=int(c.total_shares),
             entry_basis=c.blended_basis, eff_basis=effb,
             reduction=basis_reduction if basis_reduction > 0 else 0,
             premiums=c.premiums, pnl=rpnl, pnl_color=pnl_color,
+            assignment_note=_assignment_note,
+            mid_asgn_note=_mid_asgn_note,
         )
         st.markdown(card_html, unsafe_allow_html=True)
 
@@ -298,6 +328,31 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                 is_open         = False
                 pnl_color       = COLOURS['green'] if rpnl >= 0 else COLOURS['red']
                 basis_reduction = c.blended_basis - effb
+                _asgn_events = [e for e in c.events if str(e.get('type', '')).startswith('Assignment Put')]
+                if _asgn_events:
+                    _excl = sum(e.get('cash', 0) for e in _asgn_events)
+                    _assignment_note = (
+                        '<div style="margin-top:10px;padding:6px 10px;'
+                        'background:rgba(240,165,0,0.08);border-radius:6px;'
+                        'font-size:0.72em;color:#f0a500;text-align:left;">'
+                        '&#9888;&#65039; Entered via put assignment \u2014 put credit '
+                        '($%.2f) is in pre-purchase P/L and is not included in Cost Basis.'
+                        '</div>' % abs(_excl)
+                    )
+                else:
+                    _assignment_note = ''
+                _mid_asgn_events = [e for e in c.events if str(e.get('type', '')).startswith('Mid-campaign Assignment')]
+                if _mid_asgn_events:
+                    _mid_dates = ', '.join(e['date'].strftime('%d/%m/%y') for e in _mid_asgn_events)
+                    _mid_asgn_note = (
+                        '<div style="margin-top:6px;padding:6px 10px;'
+                        'background:rgba(99,110,250,0.08);border-radius:6px;'
+                        'font-size:0.72em;color:#636efa;text-align:left;">'
+                        'ℹ️ Shares added via put assignment on %s \u2014 premium already included in Cost Basis.'
+                        '</div>' % _mid_dates
+                    )
+                else:
+                    _mid_asgn_note = ''
                 card_html = (
                     '<div style="border:1px solid {border};border-radius:10px;padding:16px 20px 12px 20px;'
                     'margin-bottom:12px;background:rgba(255,255,255,0.03);">'
@@ -308,27 +363,32 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                     '<span style="font-size:0.8em;font-weight:600;padding:3px 10px;border-radius:20px;'
                     'background:{badge_bg};color:{badge_col};">✅ CLOSED</span>'
                     '</div>'
-                    '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;text-align:center;">'
+                    '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;text-align:center;">'
+                    '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">ENTRY</div>'
+                    '<div style="font-size:1.0em;font-weight:600;">{acquired}</div></div>'
                     '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">SHARES</div>'
                     '<div style="font-size:1.0em;font-weight:600;">{shares}</div></div>'
                     '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">ENTRY BASIS</div>'
                     '<div style="font-size:1.0em;font-weight:600;">${entry_basis:.2f}/sh</div></div>'
-                    '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">EFF. BASIS</div>'
+                    '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">COST BASIS</div>'
                     '<div style="font-size:1.0em;font-weight:600;">${eff_basis:.2f}/sh</div>'
                     '<div style="font-size:0.7em;color:#00cc96;">▼ ${reduction:.2f} saved</div></div>'
                     '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">PREMIUMS</div>'
                     '<div style="font-size:1.0em;font-weight:600;">${premiums:.2f}</div></div>'
                     '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">REALIZED P/L</div>'
                     '<div style="font-size:1.1em;font-weight:700;color:{pnl_color};">${pnl:+.2f}</div></div>'
-                    '</div></div>'
+                    '</div>{assignment_note}{mid_asgn_note}</div>'
                 ).format(
                     border='#444',
                     ticker=xe(ticker), camp_n=i + 1,
                     badge_bg='rgba(100,100,100,0.2)', badge_col='#888',
+                    acquired=c.start_date.strftime('%d/%m/%y'),
                     shares=int(c.total_shares),
                     entry_basis=c.blended_basis, eff_basis=effb,
                     reduction=basis_reduction if basis_reduction > 0 else 0,
                     premiums=c.premiums, pnl=rpnl, pnl_color=pnl_color,
+                    assignment_note=_assignment_note,
+                    mid_asgn_note=_mid_asgn_note,
                 )
                 st.markdown(card_html, unsafe_allow_html=True)
 

@@ -805,7 +805,7 @@ def main():
     tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
         '📡 Open Positions',
         '📈 Derivatives Performance',
-        '🔬 Trade Analysis',
+        '🔬 Discipline & Patterns',
         '🎯 Wheel Campaigns',
         '🔍 All Trades',
         '💰 Deposits, Dividends & Fees'

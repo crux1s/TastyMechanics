@@ -377,8 +377,16 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 current.total_cost    = new_cost
                 current.blended_basis = new_basis
                 running_shares        = new_shares
+                _, _mid_asgn = _find_assignment_premium(t, row)
+                if _mid_asgn:
+                    current.events.append({
+                        'date': row.Date, 'type': 'Mid-campaign Assignment',
+                        'detail': 'Assigned %.0f @ $%.2f/sh → blended $%.2f/sh' % (qty, pps, new_basis),
+                        'cash': total,
+                    })
                 current.events.append({'date': row.Date, 'type': 'Add',
-                    'detail': 'Added %.0f @ $%.2f → blended $%.2f/sh' % (qty, pps, new_basis),
+                    'detail': 'Added %.0f @ $%.2f → blended $%.2f/sh%s' % (
+                        qty, pps, new_basis, ' (Assigned)' if _mid_asgn else ''),
                     'cash': total})
 
         # ── Share sale / partial exit ──────────────────────────────────────
