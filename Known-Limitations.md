@@ -21,14 +21,29 @@ P&L is correct. Ann Return %, Med Premium/Day, and Wheel Campaigns are less mean
 
 ## Campaign Detection
 
-### Covered calls assigned away
-If your shares are called away by a covered call assignment, verify that the campaign closes correctly and exit P&L is recorded. Supported but untested with real data — verify on first occurrence.
+### Covered calls assigned away (full position)
+If your entire share position is called away by a covered call assignment, the campaign closes and exit P&L is recorded. Supported but untested with real data — verify on first occurrence.
+
+### Covered calls assigned away (partial position)
+If a covered call assigns away only some of your shares (e.g., 100 of 200 SOFI shares), the campaign stays open but the card metrics will be stale: SHARES, ENTRY BASIS, and COST BASIS continue to reflect the peak shares ever acquired, not the current reduced holding. Exit proceeds accumulate correctly for when the campaign eventually closes, but they are not shown in the open-campaign P&L display (realized P&L for open campaigns shows premiums + dividends only). Verify share count and per-share basis figures manually after any partial covered call assignment. Untested with real data — first occurrence to confirm.
 
 ### Multiple assignments on the same ticker
 Each buy-in starts a new campaign. If assigned, shares sold, then assigned again on the same ticker, you will have two separate campaigns. Blended basis across campaigns is not combined.
 
 ### Long options exercised by you
 Exercising a long call or put into a share position is untested. Check the resulting position and cost basis carefully.
+
+### Assignment-entered campaign: put premium not in effective basis
+When the very first shares of a ticker arrive via put assignment (no prior outright purchase), the opening credit of that put is counted as pre-purchase options P/L — it is **not** included in campaign premiums or effective basis. The campaign card effective basis reflects only post-delivery option income. Total P/L is unaffected. Verify this matches your expectations on first occurrence of a new assignment-entered ticker.
+
+### Rolled pre-purchase put followed by assignment: only final leg folds in
+If you rolled a put one or more times before it was ultimately assigned, each roll creates a new option symbol. Only the opening credit of the final (assigned) contract is attributable to the delivery event. Earlier roll legs remain in the pre-purchase options P/L bucket. Net P/L is correct — only effective basis display is affected. Verify on first occurrence of a multi-roll pre-purchase assignment.
+
+### Pre-purchase option closed after shares are purchased
+If a put (or call) opened before you owned shares is closed on or after the day you buy shares, the closing transaction falls inside the campaign window and appears as a negative premium entry from day one of the campaign. The opening credit stays in pre-purchase P/L. Net P/L across both legs is correct. First observed: SOFI Dec 2025 (Nov 26 STO, Dec 2 BTC on same day as share purchase).
+
+### Multiple puts assigned simultaneously
+If two puts on the same ticker are both assigned on the same date (e.g., both expire ITM at the same expiry), both opening credits are summed into the campaign. Untested — verify share count and cost basis on first occurrence.
 
 ---
 
