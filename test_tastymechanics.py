@@ -886,20 +886,23 @@ _ct_strat = _ct.groupby('Trade Type').agg(
 # Trade counts per strategy
 check_int('CT strategy Short Put count',        int(_ct_strat.loc['Short Put',    'count']), 32)
 check_int('CT strategy Short Call count',       int(_ct_strat.loc['Short Call',   'count']), 22)
-check_int('CT strategy Iron Condor count',      int(_ct_strat.loc['Iron Condor',  'count']), 17)
+check_int('CT strategy Iron Condor count',      int(_ct_strat.loc['Iron Condor',  'count']), 16)
+check_int('CT strategy Iron Butterfly count',   int(_ct_strat.loc['Iron Butterfly','count']), 1)
 check_int('CT strategy Short Strangle count',   int(_ct_strat.loc['Short Strangle','count']), 6)
 check_int('CT strategy Put Credit Spread count',int(_ct_strat.loc['Put Credit Spread','count']), 10)
 
 # Net P/L per strategy
 check('CT strategy Short Put total P/L',      _ct_strat.loc['Short Put',    'total_pnl'],  1119.70)
 check('CT strategy Short Call total P/L',     _ct_strat.loc['Short Call',   'total_pnl'],   732.93)
-check('CT strategy Iron Condor total P/L',    _ct_strat.loc['Iron Condor',  'total_pnl'],  -389.29)
+check('CT strategy Iron Condor total P/L',    _ct_strat.loc['Iron Condor',  'total_pnl'],  -419.13)
+check('CT strategy Iron Butterfly total P/L', _ct_strat.loc['Iron Butterfly','total_pnl'],    29.84)
 check('CT strategy Put Credit Spread P/L',    _ct_strat.loc['Put Credit Spread','total_pnl'], -638.86)
 
 # Win counts
 check_int('CT strategy Short Call wins (all)',  int(_ct_strat.loc['Short Call', 'wins']), 22)
 check_int('CT strategy Short Put wins',         int(_ct_strat.loc['Short Put',  'wins']), 30)
-check_int('CT strategy Iron Condor wins',       int(_ct_strat.loc['Iron Condor','wins']), 13)
+check_int('CT strategy Iron Condor wins',        int(_ct_strat.loc['Iron Condor',   'wins']), 12)
+check_int('CT strategy Iron Butterfly wins',    int(_ct_strat.loc['Iron Butterfly','wins']),  1)
 
 # Short Put (x2) — multi-contract trade recorded as single row
 _sp2 = _ct[_ct['Trade Type'] == 'Short Put (x2)']
@@ -1111,21 +1114,37 @@ check_int('ds: Call Debit Spread',
           _make_row('Equity Option', 'CALL', -1, 110),
       )), 'Call Debit Spread')
 
-# Call Butterfly — 2 long calls + 1 short call, 3 strikes, 1 expiry
-check_int('ds: Call Butterfly',
+# Long Call Butterfly — 2 long calls + 1 short call, 3 strikes, 1 expiry
+check_int('ds: Long Call Butterfly',
       detect_strategy(_make_df(
           _make_row('Equity Option', 'CALL',  1,  95, '2026-06-20'),
           _make_row('Equity Option', 'CALL', -1, 100, '2026-06-20'),
           _make_row('Equity Option', 'CALL',  1, 105, '2026-06-20'),
-      )), 'Call Butterfly')
+      )), 'Long Call Butterfly')
 
-# Put Butterfly — 2 long puts + 1 short put, 3 strikes, 1 expiry
-check_int('ds: Put Butterfly',
+# Long Put Butterfly — 2 long puts + 1 short put, 3 strikes, 1 expiry
+check_int('ds: Long Put Butterfly',
       detect_strategy(_make_df(
           _make_row('Equity Option', 'PUT',  1,  95, '2026-06-20'),
           _make_row('Equity Option', 'PUT', -1, 100, '2026-06-20'),
           _make_row('Equity Option', 'PUT',  1, 105, '2026-06-20'),
-      )), 'Put Butterfly')
+      )), 'Long Put Butterfly')
+
+# Short Call Butterfly — 1 long body (qty 2) + 2 short wings, 3 strikes, 1 expiry
+check_int('ds: Short Call Butterfly',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL',  2, 100, '2026-06-20'),
+          _make_row('Equity Option', 'CALL', -1,  95, '2026-06-20'),
+          _make_row('Equity Option', 'CALL', -1, 105, '2026-06-20'),
+      )), 'Short Call Butterfly')
+
+# Short Put Butterfly — 1 long body (qty 2) + 2 short wings, 3 strikes, 1 expiry
+check_int('ds: Short Put Butterfly',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'PUT',  2, 100, '2026-06-20'),
+          _make_row('Equity Option', 'PUT', -1,  95, '2026-06-20'),
+          _make_row('Equity Option', 'PUT', -1, 105, '2026-06-20'),
+      )), 'Short Put Butterfly')
 
 # Calendar Spread — same strike, 2 expiries (calls)
 check_int('ds: Calendar Spread (calls)',

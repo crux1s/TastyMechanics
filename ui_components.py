@@ -91,11 +91,16 @@ def detect_strategy(ticker_df):
     if lc == 2 and sc == 1 and len(strikes) == 3 and len(exps) == 1:
         _sc_strikes = ticker_df[ticker_df.apply(identify_pos_type, axis=1) == 'Short Call']['Strike Price'].dropna()
         if not _sc_strikes.empty and sorted(strikes)[0] < _sc_strikes.iloc[0] < sorted(strikes)[-1]:
-            return 'Call Butterfly'
+            return 'Long Call Butterfly'
     if lp == 2 and sp == 1 and len(strikes) == 3 and len(exps) == 1:
         _sp_strikes = ticker_df[ticker_df.apply(identify_pos_type, axis=1) == 'Short Put']['Strike Price'].dropna()
         if not _sp_strikes.empty and sorted(strikes)[0] < _sp_strikes.iloc[0] < sorted(strikes)[-1]:
-            return 'Put Butterfly'
+            return 'Long Put Butterfly'
+    # Short Butterfly: 1 long body (qty 2) + 2 short wings, 3 strikes, 1 expiry
+    if lc == 1 and sc == 2 and len(strikes) == 3 and len(exps) == 1:
+        return 'Short Call Butterfly'
+    if lp == 1 and sp == 2 and len(strikes) == 3 and len(exps) == 1:
+        return 'Short Put Butterfly'
     if ls > 0 and sc > 0 and sp > 0: return 'Covered Strangle'
     if ls > 0 and sc > 0:            return 'Covered Call'
     if sp >= 1 and sc >= 1 and lc >= 1: return 'Jade Lizard'

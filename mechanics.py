@@ -630,6 +630,10 @@ def _classify_trade_type(
                     short_qty_total == 2 and long_qty_total == 2 and
                     len(strikes_all) == 3 and len(expirations) == 1)
 
+    is_short_butterfly = (n_long_legs == 1 and n_short_legs == 2 and
+                          long_qty_total == 2 and short_qty_total == 2 and
+                          len(strikes_all) == 3 and len(expirations) == 1)
+
     has_short_put_only  = any('PUT'  in c for c in short_cp) and not any('PUT'  in c for c in long_cp)
     has_call_spread_leg = any('CALL' in c for c in short_cp) and any('CALL' in c for c in long_cp)
     is_jade_lizard = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1
@@ -644,13 +648,22 @@ def _classify_trade_type(
             elif lp and not lc: return 'Long Put'
             else:               return 'Long Strangle'
         elif is_butterfly:
-            return 'Call Butterfly' if len(call_strikes.unique()) == 3 else 'Put Butterfly'
+            return 'Long Call Butterfly' if len(call_strikes.unique()) == 3 else 'Long Put Butterfly'
+        elif is_short_butterfly:
+            return 'Short Call Butterfly' if len(call_strikes.unique()) == 3 else 'Short Put Butterfly'
         elif is_jade_lizard:
             return 'Jade Lizard'
         elif is_calendar:
             return 'Calendar Spread'
         elif w_call > 0 and w_put > 0:
-            return 'Iron Condor'
+            if short_opens_sp['Strike Price'].nunique() == 1:
+                return 'Iron Butterfly'
+            elif long_opens_sp['Strike Price'].nunique() == 1:
+                return 'Reverse Iron Butterfly'
+            elif is_credit:
+                return 'Iron Condor'
+            else:
+                return 'Reverse Iron Condor'
         elif w_call > 0:
             return 'Call Credit Spread' if is_credit else 'Call Debit Spread'
         else:
@@ -714,6 +727,10 @@ def _calculate_capital_risk(
                     short_qty_total == 2 and long_qty_total == 2 and
                     len(strikes_all) == 3 and len(expirations) == 1)
 
+    is_short_butterfly = (n_long_legs == 1 and n_short_legs == 2 and
+                          long_qty_total == 2 and short_qty_total == 2 and
+                          len(strikes_all) == 3 and len(expirations) == 1)
+
     has_short_put_only  = any('PUT'  in c for c in short_cp) and not any('PUT'  in c for c in long_cp)
     has_call_spread_leg = any('CALL' in c for c in short_cp) and any('CALL' in c for c in long_cp)
     is_jade_lizard = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1
@@ -725,6 +742,9 @@ def _calculate_capital_risk(
         elif is_butterfly:
             wing_width = (strikes_all.max() - strikes_all.min()) * 100 / 2
             return max(abs(open_credit), wing_width, 1)
+        elif is_short_butterfly:
+            wing_width = (strikes_all.max() - strikes_all.min()) * 100 / 2
+            return max(wing_width - open_credit, 1)   # max loss = wing width minus credit received
         elif is_jade_lizard:
             _jl_put_strike = float(put_strikes.min()) if len(put_strikes) > 0 else 0.0
             return max(_jl_put_strike * 100 - abs(open_credit), 1)

@@ -14,12 +14,6 @@ PMCC, diagonals, ratio spreads, and rolled calendars may not be classified with 
 ### Long Straddle
 Classified as **'Long Strangle'** — the classifier detects long call + long put but does not check whether the strikes are identical. A straddle (same strike) and a strangle (different strikes) both return 'Long Strangle'. P&L is correct.
 
-### Iron Butterfly / Reverse Iron Butterfly
-Both classified as **'Iron Condor'** — the 4-leg detection path fires on any combination of short call + short put + long call + long put, regardless of whether the inner strikes are the same (butterfly) or different (condor). Distinguish manually by checking strike prices. P&L is correct.
-
-### Reverse Iron Condor
-Classified as **'Iron Condor'** — the debit (long volatility) variant has the same 4-leg structure as the credit variant. No debit/credit distinction is applied at the Iron Condor detection branch. P&L is correct.
-
 ### Collar
 Classified as **'Put Debit Spread'** — a collar (short call + long put against long stock) has one long leg and one short leg with no strike width, so it routes to the vertical spread fallback. No campaign/stock-ownership check is applied for collars. P&L is correct.
 
@@ -32,8 +26,8 @@ Classified as a **vertical spread label** — diagonals have different strikes A
 ### Ratio Spreads (Back Spreads / Front Spreads)
 Likely classified as **'Short (other)'** or misrouted — ratio spreads have unequal quantities (e.g. sell 1, buy 2), which breaks the classifier's assumption of matched leg quantities. Verify label and capital risk on first occurrence. P&L is correct.
 
-### Butterfly and Calendar direction not preserved
-Both **Long and Short Butterfly** variants are labelled identically ('Call Butterfly' / 'Put Butterfly') with no long/short prefix. All **Calendar Spread** variants (long/short, call/put) are labelled 'Calendar Spread' with no direction or type distinction. P&L is correct in both cases.
+### Calendar Spread direction not preserved
+All **Calendar Spread** variants (long/short, call/put) are labelled 'Calendar Spread' with no direction or type distinction. P&L is correct.
 
 ### Reverse Jade Lizard
 Detected as a Jade Lizard but capital risk may be understated — max loss is on the call side, not the put side. Verify if you trade this structure.

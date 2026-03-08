@@ -6,7 +6,11 @@
       "Bash(PYTHONIOENCODING=utf-8 python3 test_tastymechanics.py)",
       "Bash(grep -i \"sofi\" /c/Users/tim_l/Downloads/TastyMechanics/*.csv)",
       "WebFetch(domain:optopsy.readthedocs.io)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(ls -lh \"C:\\\\Users\\\\tim_l\\\\Downloads\\\\TastyMechanics\"/*.csv)",
+      "Bash(python3 test_tastymechanics.py)",
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c \":*)",
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import mechanics; print\\(dir\\(mechanics\\)\\)\")"
     ]
   }
 }
