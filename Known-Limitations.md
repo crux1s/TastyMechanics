@@ -9,7 +9,31 @@ P&L figures are cash-flow based (what actually hit your account) and use FIFO co
 ## Trade Classification
 
 ### Complex multi-leg structures
-PMCC, diagonals, ratio spreads, and rolled calendars may not be classified with the correct strategy label. **P&L totals are correct** — only the Trade Type label in the closed trades table may be wrong.
+PMCC, diagonals, ratio spreads, and rolled calendars may not be classified with the correct strategy label. **P&L totals are correct** — only the Trade Type label in the closed trades table may be wrong. Specific known gaps are listed below — all untested with real data, verify on first occurrence.
+
+### Long Straddle
+Classified as **'Long Strangle'** — the classifier detects long call + long put but does not check whether the strikes are identical. A straddle (same strike) and a strangle (different strikes) both return 'Long Strangle'. P&L is correct.
+
+### Iron Butterfly / Reverse Iron Butterfly
+Both classified as **'Iron Condor'** — the 4-leg detection path fires on any combination of short call + short put + long call + long put, regardless of whether the inner strikes are the same (butterfly) or different (condor). Distinguish manually by checking strike prices. P&L is correct.
+
+### Reverse Iron Condor
+Classified as **'Iron Condor'** — the debit (long volatility) variant has the same 4-leg structure as the credit variant. No debit/credit distinction is applied at the Iron Condor detection branch. P&L is correct.
+
+### Collar
+Classified as **'Put Debit Spread'** — a collar (short call + long put against long stock) has one long leg and one short leg with no strike width, so it routes to the vertical spread fallback. No campaign/stock-ownership check is applied for collars. P&L is correct.
+
+### Call Condor / Put Condor (4-leg single-type)
+Classified as a **2-leg spread label** (e.g. 'Call Debit Spread') — a 4-leg all-call or all-put condor has two long legs and two short legs, but the classifier treats the width detection as a simple spread. Verify the Trade Type label on first occurrence. P&L is correct.
+
+### Diagonal Spreads (PMCC, Long/Short Call/Put Diagonal)
+Classified as a **vertical spread label** — diagonals have different strikes AND different expirations, so the calendar check (same strike required) fails and the trade falls through to the call/put credit/debit spread branch. Partially covered by the general 'Complex multi-leg structures' note above. P&L is correct.
+
+### Ratio Spreads (Back Spreads / Front Spreads)
+Likely classified as **'Short (other)'** or misrouted — ratio spreads have unequal quantities (e.g. sell 1, buy 2), which breaks the classifier's assumption of matched leg quantities. Verify label and capital risk on first occurrence. P&L is correct.
+
+### Butterfly and Calendar direction not preserved
+Both **Long and Short Butterfly** variants are labelled identically ('Call Butterfly' / 'Put Butterfly') with no long/short prefix. All **Calendar Spread** variants (long/short, call/put) are labelled 'Calendar Spread' with no direction or type distinction. P&L is correct in both cases.
 
 ### Reverse Jade Lizard
 Detected as a Jade Lizard but capital risk may be understated — max loss is on the call side, not the put side. Verify if you trade this structure.
