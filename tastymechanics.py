@@ -500,9 +500,9 @@ def main():
     # ── Window-dependent slices (re-run on every window change, fast) ─────────────
     # ── Time window selector — top right ──────────────────────────────────────────
     time_options = ['YTD', 'Last 7 Days', 'Last Month', 'Last 3 Months', 'Half Year', '1 Year', 'All Time']
-    _hdr_left, _hdr_right = st.columns([3, 1])
-    with _hdr_right:
-        selected_period = st.selectbox('Time Window', time_options, index=6, label_visibility='collapsed')
+    if 'tw_val' not in st.session_state:
+        st.session_state['tw_val'] = 'All Time'
+    selected_period = st.session_state['tw_val']
 
     # Map each period label to the corresponding start_date.
     # lambdas are evaluated lazily so latest_date and df are captured at call time.
@@ -523,8 +523,7 @@ def main():
     window_label = '🗓 Window: %s → %s (%s)' % (
         start_date.strftime('%d/%m/%Y'), latest_date.strftime('%d/%m/%Y'), selected_period)
 
-    with _hdr_left:
-        st.markdown("""
+    st.markdown("""
             <div class='sync-header'>
                 📡 <b>DATA SYNC:</b> %s UTC &nbsp;|&nbsp;
                 📅 <b>WINDOW:</b> <span class='highlight-range'>%s</span> → %s (%s)
@@ -672,15 +671,17 @@ def main():
     else:
         m2.caption('Realised P/L as a % of net deposits — how hard your capital is working. Excludes unrealised gains.')
 
+    _short_warn_slot = st.empty()
     if _is_short_window:
-        st.warning(
-            '⚠️ **Short window — Realized P/L may be misleading.** '
-            'This view shows raw cash flows in the selected window. '
-            'If a trade was *opened* in a previous window and *closed* in this one, '
-            'only the buyback cost appears here — the original credit is in an earlier window. '
-            'This can make an actively managed period look like a loss even when the underlying trades are profitable. '
-            '**All Time or YTD give the most reliable P/L picture.**'
-        )
+        with _short_warn_slot:
+            st.warning(
+                '⚠️ **Short window — Realized P/L may be misleading.** '
+                'This view shows raw cash flows in the selected window. '
+                'If a trade was *opened* in a previous window and *closed* in this one, '
+                'only the buyback cost appears here — the original credit is in an earlier window. '
+                'This can make an actively managed period look like a loss even when the underlying trades are profitable. '
+                '**All Time or YTD give the most reliable P/L picture.**'
+            )
     _cap_label = '%.1f%%' % cap_eff_score if cap_eff_score is not None else 'N/A'
     m3.metric('Cap Efficiency', _cap_label)
     m3.caption('Annualised return on capital in shares (Window P/L ÷ Capital Deployed × 365 ÷ Window Days). Changes with the time window. Benchmark: S&P ~10%/yr.' if cap_eff_score is not None else 'No capital currently deployed in share positions.')
@@ -720,6 +721,7 @@ def main():
 
 
     # ── Period Comparison Card ─────────────────────────────────────────────────────
+    _period_cmp_slot = st.empty()
     if selected_period != 'All Time' and not _df_prior.empty:
         _pnl_delta  = _pnl_display - prior_period_pnl
         _delta_sign = '+' if _pnl_delta >= 0 else ''
@@ -745,16 +747,17 @@ def main():
             _cmp_block('Dividends', _curr_div, _prev_div)
         )
 
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg,' + COLOURS['card_bg'] + ',' + COLOURS['card_bg2'] + ');border:1px solid ' + COLOURS['border'] + ';'
-            f'border-radius:10px;padding:14px 18px;margin:0 0 20px 0;">'
-            f'<div style="color:' + COLOURS['text_muted'] + ';font-size:0.72rem;text-transform:uppercase;'
-            f'letter-spacing:0.06em;margin-bottom:10px;">'
-            f'📅 {selected_period} vs prior {_period_lbl}</div>'
-            f'<div style="display:flex;flex-wrap:wrap;gap:0;">{blocks}</div>'
-            f'</div>',
-            unsafe_allow_html=True
-        )
+        with _period_cmp_slot:
+            st.markdown(
+                f'<div style="background:linear-gradient(135deg,' + COLOURS['card_bg'] + ',' + COLOURS['card_bg2'] + ');border:1px solid ' + COLOURS['border'] + ';'
+                f'border-radius:10px;padding:14px 18px;margin:0 0 20px 0;">'
+                f'<div style="color:' + COLOURS['text_muted'] + ';font-size:0.72rem;text-transform:uppercase;'
+                f'letter-spacing:0.06em;margin-bottom:10px;">'
+                f'📅 {selected_period} vs prior {_period_lbl}</div>'
+                f'<div style="display:flex;flex-wrap:wrap;gap:0;">{blocks}</div>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
 
     # ── Shared derived slices — computed once, used by Tabs 1 and 2 ───────────────
     # all_cdf: closed trades filtered to current time window (falls back to all-time
@@ -802,6 +805,11 @@ def main():
             st.caption('Upload data to enable report export.')
 
     # ── TABS ───────────────────────────────────────────────────────────────────────
+    # Keep all in-tab selectors visually in sync. Must happen before widgets are
+    # rendered — Streamlit ignores `index=` once a key exists in session state.
+    for _tw_k in ('tw_tab1', 'tw_tab2', 'tw_tab4', 'tw_tab5'):
+        st.session_state[_tw_k] = st.session_state['tw_val']
+
     tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
         '📡 Open Positions',
         '📈 Derivatives Performance',
@@ -812,19 +820,43 @@ def main():
     ])
 
     with tab0: render_tab0(df_open, _expiry_alerts, latest_date)
-    with tab1: render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
-                           df_window, start_date, latest_date, window_label,
-                           _win_label, _win_suffix)
-    with tab2: render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
-                           df_window, _win_label, _win_suffix, _win_start_str, _win_end_str)
+    with tab1:
+        with st.columns([4, 1])[1]:
+            st.selectbox('Time Window', time_options,
+                         index=time_options.index(st.session_state['tw_val']),
+                         key='tw_tab1', label_visibility='collapsed',
+                         on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab1']}))
+        render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
+                    df_window, start_date, latest_date, window_label,
+                    _win_label, _win_suffix)
+    with tab2:
+        with st.columns([4, 1])[1]:
+            st.selectbox('Time Window', time_options,
+                         index=time_options.index(st.session_state['tw_val']),
+                         key='tw_tab2', label_visibility='collapsed',
+                         on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab2']}))
+        render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
+                    df_window, _win_label, _win_suffix, _win_start_str, _win_end_str)
     with tab3: render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime)
-    with tab4: render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
-                           pure_options_tickers, pure_opts_per_ticker,
-                           capital_deployed, start_date, latest_date,
-                           _is_all_time, selected_period, _win_label, _win_suffix,
-                           use_lifetime)
-    with tab5: render_tab5(df_window, total_deposited, total_withdrawn,
-                           div_income, int_net, _win_label)
+    with tab4:
+        with st.columns([4, 1])[1]:
+            st.selectbox('Time Window', time_options,
+                         index=time_options.index(st.session_state['tw_val']),
+                         key='tw_tab4', label_visibility='collapsed',
+                         on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab4']}))
+        render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
+                    pure_options_tickers, pure_opts_per_ticker,
+                    capital_deployed, start_date, latest_date,
+                    _is_all_time, selected_period, _win_label, _win_suffix,
+                    use_lifetime)
+    with tab5:
+        with st.columns([4, 1])[1]:
+            st.selectbox('Time Window', time_options,
+                         index=time_options.index(st.session_state['tw_val']),
+                         key='tw_tab5', label_visibility='collapsed',
+                         on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab5']}))
+        render_tab5(df_window, total_deposited, total_withdrawn,
+                    div_income, int_net, _win_label)
 
 
 

@@ -10,7 +10,11 @@
       "Bash(ls -lh \"C:\\\\Users\\\\tim_l\\\\Downloads\\\\TastyMechanics\"/*.csv)",
       "Bash(python3 test_tastymechanics.py)",
       "Bash(PYTHONIOENCODING=utf-8 python3 -c \":*)",
-      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import mechanics; print\\(dir\\(mechanics\\)\\)\")"
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import mechanics; print\\(dir\\(mechanics\\)\\)\")",
+      "Bash(wc -l /c/Users/tim_l/Downloads/TastyMechanics/tabs/*.py)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\(''tastymechanics.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''tastymechanics.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(python3 -c \"import streamlit; print\\(streamlit.__version__\\)\")"
     ]
   }
 }

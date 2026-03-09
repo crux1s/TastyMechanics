@@ -4,6 +4,12 @@ A Streamlit dashboard for wheel traders and theta harvesters on TastyTrade. Anal
 
 ---
 
+## Development Environment
+
+Always use the virtual environment's Python to run commands (e.g., `python3 -m streamlit run` or `.venv/bin/streamlit`) instead of calling tools like `streamlit` directly, as they may not be on PATH.
+
+---
+
 ## Running the App
 
 ```bash
@@ -19,10 +25,12 @@ The `streamlit` binary is not on PATH — always invoke via `python3 -m streamli
 Always run after any change:
 
 ```bash
-python3 test_tastymechanics.py
+PYTHONIOENCODING=utf-8 python3 test_tastymechanics.py
 ```
 
-Expected: `294 tests | 294 passed | 0 failed` (24 sections)
+Expected: `299 tests | 299 passed | 0 failed` (24 sections)
+
+The `PYTHONIOENCODING=utf-8` prefix is required on Windows — omitting it causes a `charmap` codec error on the Unicode characters in test output.
 
 To debug a failing section, scan stdout for the section header (e.g., `── 17.`) — the test file has no per-section runner.
 
@@ -89,13 +97,17 @@ tastymechanics.py   Streamlit wiring — sidebar, cache, tab orchestration
 
 **effective_basis()** — `use_lifetime=True` returns raw `blended_basis` (no premium offset). Default returns `(total_cost - premiums - dividends) / total_shares`.
 
+**Campaign event types** — `c.events` is a list of dicts `{date, type, detail, cash}`. Known types: `'Entry'`, `'Add'`, `'Exit'`, `'Assignment Put (STO)'` (entry via put assignment — put credit excluded from cost basis, triggers amber card banner in tab3), `'Mid-campaign Assignment'` (shares added mid-campaign via put assignment — premium IS already in basis, triggers blue card banner). The Share & Dividend Events table filters out any event type containing 'assign' (case-insensitive), so assignment events are card-only. Detection in `build_campaigns()`: `_find_assignment_premium(t, row)` is called on both the entry branch and the add-to-existing branch.
+
+**Strategy classifier labels** — `_classify_trade_type()` returns direction-aware butterfly labels: `'Long Call/Put Butterfly'` (buy wings, sell body) and `'Short Call/Put Butterfly'` (sell wings, buy body ×2). Iron Condor variants: `'Iron Butterfly'` (short legs share same ATM strike), `'Reverse Iron Butterfly'` (long legs share same ATM strike), `'Iron Condor'` (credit, short legs at different strikes), `'Reverse Iron Condor'` (debit). Both `_classify_trade_type()` and `_calculate_capital_risk()` use matching `is_butterfly` / `is_short_butterfly` flags — keep them in sync if either is changed.
+
 ---
 
 ## Important Files
 
 - `ROADMAP.md` — pending work, prioritised
 - `Known-Limitations.md` — what doesn't work or is untested
-- `test_tastymechanics.py` — 294 tests, 24 sections
+- `test_tastymechanics.py` — 299 tests, 24 sections
 - `config.py` — `KNOWN_INDEXES`, `COLOURS`, `DTE_*`, `WIN_RATE_*`, `FIFO_EPSILON`
 
 ---
@@ -109,6 +121,7 @@ tastymechanics.py   Streamlit wiring — sidebar, cache, tab orchestration
 - Don't use `qty != 0` — use `abs(qty) > FIFO_EPSILON`
 - Don't add bullet point lists to prose responses — project owner prefers clean prose
 - Don't add `.iloc[0]` without an empty guard
+- Don't implement external file formats by guessing — ask for a real sample first (column names, ordering, and value formats can differ from what seems obvious)
 
 ---
 
