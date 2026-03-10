@@ -823,7 +823,6 @@ def main():
     with tab1:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,
-                         index=time_options.index(st.session_state['tw_val']),
                          key='tw_tab1', label_visibility='collapsed',
                          on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab1']}))
         render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
@@ -832,7 +831,6 @@ def main():
     with tab2:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,
-                         index=time_options.index(st.session_state['tw_val']),
                          key='tw_tab2', label_visibility='collapsed',
                          on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab2']}))
         render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
@@ -841,7 +839,6 @@ def main():
     with tab4:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,
-                         index=time_options.index(st.session_state['tw_val']),
                          key='tw_tab4', label_visibility='collapsed',
                          on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab4']}))
         render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
@@ -852,7 +849,6 @@ def main():
     with tab5:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,
-                         index=time_options.index(st.session_state['tw_val']),
                          key='tw_tab5', label_visibility='collapsed',
                          on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab5']}))
         render_tab5(df_window, total_deposited, total_withdrawn,
