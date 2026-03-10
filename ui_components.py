@@ -150,9 +150,23 @@ def _style_ann_ret(row):
     return styles
 
 def _style_chain_row(row):
-    """Highlight the open leg in a roll-chain detail table."""
+    """Highlight open leg and alternate pair tints in a roll-chain detail table."""
     if row.get('_open', False):
         return ['background-color: rgba(0,204,150,0.12); font-weight:600'] * len(row)  # COLOURS['green'] @ 12% opacity
+    pair = row.get('_pair', -1)
+    if pair < 0:
+        return [''] * len(row)
+    if pair % 2 == 0:
+        return ['background-color: rgba(88,166,255,0.09)'] * len(row)   # COLOURS['blue'] @ 9% opacity
+    return ['background-color: rgba(150,110,255,0.09)'] * len(row)       # purple @ 9% opacity
+
+def _style_risk_row(row):
+    """Tint defined-risk rows blue, undefined-risk rows orange in the strategy table."""
+    risk = row.get('_risk', None)
+    if risk is True:
+        return ['background-color: rgba(88,166,255,0.09)'] * len(row)   # COLOURS['blue'] @ 9%
+    if risk is False:
+        return ['background-color: rgba(255,165,0,0.08)'] * len(row)    # COLOURS['orange'] @ 8%
     return [''] * len(row)
 
 def _color_cash_row(row):

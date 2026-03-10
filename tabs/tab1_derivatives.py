@@ -22,7 +22,7 @@ from ui_components import (
     identify_pos_type, translate_readable, format_cost_basis, detect_strategy,
     fmt_dollar, color_win_rate, color_pnl_cell,
     _pnl_chip, _cmp_block, _dte_chip,
-    _fmt_ann_ret, _style_ann_ret, _style_chain_row,
+    _fmt_ann_ret, _style_ann_ret, _style_chain_row, _style_risk_row,
     _color_cash_row, _color_cash_total,
     chart_layout, _badge_inline_style, render_position_card,
 )
@@ -155,18 +155,30 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                 Med_DTE=('DTE at Open', 'median'),
             ).reset_index().sort_values('Total_PNL', ascending=False).round(1)
             strat_df.columns = ['Strategy', 'Trades', 'Win %', 'P/L', 'Capture %', 'Med Days in Trade', 'DTE at Entry']
+            strat_df['_risk'] = strat_df['Strategy'].map(
+                all_cdf.groupby('Trade Type')['Spread'].first()
+            )
+            # Covered Call is defined risk — stock ownership fully covers the short call obligation.
+            # Covered Straddle/Strangle retain undefined downside from the short put leg.
+            strat_df.loc[strat_df['Strategy'] == 'Covered Call', '_risk'] = True
             st.markdown(f'##### 🧩 Defined vs Undefined Risk — by Strategy {_win_label}', unsafe_allow_html=True)
-            st.dataframe(strat_df.style.format({
-                'Win %':     lambda x: '{:.1f}%'.format(x),
-                'Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
-                'P/L':       fmt_dollar,
-                'Med Days in Trade': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-                'DTE at Entry':       lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
-            }).map(color_win_rate, subset=['Win %'])
-            .map(lambda v: 'color: #00cc96' if isinstance(v, (int, float)) and v > 0
-                else ('color: #ef553b' if isinstance(v, (int, float)) and v < 0 else ''),
-                subset=['P/L']),
-            width='stretch', hide_index=True)
+            st.caption('🔵 Defined risk (spread / protected)   🟠 Undefined risk (naked short)')
+            st.dataframe(
+                strat_df[['Strategy', 'Trades', 'Win %', 'P/L', 'Capture %', 'Med Days in Trade', 'DTE at Entry', '_risk']]
+                .style.apply(_style_risk_row, axis=1)
+                .format({
+                    'Win %':     lambda x: '{:.1f}%'.format(x),
+                    'Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
+                    'P/L':       fmt_dollar,
+                    'Med Days in Trade': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                    'DTE at Entry':       lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
+                }).map(color_win_rate, subset=['Win %'])
+                .map(lambda v: 'color: #00cc96' if isinstance(v, (int, float)) and v > 0
+                    else ('color: #ef553b' if isinstance(v, (int, float)) and v < 0 else ''),
+                    subset=['P/L']),
+                width='stretch', hide_index=True,
+                column_config={'_risk': None},
+            )
 
         st.markdown('---')
         # ── Performance by Ticker — header with independent window selector ────

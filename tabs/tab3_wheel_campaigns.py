@@ -246,9 +246,11 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                     with st.expander(chain_label, expanded=is_open_chain):
                         chain_rows = []
                         last_open_date = None
+                        pair_idx = -1
                         for leg_i, leg in enumerate(chain):
                             sub = str(leg['sub_type']).lower()
                             if 'to open' in sub:
+                                pair_idx += 1
                                 action = '↪️ Sell to Open'
                                 last_open_date = leg['date']
                                 dit_str = ''
@@ -281,22 +283,23 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                                 'Strike': '%.1f%s' % (leg['strike'], cp[0]),
                                 'Expiry': leg['exp'], 'DTE': dte_str, 'Days Held': dit_str,
                                 'Credit/Debit Rcvd': leg['total'], '_open': is_open_leg,
+                                '_pair': pair_idx,
                             })
                         ch_df = pd.DataFrame(chain_rows)
                         ch_df = pd.concat([ch_df, pd.DataFrame([{
                             'Date': '', 'Action': '━━ Chain Total',
                             'Strike': '', 'Expiry': '', 'DTE': '', 'Days Held': '',
-                            'Credit/Debit Rcvd': ch_pnl, '_open': False,
+                            'Credit/Debit Rcvd': ch_pnl, '_open': False, '_pair': -1,
                         }])], ignore_index=True)
                         st.dataframe(
-                            ch_df[['Date', 'Action', 'Strike', 'Expiry', 'DTE', 'Days Held', 'Credit/Debit Rcvd', '_open']]
+                            ch_df[['Date', 'Action', 'Strike', 'Expiry', 'DTE', 'Days Held', 'Credit/Debit Rcvd', '_open', '_pair']]
                             .style.apply(_style_chain_row, axis=1)
                             .format({'Credit/Debit Rcvd': lambda x: '${:.2f}'.format(x)})
                             .map(lambda v: 'color: #00cc96' if isinstance(v, float) and v > 0
                                 else ('color: #ef553b' if isinstance(v, float) and v < 0 else ''),
                                 subset=['Credit/Debit Rcvd']),
                             width='stretch', hide_index=True,
-                            column_config={'_open': None}
+                            column_config={'_open': None, '_pair': None}
                         )
 
             st.markdown('**📋 Share & Dividend Events**')
