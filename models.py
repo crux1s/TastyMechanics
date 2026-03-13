@@ -66,17 +66,18 @@ class Campaign:
     status         'open' or 'closed'
     events         Ordered list of dicts — {date, type, detail, cash} for the UI log
     """
-    ticker:         str
-    total_shares:   float
-    total_cost:     float
-    blended_basis:  float
-    premiums:       float
-    dividends:      float
-    exit_proceeds:  float
-    start_date:     pd.Timestamp
-    end_date:       Optional[pd.Timestamp]
-    status:         str                     # 'open' | 'closed'
-    events:         list = field(default_factory=list)
+    ticker:                  str
+    total_shares:            float
+    total_cost:              float
+    blended_basis:           float
+    premiums:                float
+    dividends:               float
+    exit_proceeds:           float
+    start_date:              pd.Timestamp
+    end_date:                Optional[pd.Timestamp]
+    status:                  str                     # 'open' | 'closed'
+    events:                  list = field(default_factory=list)
+    pre_campaign_close_net:  float = 0.0             # net cash from closes of pre-purchase options
 
 
 # ── Computation output ────────────────────────────────────────────────────────

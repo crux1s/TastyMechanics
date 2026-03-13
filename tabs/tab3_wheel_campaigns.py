@@ -172,6 +172,17 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             )
         else:
             _mid_asgn_note = ''
+        if c.pre_campaign_close_net != 0.0:
+            _pre_camp_note = (
+                '<div style="margin-top:6px;padding:6px 10px;'
+                'background:rgba(240,165,0,0.08);border-radius:6px;'
+                'font-size:0.72em;color:#f0a500;text-align:left;">'
+                '&#9888;&#65039; Premiums include <b>$%.2f</b> in closing debits from options opened '
+                'before the share purchase. Their opening credits are in pre-purchase P/L.'
+                '</div>' % c.pre_campaign_close_net
+            )
+        else:
+            _pre_camp_note = ''
         card_html = (
             '<div style="border:1px solid {border};border-radius:10px;padding:16px 20px 12px 20px;'
             'margin-bottom:12px;background:rgba(255,255,255,0.03);">'
@@ -196,7 +207,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             '<div style="font-size:1.0em;font-weight:600;">${premiums:.2f}</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">REALIZED P/L</div>'
             '<div style="font-size:1.1em;font-weight:700;color:{pnl_color};">${pnl:+.2f}</div></div>'
-            '</div>{assignment_note}{mid_asgn_note}</div>'
+            '</div>{assignment_note}{mid_asgn_note}{pre_camp_note}</div>'
         ).format(
             border=COLOURS['green'] if is_open else '#444',
             ticker=xe(ticker), camp_n=i + 1,
@@ -210,6 +221,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             premiums=c.premiums, pnl=rpnl, pnl_color=pnl_color,
             assignment_note=_assignment_note,
             mid_asgn_note=_mid_asgn_note,
+            pre_camp_note=_pre_camp_note,
         )
         st.markdown(card_html, unsafe_allow_html=True)
 
@@ -356,6 +368,17 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                     )
                 else:
                     _mid_asgn_note = ''
+                if c.pre_campaign_close_net != 0.0:
+                    _pre_camp_note = (
+                        '<div style="margin-top:6px;padding:6px 10px;'
+                        'background:rgba(240,165,0,0.08);border-radius:6px;'
+                        'font-size:0.72em;color:#f0a500;text-align:left;">'
+                        '&#9888;&#65039; Premiums include <b>$%.2f</b> in closing debits from options opened '
+                        'before the share purchase. Their opening credits are in pre-purchase P/L.'
+                        '</div>' % c.pre_campaign_close_net
+                    )
+                else:
+                    _pre_camp_note = ''
                 card_html = (
                     '<div style="border:1px solid {border};border-radius:10px;padding:16px 20px 12px 20px;'
                     'margin-bottom:12px;background:rgba(255,255,255,0.03);">'
@@ -380,7 +403,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                     '<div style="font-size:1.0em;font-weight:600;">${premiums:.2f}</div></div>'
                     '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">REALIZED P/L</div>'
                     '<div style="font-size:1.1em;font-weight:700;color:{pnl_color};">${pnl:+.2f}</div></div>'
-                    '</div>{assignment_note}{mid_asgn_note}</div>'
+                    '</div>{assignment_note}{mid_asgn_note}{pre_camp_note}</div>'
                 ).format(
                     border='#444',
                     ticker=xe(ticker), camp_n=i + 1,
@@ -392,6 +415,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                     premiums=c.premiums, pnl=rpnl, pnl_color=pnl_color,
                     assignment_note=_assignment_note,
                     mid_asgn_note=_mid_asgn_note,
+                    pre_camp_note=_pre_camp_note,
                 )
                 st.markdown(card_html, unsafe_allow_html=True)
 

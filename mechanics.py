@@ -303,6 +303,15 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 status='open', events=events,
             )]
 
+    # Pre-compute earliest STO date per option symbol so we can detect closes
+    # that land inside the campaign window but whose opens predated share purchase.
+    _opt_t = t[t['Instrument_Type'].apply(is_option_row)]
+    _sto_dates: dict = (
+        _opt_t[_opt_t['Sub_Type'].str.lower().str.contains('to open', na=False)]
+        .groupby('Symbol')['Date'].min()
+        .to_dict()
+    )
+
     campaigns: list               = []
     current:   Optional[Campaign] = None
     running_shares                = 0.0
@@ -410,6 +419,13 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 current.premiums += total
                 current.events.append({'date': row.Date, 'type': sub_type,
                     'detail': str(row.Description)[:60], 'cash': total})
+                # Detect orphaned close: a non-open leg whose STO predates the
+                # campaign start. The opening credit sits in pure_options_pnl;
+                # only the closing debit lands here, creating a hidden drag.
+                if 'to open' not in sub_type.lower():
+                    _sto = _sto_dates.get(str(row.Symbol))
+                    if _sto is not None and _sto < current.start_date:
+                        current.pre_campaign_close_net += total
 
         # ── Dividend ───────────────────────────────────────────────────────
         elif sub_type == SUB_DIVIDEND and current is not None:
