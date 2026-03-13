@@ -223,8 +223,8 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
     )
     st.markdown(
         '<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;">'
-        '<b style="color:#58a6ff;">Options trades only</b> — net P/L from closed equity &amp; '
-        'futures options, grouped by the date the trade closed.</div>',
+        '<b style="color:#58a6ff;">Options trades only</b> — net P/L from closed equity- and '
+        'futures-option trades, grouped by the date the trade closed.</div>',
         unsafe_allow_html=True
     )
     _period_df = all_cdf.copy()
@@ -289,8 +289,8 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
     _pcol1, _pcol2 = st.columns(2)
     with _pcol1:
         _wk_c   = _candle_agg('Week')
-        _fig_wk = _candle_fig(_wk_c, 'Weekly P/L' + _win_suffix, '%d %b')
-        _wk_lay = chart_layout('Weekly P/L' + _win_suffix, height=300, margin_t=36)
+        _fig_wk = _candle_fig(_wk_c, 'Weekly Options Equity Curve' + _win_suffix, '%d %b')
+        _wk_lay = chart_layout('Weekly Options Equity Curve' + _win_suffix, height=300, margin_t=36)
         _wk_lay['xaxis']['type']        = 'date'
         _wk_lay['xaxis']['tickformat']  = '%d %b'
         _wk_lay['yaxis']['tickprefix']  = '$'
@@ -301,10 +301,12 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
 
     with _pcol2:
         _mo_c   = _candle_agg('Month')
-        _fig_mo = _candle_fig(_mo_c, 'Monthly P/L' + _win_suffix, '%b %Y')
-        _mo_lay = chart_layout('Monthly P/L' + _win_suffix, height=300, margin_t=36)
+        _fig_mo = _candle_fig(_mo_c, 'Monthly Options Equity Curve' + _win_suffix, '%b %Y')
+        _mo_lay = chart_layout('Monthly Options Equity Curve' + _win_suffix, height=300, margin_t=36)
         _mo_lay['xaxis']['type']        = 'date'
-        _mo_lay['xaxis']['tickformat']  = '%b %Y'
+        _mo_lay['xaxis']['tickmode']    = 'array'
+        _mo_lay['xaxis']['tickvals']    = _mo_c['Period'].tolist()
+        _mo_lay['xaxis']['ticktext']    = [p.strftime('%b %Y') for p in _mo_c['Period']]
         _mo_lay['yaxis']['tickprefix']  = '$'
         _mo_lay['yaxis']['tickformat']  = ',.0f'
         _mo_lay['xaxis']['rangeslider'] = {'visible': False}
@@ -460,7 +462,7 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         st.markdown('---')
         st.markdown(
             f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'
-            f'📅 P/L by Day of Week &amp; Hour of Day {_win_label}</div>',
+            f'🕐 P/L by Day of Week &amp; Hour of Day {_win_label}</div>',
             unsafe_allow_html=True
         )
         st.caption(

@@ -38,7 +38,7 @@ def render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
                 _is_all_time, selected_period, _win_label, _win_suffix,
                 use_lifetime):
     """Tab 4 — All Trades: equity curve, per-ticker table, period charts, volatility metrics."""
-    st.markdown(f'### 🔍 Realized P/L — All Tickers {_win_label}', unsafe_allow_html=True)
+    st.markdown(f'### 🔍 Portfolio Realized P/L {_win_label}', unsafe_allow_html=True)
     st.markdown(
         '<div style="font-size:0.8rem;color:#6b7280;margin-bottom:8px;line-height:1.5;">'
         'Full-history cumulative realized P/L — options, equity sales, dividends and interest. '
@@ -194,60 +194,106 @@ def render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
     st.markdown('---')
     st.markdown(
         f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'
-        f'📅 Total Realized P/L by Week &amp; Month {_win_label}</div>',
+        f'📅 Cash Flow by Week &amp; Month {_win_label}</div>',
         unsafe_allow_html=True
     )
     _daily_pnl['Week']  = _daily_pnl['Date'].dt.to_period('W').apply(lambda p: p.start_time)
     _daily_pnl['Month'] = _daily_pnl['Date'].dt.to_period('M').apply(lambda p: p.start_time)
 
     if not _daily_pnl.empty:
+        _STACK_TYPES = [
+            ('Options', COLOURS['blue'],   'Options'),
+            ('Equity',  COLOURS['orange'], 'Equity'),
+            ('Income',  COLOURS['green'],  'Income'),
+        ]
         _p_col1, _p_col2 = st.columns(2)
         with _p_col1:
-            _pw = _daily_pnl.groupby('Week')['PnL'].sum().reset_index()
-            _pw['Week']   = pd.to_datetime(_pw['Week'])
-            _pw['Colour'] = _pw['PnL'].apply(lambda x: COLOURS['green'] if x >= 0 else COLOURS['red'])
+            _type_cols = [c for c in ('Equity', 'Options', 'Income') if c in _daily_pnl.columns]
+            _pw_agg_cols = _type_cols + ['PnL']
+            _pw = _daily_pnl.groupby('Week')[_pw_agg_cols].sum().reset_index()
+            _pw['Week'] = pd.to_datetime(_pw['Week'])
             _fig_pw = go.Figure()
-            _fig_pw.add_trace(go.Bar(
-                x=_pw['Week'], y=_pw['PnL'],
-                marker_color=_pw['Colour'], marker_line_width=0,
-                customdata=[fmt_dollar(v) for v in _pw['PnL']],
-                hovertemplate='Week of %{x|%d %b}<br><b>%{customdata}</b><extra></extra>'
-            ))
+            for _col, _colour, _label in _STACK_TYPES:
+                if _col not in _pw.columns:
+                    continue
+                _fig_pw.add_trace(go.Bar(
+                    name=_label, x=_pw['Week'], y=_pw[_col],
+                    marker_color=_colour, marker_line_width=0,
+                    customdata=[[fmt_dollar(v), fmt_dollar(t)]
+                                for v, t in zip(_pw[_col], _pw['PnL'])],
+                    hovertemplate=(
+                        'Week of %{x|%d %b}<br>'
+                        '<b>' + _label + ': %{customdata[0]}</b><br>'
+                        'Total: %{customdata[1]}<extra></extra>'
+                    ),
+                ))
             _fig_pw.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
-            _pw_lay = chart_layout('Weekly Total P/L' + _win_suffix, height=280, margin_t=36)
+            _pw_lay = chart_layout('Weekly Cash Flow' + _win_suffix, height=280, margin_t=36)
             _pw_lay['yaxis']['tickprefix'] = '$'
             _pw_lay['yaxis']['tickformat'] = ',.0f'
             _pw_lay['bargap'] = 0.25
+            _pw_lay['barmode'] = 'stack'
+            _pw_lay['legend'] = dict(
+                orientation='h', y=1.12, x=0,
+                font=dict(size=10, family='IBM Plex Sans'),
+            )
             _fig_pw.update_layout(**_pw_lay)
             st.plotly_chart(_fig_pw, width='stretch', config={'displayModeBar': False})
 
         with _p_col2:
-            _pm = _daily_pnl.groupby('Month')['PnL'].sum().reset_index()
-            _pm['Month']  = pd.to_datetime(_pm['Month'])
-            _pm['Colour'] = _pm['PnL'].apply(lambda x: COLOURS['green'] if x >= 0 else COLOURS['red'])
-            _pm['Label']  = _pm['Month'].dt.strftime('%b %Y')
+            _type_cols = [c for c in ('Equity', 'Options', 'Income') if c in _daily_pnl.columns]
+            _pm_agg_cols = _type_cols + ['PnL']
+            _pm = _daily_pnl.groupby('Month')[_pm_agg_cols].sum().reset_index()
+            _pm['Month'] = pd.to_datetime(_pm['Month'])
+            _pm['Label'] = _pm['Month'].dt.strftime('%b %Y')
             _fig_pm = go.Figure()
+            for _col, _colour, _label in _STACK_TYPES:
+                if _col not in _pm.columns:
+                    continue
+                _fig_pm.add_trace(go.Bar(
+                    name=_label, x=_pm['Label'], y=_pm[_col],
+                    marker_color=_colour, marker_line_width=0,
+                    customdata=[[fmt_dollar(v), fmt_dollar(t)]
+                                for v, t in zip(_pm[_col], _pm['PnL'])],
+                    hovertemplate=(
+                        '%{x}<br>'
+                        '<b>' + _label + ': %{customdata[0]}</b><br>'
+                        'Total: %{customdata[1]}<extra></extra>'
+                    ),
+                ))
+            # Invisible total trace — carries outside text label only
             _fig_pm.add_trace(go.Bar(
                 x=_pm['Label'], y=_pm['PnL'],
-                marker_color=_pm['Colour'], marker_line_width=0,
+                marker_color='rgba(0,0,0,0)', marker_line_width=0,
+                showlegend=False,
                 text=[fmt_dollar(v, 0) for v in _pm['PnL']],
-                customdata=[fmt_dollar(v) for v in _pm['PnL']],
                 textposition='outside',
                 textfont=dict(size=10, family='IBM Plex Mono', color=COLOURS['text_muted']),
-                hovertemplate='%{x}<br><b>%{customdata}</b><extra></extra>'
+                hoverinfo='skip',
             ))
             _fig_pm.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
-            _pm_lay = chart_layout('Monthly Total P/L' + _win_suffix, height=280, margin_t=36)
+            _pm_lay = chart_layout('Monthly Cash Flow' + _win_suffix, height=280, margin_t=36)
             _pm_lay['yaxis']['tickprefix'] = '$'
             _pm_lay['yaxis']['tickformat'] = ',.0f'
             _pm_lay['bargap'] = 0.35
+            _pm_lay['barmode'] = 'stack'
+            _pm_lay['legend'] = dict(
+                orientation='h', y=1.12, x=0,
+                font=dict(size=10, family='IBM Plex Sans'),
+            )
             _fig_pm.update_layout(**_pm_lay)
             st.plotly_chart(_fig_pm, width='stretch', config={'displayModeBar': False})
+
+        st.caption(
+            'Cash flow basis — each transaction is recorded on the date it settled. '
+            'Option credits land when the STO opens; debits land when the BTC closes. '
+            'For matched-trade options P/L grouped by close date, see Tab 2.'
+        )
 
         st.markdown('---')
         st.markdown(
             f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'
-            f'📉 P&amp;L Consistency {_win_label}</div>',
+            f'📉 Weekly Rhythm &amp; Stability {_win_label}</div>',
             unsafe_allow_html=True
         )
         if not _daily_pnl.empty and len(_daily_pnl) >= 2:
@@ -320,7 +366,7 @@ def render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
                 ))
             _fig_vol.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
             _vol_lay = chart_layout(
-                'Weekly P/L + Rolling 4-wk Volatility Band' + _win_suffix, height=300, margin_t=40)
+                'Weekly Cash Flow + 4-Week Volatility Band' + _win_suffix, height=300, margin_t=40)
             _vol_lay['yaxis']['tickprefix'] = '$'
             _vol_lay['yaxis']['tickformat'] = ',.0f'
             _vol_lay['bargap'] = 0.3

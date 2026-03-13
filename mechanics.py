@@ -201,11 +201,12 @@ def calculate_windowed_equity_pnl(df_full: pd.DataFrame, start_date: pd.Timestam
 # ── DAILY REALIZED P/L (for period charts) ────────────────────────────────────
 def calculate_daily_realized_pnl(df_full: pd.DataFrame, start_date: pd.Timestamp) -> pd.DataFrame:
     """
-    Returns a DataFrame with columns [Date, PnL] representing realized P/L
-    by settlement date across the full portfolio:
+    Returns a DataFrame with columns [Date, Equity, Options, Income, PnL] representing
+    realized P/L by settlement date across the full portfolio, broken down by type:
+      - Equity:  net gain/loss vs FIFO cost basis on equity sale dates
       - Options: full cash flow on the day (already realized at close/expiry)
-      - Equity sells: net gain/loss vs FIFO cost basis on the sale date
-      - Dividends + interest: cash received on the day
+      - Income:  dividends + interest received on the day
+      - PnL:     sum of all three (preserved for backward compatibility)
     Share purchases are excluded — they are capital deployment, not P/L.
     Only rows with Date >= start_date are returned, but ALL equity history
     is processed so FIFO cost basis is always correct.
@@ -213,8 +214,8 @@ def calculate_daily_realized_pnl(df_full: pd.DataFrame, start_date: pd.Timestamp
     equity_rows = df_full[
         equity_mask(df_full['Instrument Type'])
     ].sort_values('Date')
-    records = [
-        {'Date': date, 'PnL': proceeds - cost_basis}
+    eq_records = [
+        {'Date': date, 'PnL': proceeds - cost_basis, 'Type': 'Equity'}
         for date, proceeds, cost_basis in _iter_fifo_sells(equity_rows)
         if date >= start_date
     ]
@@ -224,24 +225,33 @@ def calculate_daily_realized_pnl(df_full: pd.DataFrame, start_date: pd.Timestamp
         df_full['Instrument Type'].isin(OPT_TYPES) &
         df_full['Type'].isin(TRADE_TYPES) &
         (df_full['Date'] >= start_date)
-    ][['Date', 'Total']].rename(columns={'Total': 'PnL'})
+    ][['Date', 'Total']].rename(columns={'Total': 'PnL'}).copy()
+    opt_rows['Type'] = 'Options'
 
     # Dividends + interest — vectorized
     income_rows = df_full[
         df_full['Sub Type'].isin(INCOME_SUB_TYPES) &
         (df_full['Date'] >= start_date)
-    ][['Date', 'Total']].rename(columns={'Total': 'PnL'})
+    ][['Date', 'Total']].rename(columns={'Total': 'PnL'}).copy()
+    income_rows['Type'] = 'Income'
 
-    if not records and opt_rows.empty and income_rows.empty:
-        return pd.DataFrame(columns=['Date', 'PnL'])
+    if not eq_records and opt_rows.empty and income_rows.empty:
+        return pd.DataFrame(columns=['Date', 'Equity', 'Options', 'Income', 'PnL'])
 
-    daily = pd.concat(
-        [pd.DataFrame(records)] + ([opt_rows] if not opt_rows.empty else [])
-                                 + ([income_rows] if not income_rows.empty else []),
+    combined = pd.concat(
+        [pd.DataFrame(eq_records)] + ([opt_rows] if not opt_rows.empty else [])
+                                    + ([income_rows] if not income_rows.empty else []),
         ignore_index=True
     )
-    daily['Date'] = pd.to_datetime(daily['Date'])
-    return daily.groupby('Date')['PnL'].sum().reset_index()
+    combined['Date'] = pd.to_datetime(combined['Date'])
+    daily = (combined.groupby(['Date', 'Type'])['PnL'].sum()
+                     .unstack(fill_value=0.0)
+                     .reset_index())
+    for col in ('Equity', 'Options', 'Income'):
+        if col not in daily.columns:
+            daily[col] = 0.0
+    daily['PnL'] = daily[['Equity', 'Options', 'Income']].sum(axis=1)
+    return daily
 
 
 def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -> list[Campaign]:
