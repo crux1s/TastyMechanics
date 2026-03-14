@@ -49,10 +49,13 @@ def _style_pnl_row(row):
 
 def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                 df_window, _win_label, _win_suffix, _win_start_str, _win_end_str):
-    """Tab 2 — Trade Analysis: ThetaGang metrics, period charts, heatmap, best/worst, trade log."""
+    """Tab 2 — Discipline & Patterns: ThetaGang metrics, equity curves, DTE discipline,
+    trade quality, timing patterns, and the full closed trade log."""
     if closed_trades_df.empty:
         st.info('No closed trades found.')
         return
+
+    # ── Header ───────────────────────────────────────────────────────────────
     st.markdown(f'### 🔬 Discipline & Patterns {_win_label}', unsafe_allow_html=True)
     st.caption(
         'ThetaGang management discipline — management rate, DTE behaviour at open and close, '
@@ -61,6 +64,10 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         'and hour, ticker × month heatmap, win/loss distribution, and the full closed trade log.'
     )
     st.markdown('---')
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 1. THETAGANG SCORECARD
+    # ══════════════════════════════════════════════════════════════════════════
     st.markdown(
         f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'
         f'🎯 ThetaGang Metrics {_win_label}</div>',
@@ -112,15 +119,15 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         _roll_cdf = all_cdf.sort_values('Close Date').copy()
         _roll_cdf['Rolling_WR'] = _roll_cdf['Won'].rolling(10, min_periods=5).mean() * 100
 
-        # ── Assignment Rate ───────────────────────────────────────────────────────
-        # Short put trades that ended in assignment vs all short put closes
-        _sp_cdf       = _short_cdf[_short_cdf['Type'].str.upper().str.contains('PUT', na=False)]                         if 'Type' in _short_cdf.columns else pd.DataFrame()
-        _n_assigned   = (_sp_cdf['Close Reason'].str.contains('Assign', na=False)).sum()                         if not _sp_cdf.empty and 'Close Reason' in _sp_cdf.columns else 0
+        # ── Assignment Rate ───────────────────────────────────────────────────
+        _sp_cdf       = _short_cdf[_short_cdf['Type'].str.upper().str.contains('PUT', na=False)] \
+                        if 'Type' in _short_cdf.columns else pd.DataFrame()
+        _n_assigned   = (_sp_cdf['Close Reason'].str.contains('Assign', na=False)).sum() \
+                        if not _sp_cdf.empty and 'Close Reason' in _sp_cdf.columns else 0
         _n_sp_total   = len(_sp_cdf)
         _assign_rate  = _n_assigned / _n_sp_total * 100 if _n_sp_total > 0 else 0
 
-        # ── Early Management Rate (closed before 21 DTE) ──────────────────────────
-        # TastyTrade rule: take profits or cut losses before 21 DTE to avoid gamma risk
+        # ── Early Management Rate (closed before 21 DTE) ──────────────────────
         _EARLY_DTE    = 21
         _n_early      = (_dte_valid['DTE_close'] >= _EARLY_DTE).sum()
         _early_rate   = _n_early / len(_dte_valid) * 100 if not _dte_valid.empty else 0
@@ -163,64 +170,32 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                 unsafe_allow_html=True
             )
 
-        st.markdown('---')
-        _tg_col1, _tg_col2 = st.columns(2)
-        with _tg_col1:
-            if not _dte_valid.empty:
-                _dte_bins   = [-1, 0, 7, 14, 21, 30, 999]
-                _dte_labels = ['0 (expired)', '1–7d', '8–14d', '15–21d', '22–30d', '>30d']
-                _dv = _dte_valid.copy()
-                _dv['Bucket'] = pd.cut(_dv['DTE_close'], bins=_dte_bins, labels=_dte_labels)
-                _dte_dist = _dv['Bucket'].value_counts().reindex(_dte_labels, fill_value=0).reset_index()
-                _dte_dist.columns = ['DTE Bucket', 'Trades']
-                _dte_colors = [COLOURS['blue'] if b in ['8–14d', '15–21d'] else '#30363d' for b in _dte_labels]
-                _fig_dte = go.Figure(go.Bar(
-                    x=_dte_dist['DTE Bucket'], y=_dte_dist['Trades'],
-                    marker_color=_dte_colors, marker_line_width=0,
-                    text=_dte_dist['Trades'], textposition='outside',
-                    textfont=dict(size=11, family='IBM Plex Mono'),
-                    hovertemplate='%{x}<br><b>%{y} trades</b><extra></extra>'
-                ))
-                _dte_lay = chart_layout('DTE at Close Distribution' + _win_suffix, height=300, margin_t=40)
-                _dte_lay['showlegend'] = False
-                _dte_lay['xaxis']['title'] = dict(text='DTE Remaining at Close', font=dict(size=11))
-                _dte_lay['yaxis']['title'] = dict(text='# Trades', font=dict(size=11))
-                _fig_dte.update_layout(**_dte_lay)
-                st.plotly_chart(_fig_dte, width='stretch', config={'displayModeBar': False})
-                st.caption('🔵 Blue = TastyTrade target close zone (8–21 DTE). Grey = outside target.')
-
-        with _tg_col2:
-            if not _roll_cdf.empty and _roll_cdf['Rolling_WR'].notna().sum() >= 2:
-                _fig_rwr = go.Figure()
-                _fig_rwr.add_hline(y=50, line_dash='dash',
-                    line_color='rgba(255,255,255,0.15)', line_width=1)
-                _fig_rwr.add_trace(go.Scatter(
-                    x=_roll_cdf['Close Date'], y=_roll_cdf['Rolling_WR'],
-                    mode='lines', line=dict(color=COLOURS['blue'], width=2),
-                    fill='tozeroy', fillcolor='rgba(88,166,255,0.08)',
-                    hovertemplate='%{x|%d/%m/%y}<br>Win Rate: <b>%{y:.1f}%</b><extra></extra>'
-                ))
-                _fig_rwr.add_hline(
-                    y=_roll_cdf['Won'].mean() * 100,
-                    line_dash='dot', line_color='#ffa421', line_width=1.5,
-                    annotation_text='avg %.0f%%' % (_roll_cdf['Won'].mean() * 100),
-                    annotation_position='bottom right',
-                    annotation_font=dict(color='#ffa421', size=11)
-                )
-                _rwr_lay = chart_layout(
-                    'Rolling Win Rate · 10-trade window' + _win_suffix, height=300, margin_t=40)
-                _rwr_lay['yaxis']['ticksuffix'] = '%'
-                _rwr_lay['yaxis']['range'] = [0, 105]
-                _fig_rwr.update_layout(**_rwr_lay)
-                st.plotly_chart(_fig_rwr, width='stretch', config={'displayModeBar': False})
-                st.caption('Rolling 10-trade win rate. Amber = overall average.')
-
+    # ══════════════════════════════════════════════════════════════════════════
+    # 2. PERFORMANCE OVERVIEW — cumulative curve then periodic candlesticks
+    # ══════════════════════════════════════════════════════════════════════════
     st.markdown('---')
-    st.markdown(
-        f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'
-        f'📅 Options P/L by Week &amp; Month {_win_label}</div>',
-        unsafe_allow_html=True
-    )
+
+    # ── Cumulative Realized P/L ───────────────────────────────────────────────
+    cum_df = all_cdf.sort_values('Close Date').copy()
+    cum_df['Cumulative P/L'] = cum_df['Net P/L'].cumsum()
+    final_pnl = cum_df['Cumulative P/L'].iloc[-1]
+    eq_color  = COLOURS['green'] if final_pnl >= 0 else COLOURS['red']
+    eq_fill   = 'rgba(0,204,150,0.12)' if final_pnl >= 0 else 'rgba(239,85,59,0.12)'
+    fig_eq = go.Figure()
+    fig_eq.add_trace(go.Scatter(
+        x=cum_df['Close Date'], y=cum_df['Cumulative P/L'],
+        mode='lines', line=dict(color=eq_color, width=2),
+        fill='tozeroy', fillcolor=eq_fill,
+        hovertemplate='%{x|%d/%m/%y}<br><b>$%{y:,.2f}</b><extra></extra>'
+    ))
+    fig_eq.add_hline(y=0, line_color='rgba(255,255,255,0.1)', line_width=1)
+    _eq_lay = chart_layout('Cumulative Realized P/L' + _win_suffix, height=300, margin_t=40)
+    _eq_lay['yaxis']['tickprefix'] = '$'
+    _eq_lay['yaxis']['tickformat'] = ',.0f'
+    fig_eq.update_layout(**_eq_lay)
+    st.plotly_chart(fig_eq, width='stretch', config={'displayModeBar': False})
+
+    # ── Weekly & Monthly Options Equity Curves ────────────────────────────────
     st.markdown(
         '<div style="font-size:0.8rem;color:#6b7280;margin-bottom:12px;line-height:1.5;">'
         '<b style="color:#58a6ff;">Options trades only</b> — net P/L from closed equity- and '
@@ -233,16 +208,11 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
     _period_df['Week']  = _period_df['CloseDate'].dt.to_period('W').apply(lambda p: p.start_time)
     _period_df['Month'] = _period_df['CloseDate'].dt.to_period('M').apply(lambda p: p.start_time)
 
-    # Cumulative P/L — candle OHLC is computed from the running equity curve
+    # Cumulative P/L for candle OHLC
     _period_df['CumPL'] = _period_df['Net P/L'].cumsum()
 
     def _candle_agg(group_col):
-        """OHLC from the running cumulative P/L curve within each period.
-        Open  = cumPL just before the first trade of the period (prev close)
-        Close = cumPL after the last trade of the period
-        High  = peak cumPL reached during the period (incl. open level)
-        Low   = trough cumPL reached during the period (incl. open level)
-        """
+        """OHLC from the running cumulative P/L curve within each period."""
         rows, prev_close = [], 0.0
         for period, grp in _period_df.groupby(group_col, sort=True):
             o = prev_close
@@ -319,81 +289,22 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         'Wicks show the best and worst points reached intra-period.'
     )
 
-    st.markdown('---')
-    cum_df = all_cdf.sort_values('Close Date').copy()
-    cum_df['Cumulative P/L'] = cum_df['Net P/L'].cumsum()
-    final_pnl = cum_df['Cumulative P/L'].iloc[-1]
-    eq_color  = COLOURS['green'] if final_pnl >= 0 else COLOURS['red']
-    eq_fill   = 'rgba(0,204,150,0.12)' if final_pnl >= 0 else 'rgba(239,85,59,0.12)'
-    fig_eq = go.Figure()
-    fig_eq.add_trace(go.Scatter(
-        x=cum_df['Close Date'], y=cum_df['Cumulative P/L'],
-        mode='lines', line=dict(color=eq_color, width=2),
-        fill='tozeroy', fillcolor=eq_fill,
-        hovertemplate='%{x|%d/%m/%y}<br><b>$%{y:,.2f}</b><extra></extra>'
-    ))
-    fig_eq.add_hline(y=0, line_color='rgba(255,255,255,0.1)', line_width=1)
-    _eq_lay = chart_layout('Cumulative Realized P/L' + _win_suffix, height=300, margin_t=40)
-    _eq_lay['yaxis']['tickprefix'] = '$'
-    _eq_lay['yaxis']['tickformat'] = ',.0f'
-    fig_eq.update_layout(**_eq_lay)
-    st.plotly_chart(fig_eq, width='stretch', config={'displayModeBar': False})
-
-    if has_credit:
-        roll_df = credit_cdf.sort_values('Close Date').copy()
-        roll_df['Rolling Capture'] = roll_df['Capture %'].rolling(10, min_periods=1).mean()
-        fig_cap2 = go.Figure()
-        fig_cap2.add_trace(go.Scatter(
-            x=roll_df['Close Date'], y=roll_df['Rolling Capture'],
-            mode='lines', line=dict(color=COLOURS['blue'], width=2),
-            fill='tozeroy', fillcolor='rgba(88,166,255,0.08)',
-            hovertemplate='%{x|%d/%m/%y}<br>Capture: <b>%{y:.1f}%</b><extra></extra>'
-        ))
-        fig_cap2.add_hline(y=50, line_dash='dash', line_color='#ffa421', line_width=1.5,
-            annotation_text='50% target', annotation_position='bottom right',
-            annotation_font=dict(color='#ffa421', size=11))
-        _cap2_lay = chart_layout(
-            'Rolling Avg Capture % · 10-trade window' + _win_suffix, height=260, margin_t=40)
-        _cap2_lay['yaxis']['ticksuffix'] = '%'
-        fig_cap2.update_layout(**_cap2_lay)
-        st.plotly_chart(fig_cap2, width='stretch', config={'displayModeBar': False})
-
+    # ══════════════════════════════════════════════════════════════════════════
+    # 3. DTE DISCIPLINE — entry and exit DTE analysis grouped together
+    # ══════════════════════════════════════════════════════════════════════════
     st.markdown('---')
     st.markdown(
         f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'
-        f'📊 Win / Loss Distribution {_win_label}</div>',
+        f'🎯 DTE Discipline {_win_label}</div>',
         unsafe_allow_html=True
     )
-    _hist_df = all_cdf.copy()
-    _hist_df['Colour'] = _hist_df['Net P/L'].apply(lambda x: 'Win' if x >= 0 else 'Loss')
-    _fig_hist = px.histogram(
-        _hist_df, x='Net P/L', color='Colour',
-        color_discrete_map={'Win': COLOURS['green'], 'Loss': COLOURS['red']},
-        nbins=40, labels={'Net P/L': 'Trade P/L ($)', 'count': 'Trades'},
-        barmode='overlay', opacity=0.8
-    )
-    _fig_hist.add_vline(x=0, line_color='rgba(255,255,255,0.2)', line_width=1)
-    _fig_hist.add_vline(
-        x=all_cdf['Net P/L'].median(),
-        line_dash='dot', line_color='#ffa421', line_width=1.5,
-        annotation_text='median $%.0f' % all_cdf['Net P/L'].median(),
-        annotation_position='top right',
-        annotation_font=dict(color='#ffa421', size=11)
-    )
-    _hist_lay = chart_layout(height=300, margin_t=20)
-    _hist_lay['legend'] = dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1,
-        bgcolor='rgba(0,0,0,0)', borderwidth=0, font=dict(size=11))
-    _hist_lay['xaxis']['tickprefix'] = '$'
-    _hist_lay['xaxis']['tickformat'] = ',.0f'
-    _fig_hist.update_layout(**_hist_lay)
-    st.plotly_chart(_fig_hist, width='stretch', config={'displayModeBar': False})
-
-    st.markdown('---')
     st.markdown(
-        f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'
-        f'🎯 Win Rate &amp; P/L by DTE at Open {_win_label}</div>',
+        '<div style="font-size:0.8rem;color:#6b7280;margin-bottom:16px;line-height:1.5;">'
+        'Are you opening at the right DTE and closing before gamma risk kicks in?</div>',
         unsafe_allow_html=True
     )
+
+    # ── Win Rate & Avg P/L by DTE at Open ────────────────────────────────────
     if has_credit and 'DTE at Open' in all_cdf.columns:
         _dte_open_df = all_cdf[all_cdf['DTE at Open'].notna()].copy()
         _dte_open_df = _dte_open_df[_dte_open_df['DTE at Open'] <= LEAPS_DTE_THRESHOLD]
@@ -457,19 +368,138 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         else:
             st.info('Not enough trades with DTE data in this window.')
 
-    # ── P/L by Day of Week & Hour of Day ─────────────────────────────────────────
+    # ── DTE at Close Distribution + Rolling Win Rate ──────────────────────────
+    if has_data and has_credit:
+        _tg_col1, _tg_col2 = st.columns(2)
+        with _tg_col1:
+            if not _dte_valid.empty:
+                _dte_bins   = [-1, 0, 7, 14, 21, 30, 999]
+                _dte_labels = ['0 (expired)', '1–7d', '8–14d', '15–21d', '22–30d', '>30d']
+                _dv = _dte_valid.copy()
+                _dv['Bucket'] = pd.cut(_dv['DTE_close'], bins=_dte_bins, labels=_dte_labels)
+                _dte_dist = _dv['Bucket'].value_counts().reindex(_dte_labels, fill_value=0).reset_index()
+                _dte_dist.columns = ['DTE Bucket', 'Trades']
+                _dte_colors = [COLOURS['blue'] if b in ['8–14d', '15–21d'] else '#30363d' for b in _dte_labels]
+                _fig_dte = go.Figure(go.Bar(
+                    x=_dte_dist['DTE Bucket'], y=_dte_dist['Trades'],
+                    marker_color=_dte_colors, marker_line_width=0,
+                    text=_dte_dist['Trades'], textposition='outside',
+                    textfont=dict(size=11, family='IBM Plex Mono'),
+                    hovertemplate='%{x}<br><b>%{y} trades</b><extra></extra>'
+                ))
+                _dte_lay = chart_layout('DTE at Close Distribution' + _win_suffix, height=300, margin_t=40)
+                _dte_lay['showlegend'] = False
+                _dte_lay['xaxis']['title'] = dict(text='DTE Remaining at Close', font=dict(size=11))
+                _dte_lay['yaxis']['title'] = dict(text='# Trades', font=dict(size=11))
+                _fig_dte.update_layout(**_dte_lay)
+                st.plotly_chart(_fig_dte, width='stretch', config={'displayModeBar': False})
+                st.caption('🔵 Blue = TastyTrade target close zone (8–21 DTE). Grey = outside target.')
+
+        with _tg_col2:
+            if not _roll_cdf.empty and _roll_cdf['Rolling_WR'].notna().sum() >= 2:
+                _fig_rwr = go.Figure()
+                _fig_rwr.add_hline(y=50, line_dash='dash',
+                    line_color='rgba(255,255,255,0.15)', line_width=1)
+                _fig_rwr.add_trace(go.Scatter(
+                    x=_roll_cdf['Close Date'], y=_roll_cdf['Rolling_WR'],
+                    mode='lines', line=dict(color=COLOURS['blue'], width=2),
+                    fill='tozeroy', fillcolor='rgba(88,166,255,0.08)',
+                    hovertemplate='%{x|%d/%m/%y}<br>Win Rate: <b>%{y:.1f}%</b><extra></extra>'
+                ))
+                _fig_rwr.add_hline(
+                    y=_roll_cdf['Won'].mean() * 100,
+                    line_dash='dot', line_color='#ffa421', line_width=1.5,
+                    annotation_text='avg %.0f%%' % (_roll_cdf['Won'].mean() * 100),
+                    annotation_position='bottom right',
+                    annotation_font=dict(color='#ffa421', size=11)
+                )
+                _rwr_lay = chart_layout(
+                    'Rolling Win Rate · 10-trade window' + _win_suffix, height=300, margin_t=40)
+                _rwr_lay['yaxis']['ticksuffix'] = '%'
+                _rwr_lay['yaxis']['range'] = [0, 105]
+                _fig_rwr.update_layout(**_rwr_lay)
+                st.plotly_chart(_fig_rwr, width='stretch', config={'displayModeBar': False})
+                st.caption('Rolling 10-trade win rate. Amber = overall average.')
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 4. TRADE QUALITY — distribution + capture efficiency side by side
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown('---')
+    st.markdown(
+        f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'
+        f'📊 Trade Quality {_win_label}</div>',
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        '<div style="font-size:0.8rem;color:#6b7280;margin-bottom:16px;line-height:1.5;">'
+        'Trade P/L distribution and premium capture efficiency.</div>',
+        unsafe_allow_html=True
+    )
+
+    _tq_col1, _tq_col2 = st.columns(2)
+
+    with _tq_col1:
+        _hist_df = all_cdf.copy()
+        _hist_df['Colour'] = _hist_df['Net P/L'].apply(lambda x: 'Win' if x >= 0 else 'Loss')
+        _fig_hist = px.histogram(
+            _hist_df, x='Net P/L', color='Colour',
+            color_discrete_map={'Win': COLOURS['green'], 'Loss': COLOURS['red']},
+            nbins=40, labels={'Net P/L': 'Trade P/L ($)', 'count': 'Trades'},
+            barmode='overlay', opacity=0.8
+        )
+        _fig_hist.add_vline(x=0, line_color='rgba(255,255,255,0.2)', line_width=1)
+        _fig_hist.add_vline(
+            x=all_cdf['Net P/L'].median(),
+            line_dash='dot', line_color='#ffa421', line_width=1.5,
+            annotation_text='median $%.0f' % all_cdf['Net P/L'].median(),
+            annotation_position='top right',
+            annotation_font=dict(color='#ffa421', size=11)
+        )
+        _hist_lay = chart_layout('Win / Loss Distribution' + _win_suffix, height=300, margin_t=40)
+        _hist_lay['legend'] = dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1,
+            bgcolor='rgba(0,0,0,0)', borderwidth=0, font=dict(size=11))
+        _hist_lay['xaxis']['tickprefix'] = '$'
+        _hist_lay['xaxis']['tickformat'] = ',.0f'
+        _fig_hist.update_layout(**_hist_lay)
+        st.plotly_chart(_fig_hist, width='stretch', config={'displayModeBar': False})
+
+    with _tq_col2:
+        if has_credit:
+            roll_df = credit_cdf.sort_values('Close Date').copy()
+            roll_df['Rolling Capture'] = roll_df['Capture %'].rolling(10, min_periods=1).mean()
+            fig_cap2 = go.Figure()
+            fig_cap2.add_trace(go.Scatter(
+                x=roll_df['Close Date'], y=roll_df['Rolling Capture'],
+                mode='lines', line=dict(color=COLOURS['blue'], width=2),
+                fill='tozeroy', fillcolor='rgba(88,166,255,0.08)',
+                hovertemplate='%{x|%d/%m/%y}<br>Capture: <b>%{y:.1f}%</b><extra></extra>'
+            ))
+            fig_cap2.add_hline(y=50, line_dash='dash', line_color='#ffa421', line_width=1.5,
+                annotation_text='50% target', annotation_position='bottom right',
+                annotation_font=dict(color='#ffa421', size=11))
+            _cap2_lay = chart_layout(
+                'Rolling Avg Capture % · 10-trade window' + _win_suffix, height=300, margin_t=40)
+            _cap2_lay['yaxis']['ticksuffix'] = '%'
+            fig_cap2.update_layout(**_cap2_lay)
+            st.plotly_chart(fig_cap2, width='stretch', config={'displayModeBar': False})
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 5. TIMING & CONCENTRATION PATTERNS
+    # ══════════════════════════════════════════════════════════════════════════
     if has_data and not all_cdf.empty:
         st.markdown('---')
         st.markdown(
             f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'
-            f'🕐 P/L by Day of Week &amp; Hour of Day {_win_label}</div>',
+            f'🕐 Timing &amp; Concentration {_win_label}</div>',
             unsafe_allow_html=True
         )
         st.caption(
-            'When do you trade best? Close date/time in UTC. '
-            'US market open = 14:30 UTC (13:30 UTC during EDT). '
+            'When do you trade best, and which tickers drive results? '
+            'Close date/time in UTC. US market open = 14:30 UTC (13:30 UTC during EDT). '
             'NZT = UTC +13 (summer) / +12 (winter).'
         )
+
+        # ── P/L by Day of Week & Hour ─────────────────────────────────────────
         _dow_df = all_cdf.copy()
         _dow_df['Close Date'] = pd.to_datetime(_dow_df['Close Date'])
         _dow_df['Day'] = _dow_df['Close Date'].dt.day_name()
@@ -521,7 +551,6 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                 customdata=_hour_agg[['Trades']].values,
                 hovertemplate='Hour %{x}:00 UTC<br>P/L: <b>$%{y:,.0f}</b><br>Trades: %{customdata[0]:.0f}<extra></extra>',
             ))
-
             _hour_lay = chart_layout('Net P/L by Hour (UTC)', height=320, margin_t=40)
             _hour_lay['yaxis'] = {'tickprefix': '$', 'tickformat': ',.0f', 'gridcolor': COLOURS['border']}
             _hour_lay['xaxis'] = {'title': {'text': 'Hour (UTC)', 'font': {'size': 10}}, 'dtick': 1, 'gridcolor': COLOURS['border']}
@@ -529,55 +558,55 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
             _fig_hour.update_layout(**_hour_lay)
             st.plotly_chart(_fig_hour, width='stretch', config={'displayModeBar': False})
 
-    st.markdown('---')
-    st.markdown(
-        f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'
-        f'🗓 P/L by Ticker &amp; Month {_win_label}</div>',
-        unsafe_allow_html=True
-    )
-    _hm_df = all_cdf.copy()
-    _hm_df['Month']     = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%b %Y')
-    _hm_df['MonthSort'] = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%Y-%m')
-    _hm_pivot = _hm_df.groupby(['Ticker', 'MonthSort', 'Month'])['Net P/L'].sum().reset_index()
-    _months_sorted  = sorted(_hm_pivot['MonthSort'].unique())
-    _month_labels   = [_hm_pivot[_hm_pivot['MonthSort'] == m]['Month'].iloc[0]
-                       for m in _months_sorted]
-    _tickers_sorted = sorted(
-        _hm_pivot['Ticker'].unique(),
-        key=lambda t: _hm_pivot[_hm_pivot['Ticker'] == t]['Net P/L'].sum(),
-        reverse=True
-    )
-    _z = []; _text = []
-    for tkr in _tickers_sorted:
-        row_z, row_t = [], []
-        for ms in _months_sorted:
-            val = _hm_pivot[
-                (_hm_pivot['Ticker'] == tkr) & (_hm_pivot['MonthSort'] == ms)
-            ]['Net P/L'].sum()
-            row_z.append(val if val != 0 else None)
-            row_t.append('$%.0f' % val if val != 0 else '')
-        _z.append(row_z); _text.append(row_t)
-    _fig_hm = go.Figure(data=go.Heatmap(
-        z=_z, x=_month_labels, y=_tickers_sorted,
-        text=_text, texttemplate='%{text}', textfont=dict(size=10, family='IBM Plex Mono'),
-        colorscale=[
-            [0.0, '#7f1d1d'], [0.35, COLOURS['red']],
-            [0.5, '#141c2e'],
-            [0.65, COLOURS['green']], [1.0, '#004d3a'],
-        ],
-        zmid=0, showscale=True,
-        colorbar=dict(title=dict(text='P/L', side='right'), tickformat='$,.0f',
-            tickfont=dict(size=10, family='IBM Plex Mono'), len=0.9),
-        hoverongaps=False,
-        hovertemplate='<b>%{y}</b> — %{x}<br>P/L: <b>$%{z:,.2f}</b><extra></extra>',
-    ))
-    _hm_lay = chart_layout(height=max(300, len(_tickers_sorted) * 32 + 60), margin_t=16)
-    _hm_lay['xaxis'] = dict(side='top', gridcolor='rgba(0,0,0,0)', tickfont=dict(size=11))
-    _hm_lay['yaxis'] = dict(autorange='reversed', gridcolor='rgba(0,0,0,0)',
-        tickfont=dict(size=11, family='IBM Plex Mono'))
-    _fig_hm.update_layout(**_hm_lay)
-    st.plotly_chart(_fig_hm, width='stretch', config={'displayModeBar': False})
+        # ── Ticker × Month Heatmap ────────────────────────────────────────────
+        _hm_df = all_cdf.copy()
+        _hm_df['Month']     = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%b %Y')
+        _hm_df['MonthSort'] = pd.to_datetime(_hm_df['Close Date']).dt.strftime('%Y-%m')
+        _hm_pivot = _hm_df.groupby(['Ticker', 'MonthSort', 'Month'])['Net P/L'].sum().reset_index()
+        _months_sorted  = sorted(_hm_pivot['MonthSort'].unique())
+        _month_labels   = [_hm_pivot[_hm_pivot['MonthSort'] == m]['Month'].iloc[0]
+                           for m in _months_sorted]
+        _tickers_sorted = sorted(
+            _hm_pivot['Ticker'].unique(),
+            key=lambda t: _hm_pivot[_hm_pivot['Ticker'] == t]['Net P/L'].sum(),
+            reverse=True
+        )
+        _z = []; _text = []
+        for tkr in _tickers_sorted:
+            row_z, row_t = [], []
+            for ms in _months_sorted:
+                val = _hm_pivot[
+                    (_hm_pivot['Ticker'] == tkr) & (_hm_pivot['MonthSort'] == ms)
+                ]['Net P/L'].sum()
+                row_z.append(val if val != 0 else None)
+                row_t.append('$%.0f' % val if val != 0 else '')
+            _z.append(row_z); _text.append(row_t)
+        _fig_hm = go.Figure(data=go.Heatmap(
+            z=_z, x=_month_labels, y=_tickers_sorted,
+            text=_text, texttemplate='%{text}', textfont=dict(size=10, family='IBM Plex Mono'),
+            colorscale=[
+                [0.0, '#7f1d1d'], [0.35, COLOURS['red']],
+                [0.5, '#141c2e'],
+                [0.65, COLOURS['green']], [1.0, '#004d3a'],
+            ],
+            zmid=0, showscale=True,
+            colorbar=dict(title=dict(text='P/L', side='right'), tickformat='$,.0f',
+                tickfont=dict(size=10, family='IBM Plex Mono'), len=0.9),
+            hoverongaps=False,
+            hovertemplate='<b>%{y}</b> — %{x}<br>P/L: <b>$%{z:,.2f}</b><extra></extra>',
+        ))
+        _hm_lay = chart_layout(
+            f'🗓 P/L by Ticker & Month {_win_label}',
+            height=max(300, len(_tickers_sorted) * 32 + 60), margin_t=40)
+        _hm_lay['xaxis'] = dict(side='top', gridcolor='rgba(0,0,0,0)', tickfont=dict(size=11))
+        _hm_lay['yaxis'] = dict(autorange='reversed', gridcolor='rgba(0,0,0,0)',
+            tickfont=dict(size=11, family='IBM Plex Mono'))
+        _fig_hm.update_layout(**_hm_lay)
+        st.plotly_chart(_fig_hm, width='stretch', config={'displayModeBar': False})
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # 6. DETAIL — best/worst trades + full log
+    # ══════════════════════════════════════════════════════════════════════════
     st.markdown('---')
     bcol, wcol = st.columns(2)
     with bcol:
@@ -638,5 +667,3 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
             }
         )
         st.caption('\\* Trades held < 4 days — annualised return may be misleading.')
-
-
