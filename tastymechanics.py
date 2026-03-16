@@ -63,11 +63,31 @@ import os as _os
 import hashlib as _hashlib
 
 # ==========================================
-# TastyMechanics v26.3
+# TastyMechanics v26.4
 # ==========================================
 #
 # Changelog (recent versions — full history in git log)
 # -----------------------------------------------------
+# v26.4 (2026-03-14)
+#   - FEATURE: "Days to Free" on Wheel Campaign table and cards — projects days
+#     until effective cost basis reaches $0 at current premium/dividend rate.
+#     Shows ~Xd, ✅ Free, or — (no income collected yet). Cards show "BASIS FREE IN"
+#     stat block; table shows "Free In" rightmost column.
+#   - FEATURE: Tab 4 stacked cash-flow bar charts — weekly/monthly bars split into
+#     Options / Equity / Income segments so the driver of each period is visible.
+#   - FEATURE: Tab 3 pre-purchase option attribution banner — amber note on campaign
+#     cards when closing debits from pre-campaign options land inside the campaign
+#     window without their opening credits.
+#   - UX: Tab 2 (Discipline & Patterns) reordered for narrative flow:
+#     Cumulative P/L → periodic curves → DTE Discipline (open + close grouped) →
+#     Trade Quality (Win/Loss + Capture %) → Timing & Concentration → Trade log.
+#   - FIX: Monthly options equity curve duplicate month labels — ticks pinned to
+#     exact candle positions via tickvals/ticktext.
+#   - REFACTOR: Tab 4 section/chart titles renamed to "Cash Flow" to match the
+#     settlement-date methodology; caption added explaining the difference vs Tab 2.
+#   - REFACTOR: Days-to-Free deduplicated — card loop reuses value already computed
+#     for the summary table row; no recalculation per campaign.
+#
 # v26.3 (2026-03-06)
 #   - FEATURE: Live market prices on Open Positions tab — opt-in toggle fetches
 #     equity quotes and option marks from Yahoo Finance (5-min cache). Shows last
@@ -114,7 +134,7 @@ import hashlib as _hashlib
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.3"
+APP_VERSION = "v26.4"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 

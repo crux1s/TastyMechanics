@@ -54,21 +54,21 @@ def render_landing(app_version: str) -> None:
     </div>
 
     <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
-        <div style="font-size:1.4rem;margin-bottom:0.4rem;">📈</div>
-        <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Trade Analysis</div>
-        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Equity curve, weekly/monthly P/L candles, DTE distributions, and day-of-week heat maps.</div>
+        <div style="font-size:1.4rem;margin-bottom:0.4rem;">🔬</div>
+        <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Discipline &amp; Patterns</div>
+        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Cumulative equity curve, DTE discipline charts, win/loss distribution, rolling capture %, and a ticker &times; month heatmap. Full closed trade log with best/worst highlights.</div>
     </div>
 
     <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
         <div style="font-size:1.4rem;margin-bottom:0.4rem;">🎡</div>
         <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Wheel Campaigns</div>
-        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Per-ticker cards tracking entry basis, effective basis, premiums banked, and P/L across full roll chains.</div>
+        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Per-ticker cards with entry basis, effective basis, premiums banked, and P/L. "Days to Free" projects when your cost basis reaches $0 at the current collection rate.</div>
     </div>
 
     <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
         <div style="font-size:1.4rem;margin-bottom:0.4rem;">💼</div>
-        <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">All Trades</div>
-        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Portfolio equity curve, drawdown, Sharpe ratio, capital deployed, and full income breakdown.</div>
+        <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Portfolio Realized P/L</div>
+        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Stacked cash-flow charts by week and month — Options, Equity, and Income breakdown. Equity curve, drawdown, Sharpe, and capital efficiency.</div>
     </div>
 
     <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">

@@ -57,23 +57,26 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 - DTE at open distribution, rolling win rate chart
 - Options P/L by week and month (candlestick — shows equity curve OHLC per period)
 
-**Trade Analysis tab**
-- ThetaGang metrics: management rate, median DTE at open/close, top-3 concentration score
+**Discipline & Patterns tab**
+- ThetaGang scorecard: management rate, median DTE at open/close, top-3 concentration, assignment rate, early management rate
 - LEAPS automatically separated from short-premium metrics (DTE > 90 threshold)
-- DTE at close distribution chart with TastyTrade target zone highlighted
-- Rolling 10-trade win rate over time
-- Win/Loss P/L histogram
-- P/L heatmap by ticker and month
+- Cumulative P/L equity curve, weekly and monthly candlestick curves
+- DTE Discipline section — win rate and avg P/L by DTE at open, close distribution with TastyTrade target zone
+- Trade Quality section — win/loss P/L histogram, rolling 10-trade capture % and win rate
+- Timing & Concentration — P/L by day of week and hour, ticker × month heatmap
+- Best/Worst 5 trades and full closed trade log
 
 **Wheel Campaigns tab**
 - Per-ticker campaign cards: entry basis, effective basis, premiums banked, realised P/L
+- **"Days to Free"** — projected days until effective cost basis reaches $0 at current premium/dividend rate
+- Pre-purchase option attribution note when pre-campaign closing debits affect the premium total
 - Option roll chain visualisation — calls and puts tracked as separate chains
 - Share and dividend event log per campaign
 - Lifetime "House Money" mode toggle (in-tab, right of heading)
 
-**All Trades tab**
+**Portfolio Realized P/L tab**
 - Full ticker breakdown: premiums, dividends, options P/L, capital deployed
-- Total portfolio P/L by week and month (FIFO-correct, candlestick charts)
+- **Stacked cash-flow bar charts** by week and month — Options / Equity / Income breakdown
 - Volatility metrics: avg week P/L, weekly std dev, Sharpe-equivalent, profitable weeks %, max drawdown + recovery
 
 **Deposits, Dividends & Fees tab**
@@ -204,6 +207,14 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 ---
 
 ## Changelog
+
+**v26.4 — Wheel "Days to Free", Stacked Cash-Flow Charts & Tab UX** (2026-03-14)
+- **"Days to Free" estimate** on Wheel Campaign cards and summary table — projects how many days at the current premium + dividend collection rate until effective cost basis reaches $0. Displays `~450d`, `✅ Free`, or `—` (no income collected yet). "at current rate" sub-caption flags it as a straight-line projection.
+- **Stacked cash-flow bar charts** in the Portfolio Realized P/L tab — weekly and monthly bars now broken into Options (blue), Equity (orange), and Income (green) segments, making it immediately clear which category is driving a positive or negative period.
+- **Pre-purchase option attribution banner** on Wheel Campaign cards — amber info note when closing debits from options opened before the share purchase land inside the campaign window without their opening credits.
+- **Discipline & Patterns tab reordered** for narrative flow: Cumulative P/L moved to top, both DTE charts grouped under one "DTE Discipline" section, Win/Loss Distribution and Rolling Capture % paired side-by-side under "Trade Quality", timing charts and ticker heatmap under "Timing & Concentration".
+- **Fix**: Monthly options equity curve was showing duplicate month labels (e.g. two "Jan 2026") — x-axis ticks now pinned to exact candle positions via `tickvals`/`ticktext`.
+- **Rename**: Portfolio Realized P/L tab sections and charts renamed to "Cash Flow" terminology; caption added explaining settlement-date vs closed-trade methodology difference.
 
 **v26.3 — Live Prices & UX Polish** (2026-03-06)
 - **Live market prices** on Open Positions tab — opt-in toggle fetches equity quotes and option marks from Yahoo Finance (5-min cache). Shows last price, day change %, mark (bid/ask), and unrealised P/L per leg with a card-level total. Nothing is sent until the toggle is enabled.

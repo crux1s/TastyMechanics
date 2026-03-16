@@ -54,6 +54,21 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             rpnl = realized_pnl(c, use_lifetime)
             effb = effective_basis(c, use_lifetime)
             dur  = (c.end_date or latest_date) - c.start_date
+
+            if c.status == 'open':
+                _days_active  = max(1, (latest_date - c.start_date).days)
+                _income       = c.premiums + c.dividends
+                _remaining    = c.total_cost - _income
+                _rate         = _income / _days_active
+                if _remaining <= 0:
+                    _free_in = '✅ Free'
+                elif _rate > 0:
+                    _free_in = '~%dd' % int(_remaining / _rate)
+                else:
+                    _free_in = '—'
+            else:
+                _free_in = '—'
+
             rows.append({
                 'Ticker': ticker,
                 'Status': '✅ Closed' if c.status == 'closed' else '🟢 Open',
@@ -62,6 +77,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                 'Divs': c.dividends, 'Exit': c.exit_proceeds,
                 'P/L': rpnl, 'Days': dur.days,
                 'Entry': c.start_date.strftime('%d/%m/%y'),
+                'Free In': _free_in,
             })
         return rows
 
@@ -141,7 +157,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
     st.markdown('---')
 
     # ── Open campaign cards ───────────────────────────────────────────────────
-    for ticker, i, c in open_camps:
+    for _camp_idx, (ticker, i, c) in enumerate(open_camps):
         rpnl = realized_pnl(c, use_lifetime)
         effb = effective_basis(c, use_lifetime)
         is_open         = True
@@ -183,6 +199,8 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             )
         else:
             _pre_camp_note = ''
+        # Reuse the value already computed in _summary_rows — no recalculation needed
+        _free_in_card = _open_rows[_camp_idx]['Free In']
         card_html = (
             '<div style="border:1px solid {border};border-radius:10px;padding:16px 20px 12px 20px;'
             'margin-bottom:12px;background:rgba(255,255,255,0.03);">'
@@ -193,7 +211,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             '<span style="font-size:0.8em;font-weight:600;padding:3px 10px;border-radius:20px;'
             'background:{badge_bg};color:{badge_col};">{status}</span>'
             '</div>'
-            '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;text-align:center;">'
+            '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:12px;text-align:center;">'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">ENTRY</div>'
             '<div style="font-size:1.0em;font-weight:600;">{acquired}</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">SHARES</div>'
@@ -203,6 +221,9 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">COST BASIS</div>'
             '<div style="font-size:1.0em;font-weight:600;">${eff_basis:.2f}/sh</div>'
             '<div style="font-size:0.7em;color:#00cc96;">▼ ${reduction:.2f} saved</div></div>'
+            '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">BASIS FREE IN</div>'
+            '<div style="font-size:1.0em;font-weight:600;">{free_in}</div>'
+            '<div style="font-size:0.7em;color:#888;">at current rate</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">PREMIUMS</div>'
             '<div style="font-size:1.0em;font-weight:600;">${premiums:.2f}</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">REALIZED P/L</div>'
@@ -218,6 +239,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             shares=int(c.total_shares),
             entry_basis=c.blended_basis, eff_basis=effb,
             reduction=basis_reduction if basis_reduction > 0 else 0,
+            free_in=_free_in_card,
             premiums=c.premiums, pnl=rpnl, pnl_color=pnl_color,
             assignment_note=_assignment_note,
             mid_asgn_note=_mid_asgn_note,

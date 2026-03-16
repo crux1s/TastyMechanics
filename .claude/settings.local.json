@@ -20,7 +20,12 @@
       "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''mechanics.py'', encoding=''utf-8''\\).read\\(\\)\\); ast.parse\\(open\\(''models.py'', encoding=''utf-8''\\).read\\(\\)\\); ast.parse\\(open\\(''tabs/tab3_wheel_campaigns.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''mechanics.py'', encoding=''utf-8''\\).read\\(\\)\\); ast.parse\\(open\\(''tabs/tab4_all_trades.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(PYTHONIOENCODING=utf-8 python3 - <<'EOF':*)",
-      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''tabs/tab2_trade_analysis.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK''\\)\")"
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''tabs/tab2_trade_analysis.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''''tabs/tab3_wheel_campaigns.py'''', encoding=''''utf-8''''\\).read\\(\\)\\); print\\(''''OK''''\\)\")",
+      "Bash(grep -r \"def.*free\" *.py tabs/*.py)",
+      "Bash(grep -n \"~%d\\\\|''—''\" tabs/*.py)",
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; [ast.parse\\(open\\(f, encoding=''''utf-8''''\\).read\\(\\)\\) for f in [''''tastymechanics.py'''',''''tabs/tab3_wheel_campaigns.py'''']]; print\\(''''OK''''\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''''tabs/landing.py'''', encoding=''''utf-8''''\\).read\\(\\)\\); print\\(''''OK''''\\)\")"
     ]
   }
 }
