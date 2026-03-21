@@ -62,12 +62,29 @@ import json as _json
 import os as _os
 import hashlib as _hashlib
 
+from report_prompt import build_review_prompt
+
 # ==========================================
-# TastyMechanics v26.4
+# TastyMechanics v26.5
 # ==========================================
 #
 # Changelog (recent versions — full history in git log)
 # -----------------------------------------------------
+# v26.5 (2026-03-21)
+#   - UX: DATA SYNC header replaced with st.caption — lighter visual weight.
+#   - UX: Portfolio Overview metric captions moved to help= tooltips.
+#   - UX: Corporate action warnings collapsed into expander.
+#   - UX: Period comparison card moved into Portfolio P/L tab.
+#   - UX: Time window selector labels made visible across all tabs.
+#   - UX: Tab 4 renamed "All Trades" → "Portfolio P/L".
+#   - FEATURE: AI Review Prompt added to sidebar.
+#   - FIX: Per-Ticker P/L Summary table — dividend/interest income now attributed
+#     to standalone tickers (UNH, TLT, META were showing $0 despite income received).
+#   - REFACTOR: Per-Ticker table columns redesigned: Premiums/Divs/Options P/L →
+#     Options/Equity/Income. Options merges in pre-campaign P/L; Equity is new
+#     (FIFO gain/loss was previously hidden in P/L or mixed into Premiums).
+#   - UX: Per-Ticker P/L Summary heading added — table was previously untitled.
+#
 # v26.4 (2026-03-14)
 #   - FEATURE: "Days to Free" on Wheel Campaign table and cards — projects days
 #     until effective cost basis reaches $0 at current premium/dividend rate.
@@ -134,7 +151,7 @@ import hashlib as _hashlib
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.4"
+APP_VERSION = "v26.5"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 
@@ -150,7 +167,13 @@ def main():
         .stTable { font-size: 0.85rem !important; }
         [data-testid="stExpander"] { background: #111827; border-radius: 10px;
             border: 1px solid #1f2937; margin-bottom: 8px; }
-        .stTabs [data-baseweb="tab-list"] { gap: 8px; border-bottom: 1px solid #1f2937; }
+        .stTabs [data-baseweb="tab-list"] {
+            position: sticky; top: 3.5rem; z-index: 100;
+            background-color: #0a0e17;
+            gap: 8px; border-bottom: 1px solid #1f2937;
+            padding-bottom: 0; margin-bottom: 0;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }
         .stTabs [data-baseweb="tab"] { background-color: #0f1520;
             border-radius: 6px 6px 0px 0px; padding: 10px 20px; font-size: 0.9rem; }
         .sync-header { color: #8b949e; font-size: 0.9rem;
@@ -463,39 +486,40 @@ def main():
 
     # ── Corporate action warnings ──────────────────────────────────────────────────────────────────────────
     # Shown once at load time; both lists are empty for the vast majority of users.
-    if corp_split_events:
-        for _ev in corp_split_events:
-            _ratio = _ev['ratio']
-            _fwd   = _ratio > 1
-            _label = '%.0f:1 forward split' % _ratio if _fwd else '1:%.0f reverse split' % (1/_ratio)
-            st.info(
-                f"⚠️ **Stock split detected: {xe(_ev['ticker'])}** — {_label} on "
-                f"{_ev['date'].strftime('%d/%m/%Y')} "
-                f"({_ev['pre_qty']:.0f} → {_ev['post_qty']:.0f} shares). "
-                "Pre-split lot sizes have been automatically rescaled in the FIFO engine "
-                "so cost basis and P/L should be correct. "
-                "Note: adjusted option symbols are a separate TastyTrade entry and are "
-                "not automatically stitched to pre-split contracts.",
-                icon=None
-            )
-
-    if corp_zero_cost_rows:
-        _zc_tickers = sorted({r['ticker'] for r in corp_zero_cost_rows})
-        _zc_lines   = [
-            f"**{xe(r['ticker'])}** — {r['qty']:.0f} shares on "
-            f"{r['date'].strftime('%d/%m/%Y')}: _{xe(r['description'])}_"
-            for r in corp_zero_cost_rows
-        ]
-        st.warning(
-            "⚠️ **Zero-cost share delivery detected** — the following positions "
-            "were received with Total = $0, which typically means the cost basis was not "
-            "transferred (spin-off, ACATS, merger conversion). "
-            "These shares have been loaded with a $0/share cost basis, which will "
-            "**overstate P/L** on eventual sale by the full proceeds amount. "
-            "Check your broker statement for the correct allocated basis and note "
-            "this as a limitation of the current data.\n\n"
-            + "\n\n".join(_zc_lines)
-        )
+    if corp_split_events or corp_zero_cost_rows:
+        with st.expander('⚠️ Corporate Action Notices', expanded=False):
+            if corp_split_events:
+                for _ev in corp_split_events:
+                    _ratio = _ev['ratio']
+                    _fwd   = _ratio > 1
+                    _label = '%.0f:1 forward split' % _ratio if _fwd else '1:%.0f reverse split' % (1/_ratio)
+                    st.info(
+                        f"⚠️ **Stock split detected: {xe(_ev['ticker'])}** — {_label} on "
+                        f"{_ev['date'].strftime('%d/%m/%Y')} "
+                        f"({_ev['pre_qty']:.0f} → {_ev['post_qty']:.0f} shares). "
+                        "Pre-split lot sizes have been automatically rescaled in the FIFO engine "
+                        "so cost basis and P/L should be correct. "
+                        "Note: adjusted option symbols are a separate TastyTrade entry and are "
+                        "not automatically stitched to pre-split contracts.",
+                        icon=None
+                    )
+            if corp_zero_cost_rows:
+                _zc_tickers = sorted({r['ticker'] for r in corp_zero_cost_rows})
+                _zc_lines   = [
+                    f"**{xe(r['ticker'])}** — {r['qty']:.0f} shares on "
+                    f"{r['date'].strftime('%d/%m/%Y')}: _{xe(r['description'])}_"
+                    for r in corp_zero_cost_rows
+                ]
+                st.warning(
+                    "⚠️ **Zero-cost share delivery detected** — the following positions "
+                    "were received with Total = $0, which typically means the cost basis was not "
+                    "transferred (spin-off, ACATS, merger conversion). "
+                    "These shares have been loaded with a $0/share cost basis, which will "
+                    "**overstate P/L** on eventual sale by the full proceeds amount. "
+                    "Check your broker statement for the correct allocated basis and note "
+                    "this as a limitation of the current data.\n\n"
+                    + "\n\n".join(_zc_lines)
+                )
 
     # ── Expiry alert data (fast — from cached df_open) ────────────────────────────
     _expiry_alerts = []
@@ -543,15 +567,11 @@ def main():
     window_label = '🗓 Window: %s → %s (%s)' % (
         start_date.strftime('%d/%m/%Y'), latest_date.strftime('%d/%m/%Y'), selected_period)
 
-    st.markdown("""
-            <div class='sync-header'>
-                📡 <b>DATA SYNC:</b> %s UTC &nbsp;|&nbsp;
-                📅 <b>WINDOW:</b> <span class='highlight-range'>%s</span> → %s (%s)
-            </div>
-        """ % (latest_date.strftime('%d/%m/%Y %H:%M'),
-               start_date.strftime('%d/%m/%Y'),
-               latest_date.strftime('%d/%m/%Y'),
-               xe(selected_period)), unsafe_allow_html=True)
+    st.caption('📡 %s UTC  ·  📅 %s → %s  (%s)' % (
+        latest_date.strftime('%d/%m/%Y %H:%M'),
+        start_date.strftime('%d/%m/%Y'),
+        latest_date.strftime('%d/%m/%Y'),
+        selected_period))
 
     window_trades_df = closed_trades_df[closed_trades_df['Close Date'] >= start_date].copy() \
         if not closed_trades_df.empty else pd.DataFrame()
@@ -672,8 +692,10 @@ def main():
     )
 
     m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
-    m1.metric('Realized P/L',    fmt_dollar(_pnl_display))
-    m1.caption('Total realised P/L — options premiums, share sales, and dividends. ' + ('Full account history.' if _is_all_time else 'Filtered to selected window.') + ' Unrealised share gains not included.')
+    m1.metric('Realized P/L', fmt_dollar(_pnl_display),
+              help='Total realised P/L — options premiums, share sales, and dividends. ' +
+                   ('Full account history.' if _is_all_time else 'Filtered to selected window.') +
+                   ' Unrealised share gains not included.')
     if _ror_display is None:
         _ror_label  = '∞ house money' if net_deposited < 0 else 'N/A'
         _ror_help   = (
@@ -684,12 +706,8 @@ def main():
         )
     else:
         _ror_label = '%.1f%%' % _ror_display
-        _ror_help  = None
-    m2.metric('Realized ROR', _ror_label)
-    if _ror_help:
-        m2.caption(_ror_help)
-    else:
-        m2.caption('Realised P/L as a % of net deposits — how hard your capital is working. Excludes unrealised gains.')
+        _ror_help  = 'Realised P/L as a % of net deposits — how hard your capital is working. Excludes unrealised gains.'
+    m2.metric('Realized ROR', _ror_label, help=_ror_help)
 
     _short_warn_slot = st.empty()
     if _is_short_window:
@@ -703,16 +721,18 @@ def main():
                 '**All Time or YTD give the most reliable P/L picture.**'
             )
     _cap_label = '%.1f%%' % cap_eff_score if cap_eff_score is not None else 'N/A'
-    m3.metric('Cap Efficiency', _cap_label)
-    m3.caption('Annualised return on capital in shares (Window P/L ÷ Capital Deployed × 365 ÷ Window Days). Changes with the time window. Benchmark: S&P ~10%/yr.' if cap_eff_score is not None else 'No capital currently deployed in share positions.')
-    m4.metric('Capital Deployed',fmt_dollar(capital_deployed))
-    m4.caption('Cash tied up in open share positions — wheel campaigns and fractional holdings. Options margin not included.')
-    m5.metric('Margin Loan',     fmt_dollar(margin_loan))
-    m5.caption('Your current broker debt — the negative cash balance. Zero is ideal unless you are deliberately leveraging.')
-    m6.metric('Div + Interest',  fmt_dollar(div_income + int_net))
-    m6.caption('Dividends received plus net interest (credit earned minus margin debit). Filtered to the selected time window.')
-    m7.metric('Account Age',     '%d days' % account_days)
-    m7.caption('Days since your first transaction — how long your track record covers. Longer means more reliable statistics.')
+    m3.metric('Cap Efficiency', _cap_label,
+              help='Annualised return on capital in shares (Window P/L ÷ Capital Deployed × 365 ÷ Window Days). '
+                   'Changes with the time window. Benchmark: S&P ~10%/yr.' if cap_eff_score is not None else
+                   'No capital currently deployed in share positions.')
+    m4.metric('Capital Deployed', fmt_dollar(capital_deployed),
+              help='Cash tied up in open share positions — wheel campaigns and fractional holdings. Options margin not included.')
+    m5.metric('Margin Loan', fmt_dollar(margin_loan),
+              help='Your current broker debt — the negative cash balance. Zero is ideal unless you are deliberately leveraging.')
+    m6.metric('Div + Interest', fmt_dollar(div_income + int_net),
+              help='Dividends received plus net interest (credit earned minus margin debit). Filtered to the selected time window.')
+    m7.metric('Account Age', '%d days' % account_days,
+              help='Days since your first transaction — how long your track record covers. Longer means more reliable statistics.')
 
 
     # ── Realized P/L Breakdown — inline chip line ─────────────────────────────────
@@ -740,44 +760,7 @@ def main():
 
 
 
-    # ── Period Comparison Card ─────────────────────────────────────────────────────
-    _period_cmp_slot = st.empty()
-    if selected_period != 'All Time' and not _df_prior.empty:
-        _pnl_delta  = _pnl_display - prior_period_pnl
-        _delta_sign = '+' if _pnl_delta >= 0 else ''
-        _delta_col  = COLOURS['green'] if _pnl_delta >= 0 else COLOURS['red']
-        _arrow      = '▲' if _pnl_delta >= 0 else '▼'
-        _period_lbl = selected_period.replace('Last ','').replace('YTD','Year-to-date')
-
-        _curr_wr, _prev_wr = 0.0, 0.0
-        if not closed_trades_df.empty:
-            _cw = closed_trades_df[closed_trades_df['Close Date'] >= start_date]
-            _pw = closed_trades_df[(closed_trades_df['Close Date'] >= _prior_start) &
-                                   (closed_trades_df['Close Date'] < _prior_end)]
-            _curr_wr = _cw['Won'].mean() * 100 if not _cw.empty else 0.0
-            _prev_wr = _pw['Won'].mean() * 100 if not _pw.empty else 0.0
-
-        _curr_div = df_window[df_window['Sub Type']==SUB_DIVIDEND]['Total'].sum()
-        _prev_div = _df_prior[_df_prior['Sub Type']==SUB_DIVIDEND]['Total'].sum()
-
-        blocks = (
-            _cmp_block('Realized P/L', _pnl_display, prior_period_pnl) +
-            _cmp_block('Trades Closed', current_period_trades, prior_period_trades, is_pct=False) +
-            _cmp_block('Win Rate', _curr_wr, _prev_wr, is_pct=True) +
-            _cmp_block('Dividends', _curr_div, _prev_div)
-        )
-
-        with _period_cmp_slot:
-            st.markdown(
-                f'<div style="background:linear-gradient(135deg,' + COLOURS['card_bg'] + ',' + COLOURS['card_bg2'] + ');border:1px solid ' + COLOURS['border'] + ';'
-                f'border-radius:10px;padding:14px 18px;margin:0 0 20px 0;">'
-                f'<div style="color:' + COLOURS['text_muted'] + ';font-size:0.72rem;text-transform:uppercase;'
-                f'letter-spacing:0.06em;margin-bottom:10px;">'
-                f'📅 {selected_period} vs prior {_period_lbl}</div>'
-                f'<div style="display:flex;flex-wrap:wrap;gap:0;">{blocks}</div>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
+    # ── Period Comparison Card — rendered inside tab4 ──────────────────────────────
 
     # ── Shared derived slices — computed once, used by Tabs 1 and 2 ───────────────
     # all_cdf: closed trades filtered to current time window (falls back to all-time
@@ -824,6 +807,44 @@ def main():
         else:
             st.caption('Upload data to enable report export.')
 
+        # ── AI Review Prompt ──────────────────────────────────────────────────
+        st.markdown('---')
+        st.markdown('#### 🤖 AI Review Prompt')
+        if has_data:
+            if st.button('📋 Generate AI Review Prompt',
+                         use_container_width=True,
+                         help='Builds a prompt with your trading metrics ready to paste into Claude, ChatGPT, or any LLM.'):
+                st.session_state['_ai_prompt'] = build_review_prompt(
+                    all_cdf=all_cdf,
+                    credit_cdf=credit_cdf,
+                    all_campaigns=all_campaigns,
+                    df_window=df_window,
+                    latest_date=latest_date,
+                    start_date=start_date,
+                    selected_period=selected_period,
+                    window_realized_pnl=window_realized_pnl,
+                    total_realized_pnl=total_realized_pnl,
+                    div_income=div_income,
+                    int_net=int_net,
+                    total_deposited=total_deposited,
+                    net_deposited=net_deposited,
+                    realized_ror=realized_ror,
+                    use_lifetime=use_lifetime,
+                )
+            if st.session_state.get('_ai_prompt'):
+                st.text_area(
+                    'Copy and paste into any LLM',
+                    value=st.session_state['_ai_prompt'],
+                    height=260,
+                    label_visibility='visible',
+                )
+                st.caption(
+                    '⚠️ This prompt contains aggregate metrics, not raw transactions. '
+                    'Pasting it into an external LLM sends that data outside this app.'
+                )
+        else:
+            st.caption('Upload data to generate a review prompt.')
+
     # ── TABS ───────────────────────────────────────────────────────────────────────
     # Keep all in-tab selectors visually in sync. Must happen before widgets are
     # rendered — Streamlit ignores `index=` once a key exists in session state.
@@ -835,7 +856,7 @@ def main():
         '📈 Derivatives Performance',
         '🔬 Discipline & Patterns',
         '🎯 Wheel Campaigns',
-        '🔍 All Trades',
+        '📊 Portfolio P/L',
         '💰 Deposits, Dividends & Fees'
     ])
 
@@ -843,7 +864,7 @@ def main():
     with tab1:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,
-                         key='tw_tab1', label_visibility='collapsed',
+                         key='tw_tab1', label_visibility='visible',
                          on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab1']}))
         render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                     df_window, start_date, latest_date, window_label,
@@ -851,7 +872,7 @@ def main():
     with tab2:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,
-                         key='tw_tab2', label_visibility='collapsed',
+                         key='tw_tab2', label_visibility='visible',
                          on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab2']}))
         render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                     df_window, _win_label, _win_suffix, _win_start_str, _win_end_str)
@@ -859,8 +880,36 @@ def main():
     with tab4:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,
-                         key='tw_tab4', label_visibility='collapsed',
+                         key='tw_tab4', label_visibility='visible',
                          on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab4']}))
+        if selected_period != 'All Time' and not _df_prior.empty:
+            _pnl_delta  = _pnl_display - prior_period_pnl
+            _period_lbl = selected_period.replace('Last ', '').replace('YTD', 'Year-to-date')
+            _curr_wr, _prev_wr = 0.0, 0.0
+            if not closed_trades_df.empty:
+                _cw = closed_trades_df[closed_trades_df['Close Date'] >= start_date]
+                _pw = closed_trades_df[(closed_trades_df['Close Date'] >= _prior_start) &
+                                       (closed_trades_df['Close Date'] < _prior_end)]
+                _curr_wr = _cw['Won'].mean() * 100 if not _cw.empty else 0.0
+                _prev_wr = _pw['Won'].mean() * 100 if not _pw.empty else 0.0
+            _curr_div = df_window[df_window['Sub Type'] == SUB_DIVIDEND]['Total'].sum()
+            _prev_div = _df_prior[_df_prior['Sub Type'] == SUB_DIVIDEND]['Total'].sum()
+            blocks = (
+                _cmp_block('Realized P/L', _pnl_display, prior_period_pnl) +
+                _cmp_block('Trades Closed', current_period_trades, prior_period_trades, is_pct=False) +
+                _cmp_block('Win Rate', _curr_wr, _prev_wr, is_pct=True) +
+                _cmp_block('Dividends', _curr_div, _prev_div)
+            )
+            st.markdown(
+                f'<div style="background:linear-gradient(135deg,{COLOURS["card_bg"]},{COLOURS["card_bg2"]});'
+                f'border:1px solid {COLOURS["border"]};border-radius:10px;padding:14px 18px;margin:0 0 20px 0;">'
+                f'<div style="color:{COLOURS["text_muted"]};font-size:0.72rem;text-transform:uppercase;'
+                f'letter-spacing:0.06em;margin-bottom:10px;">'
+                f'📅 {selected_period} vs prior {_period_lbl}</div>'
+                f'<div style="display:flex;flex-wrap:wrap;gap:0;">{blocks}</div>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
         render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
                     pure_options_tickers, pure_opts_per_ticker,
                     capital_deployed, start_date, latest_date,
@@ -869,7 +918,7 @@ def main():
     with tab5:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,
-                         key='tw_tab5', label_visibility='collapsed',
+                         key='tw_tab5', label_visibility='visible',
                          on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab5']}))
         render_tab5(df_window, total_deposited, total_withdrawn,
                     div_income, int_net, _win_label)

@@ -143,6 +143,11 @@ def render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
                 st.caption('Sorted by absolute P/L. Covers full account history.')
 
     st.markdown('---')
+    st.markdown(
+        f'<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:0 0 8px 0;">'
+        f'📋 Per-Ticker P/L Summary {_win_label}</div>',
+        unsafe_allow_html=True
+    )
     rows = []
     for ticker, camps in sorted(all_campaigns.items()):
         tr = sum(realized_pnl(c, use_lifetime) for c in camps)
@@ -152,9 +157,12 @@ def render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
         po = pure_opts_per_ticker.get(ticker, 0.0)
         oc = sum(1 for c in camps if c.status == 'open')
         cc = sum(1 for c in camps if c.status == 'closed')
+        # Equity = realized P/L minus the options and income components
+        t_equity = tr - tp - tv
         rows.append({'Ticker': ticker, 'Type': '🎡 Wheel',
             'Campaigns': '%d open, %d closed' % (oc, cc),
-            'Premiums': tp, 'Divs': tv, 'Options P/L': po, 'Deployed': td, 'P/L': tr + po})
+            'Options': tp + po, 'Equity': t_equity, 'Income': tv,
+            'Deployed': td, 'P/L': tr + po})
     for ticker in sorted(pure_options_tickers):
         t_df        = df[df['Ticker'] == ticker]
         t_eq        = t_df[equity_mask(t_df['Instrument Type'])].sort_values('Date')
@@ -162,7 +170,8 @@ def render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
             t_df['Instrument Type'].isin(OPT_TYPES) & t_df['Type'].isin(TRADE_TYPES)
         ]['Total'].sum()
         eq_fifo_pnl = sum(p - c for _, p, c in _iter_fifo_sells(t_eq))
-        pnl         = opt_flow + eq_fifo_pnl
+        t_div       = t_df[t_df['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
+        pnl         = opt_flow + eq_fifo_pnl + t_div
         net_shares  = t_eq['Net_Qty_Row'].sum()
         cap_dep     = 0.0
         if net_shares > 0.0001:
@@ -172,22 +181,22 @@ def render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
             avg_cost       = total_buy_cost / total_bought if total_bought > 0 else 0
             cap_dep        = net_shares * avg_cost
         rows.append({'Ticker': ticker, 'Type': '📊 Standalone',
-            'Campaigns': '—', 'Premiums': pnl, 'Divs': 0.0,
-            'Options P/L': 0.0, 'Deployed': cap_dep, 'P/L': pnl})
+            'Campaigns': '—', 'Options': opt_flow, 'Equity': eq_fifo_pnl, 'Income': t_div,
+            'Deployed': cap_dep, 'P/L': pnl})
     if rows:
         deep_df   = pd.DataFrame(rows)
         total_row = {
             'Ticker': 'TOTAL', 'Type': '', 'Campaigns': '',
-            'Premiums':    deep_df['Premiums'].sum(),
-            'Divs':        deep_df['Divs'].sum(),
-            'Options P/L': deep_df['Options P/L'].sum(),
-            'Deployed':    deep_df['Deployed'].sum(),
-            'P/L':         deep_df['P/L'].sum(),
+            'Options':  deep_df['Options'].sum(),
+            'Equity':   deep_df['Equity'].sum(),
+            'Income':   deep_df['Income'].sum(),
+            'Deployed': deep_df['Deployed'].sum(),
+            'P/L':      deep_df['P/L'].sum(),
         }
         deep_df = pd.concat([deep_df, pd.DataFrame([total_row])], ignore_index=True)
         st.dataframe(deep_df.style.format({
-            'Premiums': fmt_dollar, 'Divs': fmt_dollar,
-            'Options P/L': fmt_dollar, 'Deployed': fmt_dollar, 'P/L': fmt_dollar,
+            'Options': fmt_dollar, 'Equity': fmt_dollar, 'Income': fmt_dollar,
+            'Deployed': fmt_dollar, 'P/L': fmt_dollar,
         }).bar(subset=['Deployed'], color='rgba(88,166,255,0.20)', vmin=0
         ).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
 
