@@ -794,6 +794,7 @@ def main():
                 total_fees=_rpt_total_fees,
                 net_deposited=total_deposited,
                 selected_period=selected_period,
+                daily_pnl_all=_daily_pnl_all,
             )
             _report_fname = 'tastymechanics_report_%s.html' % _win_start_str.replace('/', '-')
             st.download_button(
@@ -832,12 +833,8 @@ def main():
                     use_lifetime=use_lifetime,
                 )
             if st.session_state.get('_ai_prompt'):
-                st.text_area(
-                    'Copy and paste into any LLM',
-                    value=st.session_state['_ai_prompt'],
-                    height=260,
-                    label_visibility='visible',
-                )
+                st.caption('Copy and paste into any LLM — use the icon in the top-right corner of the box below.')
+                st.code(st.session_state['_ai_prompt'], language=None, wrap_lines=True)
                 st.caption(
                     '⚠️ This prompt contains aggregate metrics, not raw transactions. '
                     'Pasting it into an external LLM sends that data outside this app.'

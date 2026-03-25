@@ -76,8 +76,8 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
             help='Typical annualised return on capital at risk, capped at ±%d%% to stop 0DTE trades producing astronomical figures. Treat with caution on small samples.' % ANN_RETURN_CAP)
         dm6.metric('Med Premium/Day',    fmt_dollar(credit_cdf['Prem/Day'].median()),
             help='Median credit collected per day held, across individual trades. Measures theta efficiency per position.')
-        dm7.metric('Banked $/Day', fmt_dollar(total_net_pnl_closed / window_days),
-            delta='vs $%.2f gross' % (total_credit_rcvd / window_days), delta_color='normal',
+        dm7.metric('Kept $/Day', fmt_dollar(total_net_pnl_closed / window_days),
+            delta='vs $%.2f gross/day' % (total_credit_rcvd / window_days), delta_color='normal',
             help='Net realized P/L divided by the number of calendar days in this window — what you actually kept per day after all buybacks and losses. Delta shows gross premium collected per day for comparison.')
 
         _winners = all_cdf[all_cdf['Net P/L'] > 0]['Net P/L']
