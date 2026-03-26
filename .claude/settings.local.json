@@ -34,7 +34,9 @@
       "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''report.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''syntax OK''\\)\")",
       "Bash(PYTHONIOENCODING=utf-8 python3 -c \"from report import build_html_report; print\\(''import OK''\\)\")",
       "Bash(PYTHONIOENCODING=utf-8 python3 -c \"from report import build_html_report; print\\(''OK''\\)\")",
-      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"from report import build_html_report; print\\(''''OK''''\\)\")"
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"from report import build_html_report; print\\(''''OK''''\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\(''report.py''\\).read\\(\\)\\); ast.parse\\(open\\(''tabs/tab1_derivatives.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\(''report.py'', encoding=''utf-8''\\).read\\(\\)\\); ast.parse\\(open\\(''tabs/tab1_derivatives.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK''\\)\")"
     ]
   }
 }

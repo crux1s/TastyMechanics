@@ -635,11 +635,13 @@ def main():
     # ── Window label helper — used in section titles throughout ───────────────────
     _win_start_str = start_date.strftime('%d/%m/%Y')
     _win_end_str   = latest_date.strftime('%d/%m/%Y')
+    _win_days_str  = (f', {(latest_date - start_date).days + 1}d'
+                      if selected_period == 'YTD' else '')
     _win_label     = (f'<span style="font-size:0.75rem;font-weight:400;color:' + COLOURS['blue'] + ';'
                       f'letter-spacing:0.02em;margin-left:8px;">'
-                      f'{_win_start_str} → {_win_end_str} ({selected_period})</span>')
+                      f'{_win_start_str} → {_win_end_str} ({selected_period}{_win_days_str})</span>')
     # Plain text version for plotly chart titles (no HTML)
-    _win_suffix    = f'  ·  {_win_start_str} → {_win_end_str}'
+    _win_suffix    = f'  ·  {_win_start_str} → {_win_end_str}{_win_days_str}'
 
     # ── Debug export (for test suite comparison) ──────────────────────────────────
     if _os.environ.get('TASTYMECHANICS_TEST') == '1':

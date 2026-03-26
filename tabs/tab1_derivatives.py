@@ -125,8 +125,9 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                 # ── Capture % Distribution chart ─────────────────────────────
                 bins   = [-999, 0, 25, 50, 75, 100, 999]
                 labels = ['Loss', '0–25%', '25–50%', '50–75%', '75–100%', '>100%']
-                credit_cdf['Bucket'] = pd.cut(credit_cdf['Capture %'], bins=bins, labels=labels)
-                bucket_df = credit_cdf.groupby('Bucket', observed=False).agg(
+                _cap_cdf = credit_cdf.copy()
+                _cap_cdf['Bucket'] = pd.cut(_cap_cdf['Capture %'], bins=bins, labels=labels)
+                bucket_df = _cap_cdf.groupby('Bucket', observed=False).agg(
                     Trades=('Net P/L', 'count')).reset_index()
                 colors = [COLOURS['red'], '#ffa421', '#ffe066', '#7ec8e3', COLOURS['green'], COLOURS['blue']]
                 fig_cap = px.bar(bucket_df, x='Bucket', y='Trades', color='Bucket',
@@ -169,7 +170,7 @@ def render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                     'Win %': round(credit_cdf['Won'].mean() * 100, 1),
                     'Capture %': round(credit_cdf['Capture %'].median(), 1),
                     'P/L': type_df['P/L'].sum(),
-                    'Prem/Day': round(type_df['Prem/Day'].mean(), 1),
+                    'Prem/Day': round(credit_cdf['Prem/Day'].median(), 1),
                     'Med Days in Trade': round(credit_cdf['Days Held'].median(), 1),
                     'DTE at Entry': round(credit_cdf['DTE at Open'].median(), 1),
                 }])

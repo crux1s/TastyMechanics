@@ -1,7 +1,7 @@
 """
 report.py — HTML report export for TastyMechanics.
 
-Generates a self-contained dark-theme HTML report string containing:
+Generates a dark-theme HTML report string (requires CDN for Plotly charts) containing:
   - Portfolio Overview scorecard (total P/L, dividends, interest, fees)
   - Premium Selling Scorecard — two rows matching Tab 1 (trade quality + risk/fees)
   - Capture % Distribution bar chart
@@ -17,7 +17,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from config import COLOURS, WIN_RATE_GREEN, WIN_RATE_ORANGE, ANN_RETURN_CAP
-from ui_components import fmt_dollar, chart_layout
+from ui_components import fmt_dollar, chart_layout, xe
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -205,11 +205,9 @@ def build_html_report(all_cdf, credit_cdf, has_credit, has_data,
             'Med_Days': round(credit_cdf['Days Held'].median(), 1),
             'Med_DTE': round(credit_cdf['DTE at Open'].median(), 1),
         }
-        type_rows = list(type_df.itertuples(index=False)) + [type(
-            'R', (), _tot)()]
         for i, r in enumerate(type_df.itertuples(index=False)):
             cvp_rows.append(_tr([
-                _td(str(r.Type),          'left'),
+                _td(xe(str(r.Type)),       'left'),
                 _td(str(int(r.Trades))),
                 _td('%.1f%%' % r.Win_Rate,  color=_wr_color(r.Win_Rate)),
                 _td('%.1f%%' % r.Med_Capture),
@@ -226,7 +224,7 @@ def build_html_report(all_cdf, credit_cdf, has_credit, has_data,
             _td('<strong>%.1f%%</strong>' % credit_cdf['Capture %'].median()),
             _td('<strong>%s</strong>' % fmt_dollar(type_df['Total_PNL'].sum()),
                 color=_pnl_color(type_df['Total_PNL'].sum()), mono=True),
-            _td('<strong>$%.2f</strong>' % type_df['Avg_PremDay'].mean()),
+            _td('<strong>$%.2f</strong>' % credit_cdf['Prem/Day'].median()),
             _td('<strong>%.0fd</strong>' % credit_cdf['Days Held'].median()),
             _td('<strong>%.0fd</strong>' % credit_cdf['DTE at Open'].median()),
         ]))
@@ -246,12 +244,12 @@ def build_html_report(all_cdf, credit_cdf, has_credit, has_data,
         strat_df['risk'] = strat_df['Trade Type'].map(spread_map)
         strat_df.loc[strat_df['Trade Type'] == 'Covered Call', 'risk'] = True
         for i, (_, r) in enumerate(strat_df.iterrows()):
-            dot = '🔵 ' if r['risk'] is True else ('🟠 ' if r['risk'] is False else '')
+            dot = '🔵 ' if r['risk'] == True else ('🟠 ' if r['risk'] == False else '')  # noqa: E712 — numpy.bool_ fails with `is`
             dim = 'opacity:0.45;font-style:italic;' if r['Trades'] < 5 else ''
             strat_rows.append(
                 '<tr style="background:%s;%s">' % (
                     'rgba(255,255,255,0.025)' if i % 2 else '', dim)
-                + _td(dot + str(r['Trade Type']), 'left')
+                + _td(dot + xe(str(r['Trade Type'])), 'left')
                 + _td(str(int(r['Trades'])))
                 + _td('%.1f%%' % r['Win_Rate'], color=_wr_color(r['Win_Rate']))
                 + _td(fmt_dollar(r['Total_PNL']), color=_pnl_color(r['Total_PNL']), mono=True)
@@ -353,7 +351,7 @@ def build_html_report(all_cdf, credit_cdf, has_credit, has_data,
             rows, prev = [], 0.0
             for period, grp in _pdf.groupby(group_col, sort=True):
                 o = prev; c = grp['CumPL'].iloc[-1]
-                rows.append({'Period': pd.Timestamp(str(period)),
+                rows.append({'Period': pd.Timestamp(period),
                              'Open': o, 'High': max(grp['CumPL'].max(), o),
                              'Low':  min(grp['CumPL'].min(), o), 'Close': c,
                              'Net': grp['Net P/L'].sum(), 'Trades': len(grp)})
@@ -434,7 +432,7 @@ def build_html_report(all_cdf, credit_cdf, has_credit, has_data,
                 '<tr style="background:%s;%s">' % (
                     'rgba(255,255,255,0.025)' if i % 2 else '', dim)
                 + _td('<strong style="font-family:monospace;color:%s;">%s</strong>'
-                      % (C['white'], str(row.Ticker)), 'left')
+                      % (C['white'], xe(str(row.Ticker))), 'left')
                 + _td(str(row.WL))
                 + _td('%.1f%%' % row.Win_Rate, color=_wr_color(row.Win_Rate))
                 + _td(fmt_dollar(row.Total_PNL), color=_pnl_color(row.Total_PNL), mono=True)
