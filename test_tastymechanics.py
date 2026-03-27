@@ -754,6 +754,32 @@ check_int('Chains: BTO leg not recorded — chain has 2 events (STO + expiry)',
 _empty = _make_opts([])
 check_int('Chains: empty input → 0 chains', len(build_option_chains(_empty)), 0)
 
+# ── Reverse-roll: STO for new strike has earlier timestamp than BTC of old ───
+# Real-world case: during a roll executed in seconds, the STO order fills a
+# moment before the BTC order. After sorting by timestamp, the chain ends with
+# BTC as its last event. The net_qty replay (tab3 fix) must still detect this
+# chain as open (net_qty=1) even though chain[-1]['sub_type'] == 'Buy to Close'.
+_rev_roll = _make_opts([
+    {'date': '2025-01-05 14:00:00', 'sub': 'Sell to Open',  'qty': -1, 'total':  80, 'strike': 10.5},
+    {'date': '2025-01-19 09:25:56', 'sub': 'Sell to Open',  'qty': -1, 'total':  25, 'strike': 10.0},
+    {'date': '2025-01-19 09:26:41', 'sub': 'Buy to Close',  'qty':  1, 'total': -19, 'strike': 10.5},
+])
+_ch6 = build_option_chains(_rev_roll)
+check_int('Chains: reverse-roll → 1 chain',       len(_ch6), 1)
+check_int('Chains: reverse-roll chain has 3 legs', len(_ch6[0]), 3)
+# Verify net_qty replay (the logic used by tab3's is_open_chain fix)
+_rr_net = 0
+_rr_last_sto = -1
+from config import PAT_CLOSE
+for _ri, _rl in enumerate(_ch6[0]):
+    _rsub = str(_rl['sub_type']).lower()
+    if 'to open' in _rsub and _rl['qty'] < 0:
+        _rr_net += abs(_rl['qty']); _rr_last_sto = _ri
+    elif _rr_net > 0 and PAT_CLOSE in _rsub:
+        _rr_net = max(_rr_net - abs(_rl['qty']), 0)
+check_int('Chains: reverse-roll net_qty=1 (chain is open)', _rr_net, 1)
+check_int('Chains: reverse-roll open leg is STO at index 1', _rr_last_sto, 1)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 17. CLOSED TRADES — CORE AGGREGATES

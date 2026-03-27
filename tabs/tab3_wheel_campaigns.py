@@ -268,8 +268,20 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                 for ci, chain in enumerate(chains):
                     cp     = chain[0]['cp']
                     ch_pnl = sum(leg['total'] for leg in chain)
-                    last   = chain[-1]
-                    is_open_chain = 'to open' in str(last['sub_type']).lower()
+                    # Replay net_qty to determine open/closed status. Checking only
+                    # the last event's sub_type is wrong when an STO has an earlier
+                    # timestamp than its paired BTC (rapid rolls in the same second
+                    # or same minute sort STO before BTC, leaving BTC as the final leg).
+                    _net = 0
+                    _last_sto_idx = -1
+                    for _i, _leg in enumerate(chain):
+                        _sub = str(_leg['sub_type']).lower()
+                        if 'to open' in _sub and _leg['qty'] < 0:
+                            _net += abs(_leg['qty'])
+                            _last_sto_idx = _i
+                        elif _net > 0 and (PAT_CLOSE in _sub or 'expiration' in _sub or 'assignment' in _sub):
+                            _net = max(_net - abs(_leg['qty']), 0)
+                    is_open_chain = _net > 0
                     n_rolls       = sum(1 for leg in chain
                                         if PAT_CLOSE in str(leg['sub_type']).lower())
                     chain_label = '%s %s %s Chain %d — %d roll(s) | Net: $%.2f' % (
@@ -310,7 +322,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
                                     dte_str = '%dd' % max((exp_dt - leg['date']).days, 0)
                                 except (ValueError, TypeError):
                                     dte_str = ''
-                            is_open_leg = is_open_chain and leg_i == len(chain) - 1
+                            is_open_leg = is_open_chain and leg_i == _last_sto_idx
                             chain_rows.append({
                                 'Date':   leg['date'].strftime('%d/%m/%y'),
                                 'Action': ('🟢 ' + action) if is_open_leg else action,
