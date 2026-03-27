@@ -893,9 +893,9 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
         })
     ct = pd.DataFrame(closed_list)
     if not ct.empty and 'Expiration' in ct.columns:
-        _today = pd.Timestamp.now().normalize()
-        ct['DTE at Close'] = ct['Expiration'].apply(
-            lambda e: max((pd.Timestamp(e) - _today).days, 0) if pd.notna(e) else None
+        ct['DTE at Close'] = ct.apply(
+            lambda r: max((pd.Timestamp(r['Expiration']) - pd.Timestamp(r['Close Date'])).days, 0)
+            if pd.notna(r['Expiration']) else None, axis=1
         )
     return ct
 

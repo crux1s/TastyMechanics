@@ -800,7 +800,10 @@ check    ('CT RKLB strangle premium',    _rklb_big['Net Premium'],  1194.76)
 check    ('CT RKLB strangle net P/L',    _rklb_big['Net P/L'],        757.53)
 check    ('CT RKLB strangle capture %',  _rklb_big['Capture %'],       63.4044)
 check_int('CT RKLB strangle days held',  int(_rklb_big['Days Held']),  63)
-check_int('CT RKLB strangle DTE open',   int(_rklb_big['DTE at Open']),   64)
+check_int('CT RKLB strangle DTE open',    int(_rklb_big['DTE at Open']),    64)
+# DTE at Close = (Dec 20 expiry − Dec 18 close) = 1 day.
+# Regression guard: old code used (expiry − today), yielding 0 for any expired option.
+check_int('CT RKLB strangle DTE at close', int(_rklb_big['DTE at Close']),  1)
 
 # INTC strangle Dec11–Jan02: 22 days, $209.78 credit, $119.55 P/L
 _intc_strang = _ct[
@@ -808,9 +811,11 @@ _intc_strang = _ct[
     (_ct['Trade Type'] == 'Short Strangle') &
     (_ct['Net P/L'] > 100)
 ].iloc[0]
-check('CT INTC strangle premium',   _intc_strang['Net Premium'],  209.78)
-check('CT INTC strangle net P/L',   _intc_strang['Net P/L'],       119.55)
-check('CT INTC strangle capture %', _intc_strang['Capture %'],      56.9883)
+check('CT INTC strangle premium',        _intc_strang['Net Premium'],  209.78)
+check('CT INTC strangle net P/L',        _intc_strang['Net P/L'],       119.55)
+check('CT INTC strangle capture %',      _intc_strang['Capture %'],      56.9883)
+# DTE at Close = (Jan 24 expiry − Jan 2 close) = 21 days
+check_int('CT INTC strangle DTE at close', int(_intc_strang['DTE at Close']), 21)
 
 # SOFI put assigned Feb-20: 42 days held, 100% capture (expired worthless assigned)
 _sofi_assigned = _ct[
@@ -818,10 +823,12 @@ _sofi_assigned = _ct[
     (_ct['Close Reason'] == '📋 Assigned') &
     (_ct['Net Premium'] > 130)
 ].iloc[0]
-check    ('CT SOFI assigned put premium',   _sofi_assigned['Net Premium'], 132.88)
-check    ('CT SOFI assigned put net P/L',   _sofi_assigned['Net P/L'],      132.88)
-check    ('CT SOFI assigned put capture %', _sofi_assigned['Capture %'],    100.0)
-check_int('CT SOFI assigned put days held', int(_sofi_assigned['Days Held']), 42)
+check    ('CT SOFI assigned put premium',    _sofi_assigned['Net Premium'], 132.88)
+check    ('CT SOFI assigned put net P/L',    _sofi_assigned['Net P/L'],      132.88)
+check    ('CT SOFI assigned put capture %',  _sofi_assigned['Capture %'],    100.0)
+check_int('CT SOFI assigned put days held',  int(_sofi_assigned['Days Held']), 42)
+# Assigned at expiry: DTE at Close = 0
+check_int('CT SOFI assigned put DTE at close', int(_sofi_assigned['DTE at Close']), 0)
 
 # ── Human-verified trades (cross-checked against TastyTrade UI) ──────────────
 # These were verified screenshot-by-screenshot against the real TastyTrade
@@ -836,6 +843,9 @@ check    ('VERIFIED SLV put credit received',  _slv_put['Net Premium'], 100.88)
 check    ('VERIFIED SLV put net P/L',          _slv_put['Net P/L'],       39.76)
 check    ('VERIFIED SLV put capture %',        _slv_put['Capture %'],     39.4132, tol=0.001)
 check_int('VERIFIED SLV put days held',        int(_slv_put['Days Held']),  2)
+# DTE at Close = (Jan 17 expiry − Jan 9 close) = 7 days.
+# Old buggy code: (Jan 17 − today) = 0 for a now-expired option.
+check_int('VERIFIED SLV put DTE at close',     int(_slv_put['DTE at Close']), 7)
 
 # INTC 41 Put Jan 28 → Feb 17 2026: SOLD @ 1.05 (+$103.88), BOUGHT @ 1.17 (-$117.12)
 _intc_put_loss = _ct[
