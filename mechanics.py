@@ -660,9 +660,17 @@ def _classify_trade_type(
                           long_qty_total == 2 and short_qty_total == 2 and
                           len(strikes_all) == 3 and len(expirations) == 1)
 
+    short_call_qty = abs(short_opens_sp.loc[short_opens_sp['Call or Put'].str.upper().str.contains('CALL', na=False), 'Net_Qty_Row'].sum())
+    long_call_qty  = long_opens_sp.loc[long_opens_sp['Call or Put'].str.upper().str.contains('CALL', na=False), 'Net_Qty_Row'].sum()
+    short_put_qty  = abs(short_opens_sp.loc[short_opens_sp['Call or Put'].str.upper().str.contains('PUT', na=False), 'Net_Qty_Row'].sum())
+    long_put_qty   = long_opens_sp.loc[long_opens_sp['Call or Put'].str.upper().str.contains('PUT', na=False), 'Net_Qty_Row'].sum()
+
     has_short_put_only  = any('PUT'  in c for c in short_cp) and not any('PUT'  in c for c in long_cp)
     has_call_spread_leg = any('CALL' in c for c in short_cp) and any('CALL' in c for c in long_cp)
-    is_jade_lizard = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1
+    is_jade_lizard  = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1 and short_call_qty == long_call_qty
+    is_ratio_lizard = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1 and short_call_qty != long_call_qty
+    is_call_ratio   = has_sc and has_lc and not has_sp and not has_lp and short_call_qty != long_call_qty
+    is_put_ratio    = has_sp and has_lp and not has_sc and not has_lc and short_put_qty != long_put_qty
 
     # ── Multi-leg (has at least one long open leg) ─────────────────────────────
     if n_long > 0:
@@ -677,8 +685,14 @@ def _classify_trade_type(
             return 'Long Call Butterfly' if len(call_strikes.unique()) == 3 else 'Long Put Butterfly'
         elif is_short_butterfly:
             return 'Short Call Butterfly' if len(call_strikes.unique()) == 3 else 'Short Put Butterfly'
+        elif is_call_ratio:
+            return 'Call Ratio Spread'
+        elif is_put_ratio:
+            return 'Put Ratio Spread'
         elif is_jade_lizard:
             return 'Jade Lizard'
+        elif is_ratio_lizard:
+            return 'Ratio Lizard'
         elif is_calendar:
             return 'Calendar Spread'
         elif w_call > 0 and w_put > 0:
@@ -757,9 +771,21 @@ def _calculate_capital_risk(
                           long_qty_total == 2 and short_qty_total == 2 and
                           len(strikes_all) == 3 and len(expirations) == 1)
 
-    has_short_put_only  = any('PUT'  in c for c in short_cp) and not any('PUT'  in c for c in long_cp)
-    has_call_spread_leg = any('CALL' in c for c in short_cp) and any('CALL' in c for c in long_cp)
-    is_jade_lizard = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1
+    short_call_qty = abs(short_opens_sp.loc[short_opens_sp['Call or Put'].str.upper().str.contains('CALL', na=False), 'Net_Qty_Row'].sum())
+    long_call_qty  = long_opens_sp.loc[long_opens_sp['Call or Put'].str.upper().str.contains('CALL', na=False), 'Net_Qty_Row'].sum()
+    short_put_qty  = abs(short_opens_sp.loc[short_opens_sp['Call or Put'].str.upper().str.contains('PUT', na=False), 'Net_Qty_Row'].sum())
+    long_put_qty   = long_opens_sp.loc[long_opens_sp['Call or Put'].str.upper().str.contains('PUT', na=False), 'Net_Qty_Row'].sum()
+
+    has_sc = any('CALL' in c for c in short_cp)
+    has_sp = any('PUT'  in c for c in short_cp)
+    has_lc = any('CALL' in c for c in long_cp)
+    has_lp = any('PUT'  in c for c in long_cp)
+    has_short_put_only  = has_sp and not has_lp
+    has_call_spread_leg = has_sc and has_lc
+    is_jade_lizard  = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1 and short_call_qty == long_call_qty
+    is_ratio_lizard = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1 and short_call_qty != long_call_qty
+    is_call_ratio   = has_sc and has_lc and not has_sp and not has_lp and short_call_qty != long_call_qty
+    is_put_ratio    = has_sp and has_lp and not has_sc and not has_lc and short_put_qty != long_put_qty
 
     # ── Multi-leg ──────────────────────────────────────────────────────────────
     if n_long > 0:
@@ -771,7 +797,15 @@ def _calculate_capital_risk(
         elif is_short_butterfly:
             wing_width = (strikes_all.max() - strikes_all.min()) * 100 / 2
             return max(wing_width - open_credit, 1)   # max loss = wing width minus credit received
+        elif is_call_ratio or is_put_ratio:
+            # Extra short leg is effectively naked — highest short strike is the risk proxy
+            short_strikes = short_opens_sp['Strike Price'].dropna()
+            max_short = float(short_strikes.max()) if not short_strikes.empty else 0.0
+            return max(max_short * 100 - abs(open_credit), 1)
         elif is_jade_lizard:
+            _jl_put_strike = float(put_strikes.min()) if len(put_strikes) > 0 else 0.0
+            return max(_jl_put_strike * 100 - abs(open_credit), 1)
+        elif is_ratio_lizard:
             _jl_put_strike = float(put_strikes.min()) if len(put_strikes) > 0 else 0.0
             return max(_jl_put_strike * 100 - abs(open_credit), 1)
         elif is_calendar:
