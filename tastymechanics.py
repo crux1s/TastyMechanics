@@ -65,11 +65,21 @@ import hashlib as _hashlib
 from report_prompt import build_review_prompt
 
 # ==========================================
-# TastyMechanics v26.5
+# TastyMechanics v26.6
 # ==========================================
 #
 # Changelog (recent versions — full history in git log)
 # -----------------------------------------------------
+# v26.6 (2026-03-30)
+#   - FEATURE: Call Ratio Spread, Put Ratio Spread, and Ratio Lizard (short put +
+#     unequal call spread, e.g. -1 45P / +1 65C / -2 70C) now detected as distinct
+#     strategy labels. Previously fell through to 'Call Credit Spread' or 'Jade Lizard'.
+#   - FIX: Jade Lizard detection tightened — requires equal call quantities on both
+#     legs; unequal quantities now correctly route to Ratio Lizard.
+#   - FEATURE: Capital risk for ratio spreads — extra naked short leg priced at
+#     highest short strike × 100 minus credit received.
+#   - TESTING: 307 tests passing (was 299).
+#
 # v26.5 (2026-03-21)
 #   - UX: DATA SYNC header replaced with st.caption — lighter visual weight.
 #   - UX: Portfolio Overview metric captions moved to help= tooltips.
@@ -151,7 +161,7 @@ from report_prompt import build_review_prompt
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.5"
+APP_VERSION = "v26.6"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 

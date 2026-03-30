@@ -24,7 +24,7 @@ Classified as a **2-leg spread label** (e.g. 'Call Debit Spread') — a 4-leg al
 Classified as a **vertical spread label** — diagonals have different strikes AND different expirations, so the calendar check (same strike required) fails and the trade falls through to the call/put credit/debit spread branch. Partially covered by the general 'Complex multi-leg structures' note above. P&L is correct.
 
 ### Ratio Spreads (Back Spreads / Front Spreads)
-Likely classified as **'Short (other)'** or misrouted — ratio spreads have unequal quantities (e.g. sell 1, buy 2), which breaks the classifier's assumption of matched leg quantities. Verify label and capital risk on first occurrence. P&L is correct.
+Now classified as **'Call Ratio Spread'**, **'Put Ratio Spread'**, or **'Ratio Lizard'** (short put + unequal call spread). Capital risk is computed from the highest short strike × 100 minus credit received. These labels have not yet been verified against real TastyTrade CSV data — confirm on first occurrence. P&L is correct.
 
 ### Calendar Spread direction not preserved
 All **Calendar Spread** variants (long/short, call/put) are labelled 'Calendar Spread' with no direction or type distinction. P&L is correct.

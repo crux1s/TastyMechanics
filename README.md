@@ -208,6 +208,19 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 
 ## Changelog
 
+**v26.6 — Ratio Spread & Ratio Lizard Detection** (2026-03-30)
+- **Three new strategy labels** — Call Ratio Spread, Put Ratio Spread, and Ratio Lizard (short put + unequal call spread, e.g. -1 45P / +1 65C / -2 70C). Previously these fell through to 'Call Credit Spread' or 'Jade Lizard'.
+- **Jade Lizard detection tightened** — now requires equal call quantities on both legs. Unequal-quantity call spreads combined with a short put now correctly classify as Ratio Lizard.
+- **Capital risk for ratio spreads** — the extra naked short leg is priced at the highest short strike × 100 minus credit received, reflecting the unbounded exposure.
+- Test suite at **307 tests**.
+
+**v26.5 — AI Review Prompt & Per-Ticker P/L Redesign** (2026-03-21)
+- **AI Review Prompt** in the sidebar — generates a structured markdown prompt covering win rate, capture %, DTE discipline, concentration, and strategy mix, ready to paste into any AI chat for a trading review.
+- **Per-Ticker P/L columns redesigned** — Premiums/Divs/Options → Options / Equity / Income. Options now merges in pre-campaign P/L; Equity is a new FIFO gain/loss column (was previously hidden).
+- **Portfolio Overview UX** — metric captions moved to help tooltips, DATA SYNC header replaced with a lighter caption, corporate action warnings collapsed into an expander, period comparison card moved into the Portfolio P/L tab.
+- Time window selector labels now visible consistently across all tabs.
+- Tab 4 renamed from "All Trades" to **"Portfolio P/L"**.
+
 **v26.4 — Wheel "Days to Free", Stacked Cash-Flow Charts & Tab UX** (2026-03-14)
 - **"Days to Free" estimate** on Wheel Campaign cards and summary table — projects how many days at the current premium + dividend collection rate until effective cost basis reaches $0. Displays `~450d`, `✅ Free`, or `—` (no income collected yet). "at current rate" sub-caption flags it as a straight-line projection.
 - **Stacked cash-flow bar charts** in the Portfolio Realized P/L tab — weekly and monthly bars now broken into Options (blue), Equity (orange), and Income (green) segments, making it immediately clear which category is driving a positive or negative period.

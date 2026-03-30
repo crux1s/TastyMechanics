@@ -128,7 +128,7 @@ def render_landing(app_version: str) -> None:
     <li><b style="color:{_ht};">Stock splits</b> — forward and reverse splits are detected and adjusted, but post-split option symbols are not automatically stitched to pre-split contracts.</li>
     <li><b style="color:{_ht};">Spin-offs and zero-cost deliveries</b> — shares received at $0 cost trigger a warning. Use the sidebar toggle to exclude those tickers if the inflated basis distorts your numbers.</li>
     <li><b style="color:{_ht};">Mergers and acquisitions</b> — if a ticker is acquired or merged, the campaign may be orphaned with no exit recorded. Reconcile manually.</li>
-    <li><b style="color:{_ht};">Complex multi-leg structures</b> — PMCC, diagonals, calendars, and ratio spreads may not be labelled correctly. P/L totals are correct; trade type labels may not be.</li>
+    <li><b style="color:{_ht};">Complex multi-leg structures</b> — PMCC, diagonals, and calendars may not be labelled correctly. Ratio spreads now have dedicated labels (Call/Put Ratio Spread, Ratio Lizard) but are unverified against real CSV data. P/L totals are correct; trade type labels may not be.</li>
     <li><b style="color:{_ht};">Rolled calendars</b> — front-month expiry rolls may appear as separate closed trades rather than one continuous position. Needs real data to verify.</li>
     <li><b style="color:{_ht};">Reverse Jade Lizard</b> — detected as a Jade Lizard but capital risk may be understated (max loss is on the call side). Verify if you trade this structure.</li>
     <li><b style="color:{_ht};">0DTE trades</b> — P/L is correct, but Ann Return %, Med Premium/Day, and Wheel Campaigns are less meaningful for same-day holds.</li>

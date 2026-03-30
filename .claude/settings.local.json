@@ -40,7 +40,18 @@
       "Bash(python3 -c \"import ast; ast.parse\\(open\\(''mechanics.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
       "Bash(ls \"C:/Users/tim_l/Downloads/TastyMechanics/\"*.csv)",
       "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''tabs/tab3_wheel_campaigns.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
-      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''tabs/tab3_wheel_campaigns.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK''\\)\")"
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''tabs/tab3_wheel_campaigns.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(for f:*)",
+      "Bash(do wc:*)",
+      "Read(//c/Users/tim_l/Downloads/TastyMechanics/**)",
+      "Bash(done)",
+      "Bash(sort -k3)",
+      "Bash(ls C:Userstim_lDownloadsTastyMechanics*.md)",
+      "Bash(ls C:/Users/tim_l/Downloads/TastyMechanics/*.md)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\(''''tastymechanics.py''''\\).read\\(\\)\\); print\\(''''tastymechanics OK''''\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\(''''tabs/landing.py''''\\).read\\(\\)\\); print\\(''''landing OK''''\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''''tastymechanics.py'''', encoding=''''utf-8''''\\).read\\(\\)\\); print\\(''''tastymechanics OK''''\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python3 -c \"import ast; ast.parse\\(open\\(''''tabs/landing.py'''', encoding=''''utf-8''''\\).read\\(\\)\\); print\\(''''landing OK''''\\)\")"
     ]
   }
 }
