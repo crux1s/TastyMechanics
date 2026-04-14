@@ -703,7 +703,7 @@ def main():
         if capital_deployed > 0 else None
     )
 
-    m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric('Realized P/L', fmt_dollar(_pnl_display),
               help='Total realised P/L — options premiums, share sales, and dividends. ' +
                    ('Full account history.' if _is_all_time else 'Filtered to selected window.') +
@@ -732,18 +732,11 @@ def main():
                 'This can make an actively managed period look like a loss even when the underlying trades are profitable. '
                 '**All Time or YTD give the most reliable P/L picture.**'
             )
-    _cap_label = '%.1f%%' % cap_eff_score if cap_eff_score is not None else 'N/A'
-    m3.metric('Cap Efficiency', _cap_label,
-              help='Annualised return on capital in shares (Window P/L ÷ Capital Deployed × 365 ÷ Window Days). '
-                   'Changes with the time window. Benchmark: S&P ~10%/yr.' if cap_eff_score is not None else
-                   'No capital currently deployed in share positions.')
-    m4.metric('Capital Deployed', fmt_dollar(capital_deployed),
-              help='Cash tied up in open share positions — wheel campaigns and fractional holdings. Options margin not included.')
-    m5.metric('Margin Loan', fmt_dollar(margin_loan),
+    m3.metric('Margin Loan', fmt_dollar(margin_loan),
               help='Your current broker debt — the negative cash balance. Zero is ideal unless you are deliberately leveraging.')
-    m6.metric('Div + Interest', fmt_dollar(div_income + int_net),
+    m4.metric('Div + Interest', fmt_dollar(div_income + int_net),
               help='Dividends received plus net interest (credit earned minus margin debit). Filtered to the selected time window.')
-    m7.metric('Account Age', '%d days' % account_days,
+    m5.metric('Account Age', '%d days' % account_days,
               help='Days since your first transaction — how long your track record covers. Longer means more reliable statistics.')
 
 
@@ -885,7 +878,7 @@ def main():
                          on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab2']}))
         render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                     df_window, _win_label, _win_suffix, _win_start_str, _win_end_str)
-    with tab3: render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime)
+    with tab3: render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capital_deployed)
     with tab4:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,

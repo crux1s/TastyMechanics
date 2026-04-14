@@ -32,7 +32,7 @@ from mechanics import (
 )
 
 
-def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
+def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capital_deployed=0.0):
     """Tab 3 — Wheel Campaigns: summary table, per-campaign cards, roll chains, waterfall."""
     # Read toggle state early — required for data computation and the CSV export button.
     # Session state already holds the user's last toggle interaction before any widget renders.
@@ -149,6 +149,28 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
     else:
         st.info('No open wheel campaigns.')
 
+    # ── Capital Deployed + Cap Efficiency summary ─────────────────────────────
+    if open_camps and capital_deployed > 0:
+        _total_premiums = sum((c.premiums + c.dividends) for _, _, c in open_camps)
+        _earliest_start = min(c.start_date for _, _, c in open_camps)
+        _days_active    = max((latest_date - _earliest_start).days, 1)
+        _wheel_eff      = _total_premiums / capital_deployed / _days_active * 365 * 100
+        _cd1, _cd2      = st.columns(2)
+        _cd1.metric(
+            'Capital Deployed',
+            fmt_dollar(capital_deployed),
+            help='Cash tied up in open wheel positions (shares × entry price). Options margin not included.',
+        )
+        _cd2.metric(
+            'Wheel Cap Efficiency',
+            '%.1f%%' % _wheel_eff,
+            help=(
+                'Annualised premium + dividend income as a % of capital deployed in open campaigns. '
+                'Benchmark: S&P ~10%/yr. Note: options margin is excluded from the denominator — '
+                'treat as a directional indicator, not a precise risk-adjusted return.'
+            ),
+        )
+
     # ── Closed campaigns summary table (collapsed) ────────────────────────────
     if closed_camps:
         with st.expander(f'📁 {len(closed_camps)} Closed Campaign{"s" if len(closed_camps) != 1 else ""}', expanded=False):
@@ -163,6 +185,14 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
         is_open         = True
         pnl_color       = COLOURS['green'] if rpnl >= 0 else COLOURS['red']
         basis_reduction = c.blended_basis - effb
+        _camp_deployed  = c.total_shares * c.blended_basis
+        _camp_days      = max((latest_date - c.start_date).days, 1)
+        _camp_eff       = (
+            (c.premiums + c.dividends) / _camp_deployed / _camp_days * 365 * 100
+            if _camp_deployed > 0 else None
+        )
+        _camp_eff_str   = '%.1f%%' % _camp_eff if _camp_eff is not None else '—'
+        _camp_eff_color = COLOURS['green'] if (_camp_eff or 0) >= 10 else '#ffa421' if (_camp_eff or 0) >= 0 else COLOURS['red']
         _asgn_events = [e for e in c.events if str(e.get('type', '')).startswith('Assignment Put')]
         if _asgn_events:
             _excl = sum(e.get('cash', 0) for e in _asgn_events)
@@ -211,7 +241,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             '<span style="font-size:0.8em;font-weight:600;padding:3px 10px;border-radius:20px;'
             'background:{badge_bg};color:{badge_col};">{status}</span>'
             '</div>'
-            '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:12px;text-align:center;">'
+            '<div style="display:grid;grid-template-columns:repeat(8,1fr);gap:12px;text-align:center;">'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">ENTRY</div>'
             '<div style="font-size:1.0em;font-weight:600;">{acquired}</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">SHARES</div>'
@@ -226,6 +256,9 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             '<div style="font-size:0.7em;color:#888;">at current rate</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">PREMIUMS</div>'
             '<div style="font-size:1.0em;font-weight:600;">${premiums:.2f}</div></div>'
+            '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">CAP EFF (ann)</div>'
+            '<div style="font-size:1.0em;font-weight:600;color:{camp_eff_color};">{camp_eff}</div>'
+            '<div style="font-size:0.7em;color:#888;">vs S&P ~10%</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">REALIZED P/L</div>'
             '<div style="font-size:1.1em;font-weight:700;color:{pnl_color};">${pnl:+.2f}</div></div>'
             '</div>{assignment_note}{mid_asgn_note}{pre_camp_note}</div>'
@@ -241,6 +274,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime):
             reduction=basis_reduction if basis_reduction > 0 else 0,
             free_in=_free_in_card,
             premiums=c.premiums, pnl=rpnl, pnl_color=pnl_color,
+            camp_eff=_camp_eff_str, camp_eff_color=_camp_eff_color,
             assignment_note=_assignment_note,
             mid_asgn_note=_mid_asgn_note,
             pre_camp_note=_pre_camp_note,
