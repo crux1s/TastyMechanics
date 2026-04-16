@@ -61,9 +61,22 @@ def fetch_live_prices(tickers: frozenset, option_specs: frozenset) -> dict:
                 prev = last
 
             opts: dict = {}
+            available_expiries: tuple = yf_t.options  # cached by yfinance
             for expiry, _specs in opt_lookup.get(ticker, {}).items():
                 try:
-                    chain   = yf_t.option_chain(expiry)
+                    # TastyTrade exports Saturday OCC settlement dates; yfinance
+                    # lists options under the Friday last-trading-day.  Try the
+                    # exact date first, then fall back to the prior calendar day.
+                    yf_expiry = expiry
+                    if expiry not in available_expiries:
+                        prev_day = (
+                            pd.Timestamp(expiry) - pd.Timedelta(days=1)
+                        ).strftime('%Y-%m-%d')
+                        if prev_day in available_expiries:
+                            yf_expiry = prev_day
+                        else:
+                            continue  # Neither date available — skip
+                    chain   = yf_t.option_chain(yf_expiry)
                     all_legs = pd.concat(
                         [chain.calls.assign(cp='CALL'), chain.puts.assign(cp='PUT')],
                         ignore_index=True,
@@ -71,6 +84,8 @@ def fetch_live_prices(tickers: frozenset, option_specs: frozenset) -> dict:
                     for _, row in all_legs.iterrows():
                         bid  = float(row.get('bid', 0.0) or 0.0)
                         ask  = float(row.get('ask', 0.0) or 0.0)
+                        # Key by the original expiry string so the remapping in
+                        # tab0 can match it back to the CSV value.
                         opts[(expiry, float(row['strike']), str(row['cp']))] = {
                             'bid': bid, 'ask': ask, 'mark': (bid + ask) / 2,
                         }

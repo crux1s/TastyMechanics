@@ -353,9 +353,26 @@ def render_position_card(ticker, t_df, ticker_live=None):
         'font-family:monospace;font-size:0.8rem;color:' + _mut + ';'
     )
 
+    # ── Spread context pre-computation ────────────────────────────────────────
+    _is_spread      = 'Spread' in strat
+    _is_cr_spread   = _is_spread and 'Credit' in strat
+    _is_db_spread   = _is_spread and 'Debit'  in strat
+    _spread_net_basis = float(t_df['Cost Basis'].sum()) if _is_spread else 0.0
+    _spread_strikes   = t_df['Strike Price'].dropna() if _is_spread else pd.Series(dtype=float)
+    _spread_width     = (
+        (_spread_strikes.max() - _spread_strikes.min()) * 100
+        if _is_spread and len(_spread_strikes) >= 2 else 0.0
+    )
+
     legs_html   = ''
-    total_unreal: float | None = 0.0 if ticker_live else None
-    rows_sorted = t_df.sort_values('Status').rename(columns={'Cost Basis': 'Cost_Basis'})
+    total_unreal: float | None = None
+    _live_legs_found = 0  # count of legs that actually received a live mark
+    rows_sorted = t_df.sort_values('Status').rename(columns={
+        'Cost Basis':     'Cost_Basis',
+        'Expiration Date': 'Expiration_Date',
+        'Strike Price':    'Strike_Price',
+        'Call or Put':     'Call_or_Put',
+    })
     for i, row in enumerate(rows_sorted.itertuples(index=False)):
         pos_type  = row.Status
         detail    = row.Details
@@ -398,17 +415,21 @@ def render_position_card(ticker, t_df, ticker_live=None):
                 chg_sgn = '+' if chg >= 0 else ''
                 qty   = float(getattr(row, 'Net_Qty', 0))
                 unreal = last * qty - float(row.Cost_Basis)
-                if total_unreal is not None:
-                    total_unreal += unreal
+                total_unreal = (total_unreal or 0.0) + unreal
+                _live_legs_found += 1
                 u_col = _grn if unreal >= 0 else _red
-                u_sgn = '+' if unreal >= 0 else ''
+                u_sgn = '+' if unreal >= 0 else '-'
+                ps_str = (
+                    f' <span style="color:{_dim};">({u_sgn}${abs(unreal / qty):,.2f}/sh)</span>'
+                    if qty else ''
+                )
                 live_html = (
                     f'<div style="margin-top:6px;font-size:0.75rem;">'
                     f'<span style="color:{_mut};">Last </span>'
                     f'<span style="font-family:monospace;color:{_txt};">${last:,.2f}</span>'
                     f'<span style="color:{chg_col};margin-left:6px;">{chg_sgn}{chg_pct:.2f}%</span>'
                     f'<span style="display:block;color:{u_col};font-family:monospace;margin-top:2px;">'
-                    f'Unreal {u_sgn}${abs(unreal):,.2f}</span>'
+                    f'Unreal {u_sgn}${abs(unreal):,.2f}{ps_str}</span>'
                     f'</div>'
                 )
             elif not is_equity:
@@ -416,16 +437,30 @@ def render_position_card(ticker, t_df, ticker_live=None):
                 strike = float(getattr(row, 'Strike_Price', 0.0))
                 cp     = str(getattr(row, 'Call_or_Put', '')).upper()
                 opt_data = ticker_live.get('options', {}).get((expiry, strike, cp))
+                if not opt_data:
+                    live_html = (
+                        f'<div style="margin-top:4px;font-size:0.7rem;color:{_dim};">'
+                        f'Mark — (no data)</div>'
+                    )
                 if opt_data:
                     mark  = opt_data['mark']
                     bid   = opt_data['bid']
                     ask   = opt_data['ask']
                     qty   = float(getattr(row, 'Net_Qty', 0))
-                    unreal = mark * qty * 100 - float(row.Cost_Basis)
-                    if total_unreal is not None:
-                        total_unreal += unreal
+                    cost  = float(row.Cost_Basis)
+                    unreal = mark * qty * 100 - cost
+                    total_unreal = (total_unreal or 0.0) + unreal
+                    _live_legs_found += 1
                     u_col = _grn if unreal >= 0 else _red
-                    u_sgn = '+' if unreal >= 0 else ''
+                    u_sgn = '+' if unreal >= 0 else '-'
+                    # % of premium captured — only for single-leg credit trades
+                    # (spreads get a combined % in the footer instead)
+                    pct_str = ''
+                    if not _is_spread and cost < 0 and abs(cost) > 0:
+                        pct = unreal / abs(cost) * 100
+                        pct_str = (
+                            f' <span style="color:{_dim};">({pct:.0f}% captured)</span>'
+                        )
                     live_html = (
                         f'<div style="margin-top:6px;font-size:0.75rem;">'
                         f'<span style="color:{_mut};">Mark </span>'
@@ -433,7 +468,7 @@ def render_position_card(ticker, t_df, ticker_live=None):
                         f'<span style="color:{_dim};margin-left:6px;">'
                         f'${bid:.2f} / ${ask:.2f}</span>'
                         f'<span style="display:block;color:{u_col};font-family:monospace;margin-top:2px;">'
-                        f'Unreal {u_sgn}${abs(unreal):,.2f}</span>'
+                        f'Unreal {u_sgn}${abs(unreal):,.2f}{pct_str}</span>'
                         f'</div>'
                     )
 
@@ -452,11 +487,46 @@ def render_position_card(ticker, t_df, ticker_live=None):
             f'</div>'
         )
 
+    # ── Spread context row (credit/debit, max profit/loss, % of max) ─────────
+    spread_ctx_html = ''
+    if _is_spread and total_unreal is not None and _spread_width > 0:
+        if _is_cr_spread and _spread_net_basis < 0:
+            net_cr   = abs(_spread_net_basis)
+            max_loss = max(_spread_width - net_cr, 0)
+            pct_max  = (total_unreal / net_cr * 100) if net_cr > 0 else 0.0
+            p_col    = _grn if pct_max >= 50 else _mut
+            spread_ctx_html = (
+                f'<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05);'
+                f'font-size:0.72rem;display:flex;gap:14px;flex-wrap:wrap;">'
+                f'<span style="color:{_mut};">Net cr '
+                f'<span style="font-family:monospace;color:{_txt};">${net_cr:.2f}</span></span>'
+                f'<span style="color:{_mut};">Max loss '
+                f'<span style="font-family:monospace;color:{_red};">${max_loss:.2f}</span></span>'
+                f'<span style="color:{_mut};">% of max '
+                f'<span style="font-family:monospace;color:{p_col};">{pct_max:.0f}%</span></span>'
+                f'</div>'
+            )
+        elif _is_db_spread and _spread_net_basis > 0:
+            net_db     = _spread_net_basis
+            max_profit = max(_spread_width - net_db, 0)
+            pct_loss   = (abs(total_unreal) / net_db * 100) if net_db > 0 else 0.0
+            spread_ctx_html = (
+                f'<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05);'
+                f'font-size:0.72rem;display:flex;gap:14px;flex-wrap:wrap;">'
+                f'<span style="color:{_mut};">Net db '
+                f'<span style="font-family:monospace;color:{_txt};">${net_db:.2f}</span></span>'
+                f'<span style="color:{_mut};">Max profit '
+                f'<span style="font-family:monospace;color:{_grn};">${max_profit:.2f}</span></span>'
+                f'<span style="color:{_mut};">% at risk '
+                f'<span style="font-family:monospace;color:{_mut};">{pct_loss:.0f}%</span></span>'
+                f'</div>'
+            )
+
     # ── Total unrealised P/L footer (only when live prices are active) ─────
     footer_html = ''
     if total_unreal is not None:
         f_col = _grn if total_unreal >= 0 else _red
-        f_sgn = '+' if total_unreal >= 0 else ''
+        f_sgn = '+' if total_unreal >= 0 else '-'
         footer_html = (
             f'<div style="margin-top:10px;padding-top:8px;border-top:1px solid {_bdr};'
             f'display:flex;justify-content:space-between;align-items:center;">'
@@ -492,6 +562,7 @@ def render_position_card(ticker, t_df, ticker_live=None):
         f'    </div>'
         f'  </div>'
         f'  {legs_html}'
+        f'  {spread_ctx_html}'
         f'  {footer_html}'
         f'</div>'
     )
