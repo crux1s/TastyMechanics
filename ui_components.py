@@ -107,9 +107,22 @@ def detect_strategy(ticker_df):
     if sc >= 1 and sp >= 1 and lp >= 1: return 'Big Lizard'
     if sc >= 1 and sp >= 1:             return 'Short Strangle'
     if lc >= 1 and sp >= 1:             return 'Risk Reversal'
-    if lc > 1  and sc > 0:             return 'Call Debit Spread'
+    # Vertical call spread: at least 1 long + 1 short call, same expiry, no puts
+    if lc >= 1 and sc >= 1 and sp == 0 and lp == 0 and len(exps) == 1:
+        _sc_str = ticker_df[types == 'Short Call']['Strike Price'].dropna()
+        _lc_str = ticker_df[types == 'Long Call']['Strike Price'].dropna()
+        if not _sc_str.empty and not _lc_str.empty:
+            return 'Call Credit Spread' if _sc_str.min() < _lc_str.min() else 'Call Debit Spread'
+    # Vertical put spread: at least 1 long + 1 short put, same expiry, no calls
+    if lp >= 1 and sp >= 1 and sc == 0 and lc == 0 and len(exps) == 1:
+        _sp_str = ticker_df[types == 'Short Put']['Strike Price'].dropna()
+        _lp_str = ticker_df[types == 'Long Put']['Strike Price'].dropna()
+        if not _sp_str.empty and not _lp_str.empty:
+            return 'Put Credit Spread' if _sp_str.min() > _lp_str.min() else 'Put Debit Spread'
     if sp > 0:       return 'Short Put'
-    if lc == 1:      return 'Long Call'   # exactly 1 long call — not 2+ unmatched
+    if sc > 0:       return 'Short Call'
+    if lc == 1:      return 'Long Call'
+    if lp == 1:      return 'Long Put'
     if ls > 0:       return 'Long Stock'
     return 'Custom/Mixed'
 
