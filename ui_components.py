@@ -103,6 +103,25 @@ def detect_strategy(ticker_df):
         return 'Short Put Butterfly'
     if ls > 0 and sc > 0 and sp > 0: return 'Covered Strangle'
     if ls > 0 and sc > 0:            return 'Covered Call'
+    # Four-leg condor/butterfly structures — must precede Jade Lizard/Big Lizard
+    # because those checks are subsets that would fire on the same legs.
+    if sc >= 1 and lc >= 1 and sp >= 1 and lp >= 1 and len(exps) == 1:
+        _sc_str = ticker_df[types == 'Short Call']['Strike Price'].dropna()
+        _lc_str = ticker_df[types == 'Long Call']['Strike Price'].dropna()
+        _sp_str = ticker_df[types == 'Short Put']['Strike Price'].dropna()
+        _lp_str = ticker_df[types == 'Long Put']['Strike Price'].dropna()
+        if not (_sc_str.empty or _lc_str.empty or _sp_str.empty or _lp_str.empty):
+            _net = ticker_df['Cost Basis'].sum() if 'Cost Basis' in ticker_df.columns else 0.0
+            # Iron/Reverse Iron Butterfly: short (or long) legs share the ATM strike
+            if _sc_str.iloc[0] == _sp_str.iloc[0]:
+                return 'Iron Butterfly'
+            elif _lc_str.iloc[0] == _lp_str.iloc[0]:
+                return 'Reverse Iron Butterfly'
+            # Iron Condor: 4 distinct strikes, net credit; Reverse: net debit
+            elif _net < 0:
+                return 'Iron Condor'
+            else:
+                return 'Reverse Iron Condor'
     if sp >= 1 and sc >= 1 and lc >= 1: return 'Jade Lizard'
     if sc >= 1 and sp >= 1 and lp >= 1: return 'Big Lizard'
     if sc >= 1 and sp >= 1:             return 'Short Strangle'

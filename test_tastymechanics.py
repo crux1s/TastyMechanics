@@ -1049,7 +1049,7 @@ check_int('CT 7d: no out-of-window close dates', int(_w7_outside.sum()), 0)
 # ══════════════════════════════════════════════════════════════════════════════
 from ui_components import xe, identify_pos_type, detect_strategy
 
-def _make_row(inst_type, cp, qty, strike=100.0, exp='2026-06-20'):
+def _make_row(inst_type, cp, qty, strike=100.0, exp='2026-06-20', cost_basis=0.0):
     """Helper — build a minimal Series for identify_pos_type / detect_strategy."""
     return pd.Series({
         'Instrument Type': inst_type,
@@ -1058,6 +1058,7 @@ def _make_row(inst_type, cp, qty, strike=100.0, exp='2026-06-20'):
         'Strike Price':    strike,
         'Expiration Date': exp,
         'Ticker':          'TEST',
+        'Cost Basis':      cost_basis,
     })
 
 def _make_df(*rows):
@@ -1127,6 +1128,44 @@ check_int('ds: Jade Lizard',
           _make_row('Equity Option', 'CALL',  1, 115),
       )), 'Jade Lizard')
 
+# Iron Condor — sc + lc + sp + lp, 4 distinct strikes, net credit
+# Short inner strangle + long outer wings: net credit (Cost Basis sum < 0)
+check_int('ds: Iron Condor',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL', -1, 110, '2026-06-20', -2.50),  # STO call
+          _make_row('Equity Option', 'CALL',  1, 115, '2026-06-20',  1.00),  # BTO call wing
+          _make_row('Equity Option', 'PUT',  -1,  90, '2026-06-20', -2.50),  # STO put
+          _make_row('Equity Option', 'PUT',   1,  85, '2026-06-20',  1.00),  # BTO put wing
+      )), 'Iron Condor')
+
+# Reverse Iron Condor — same legs, net debit (long inner + short outer wings)
+check_int('ds: Reverse Iron Condor',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL',  1, 110, '2026-06-20',  2.50),  # BTO call
+          _make_row('Equity Option', 'CALL', -1, 115, '2026-06-20', -1.00),  # STO call wing
+          _make_row('Equity Option', 'PUT',   1,  90, '2026-06-20',  2.50),  # BTO put
+          _make_row('Equity Option', 'PUT',  -1,  85, '2026-06-20', -1.00),  # STO put wing
+      )), 'Reverse Iron Condor')
+
+# Iron Butterfly — short call and short put share the same ATM strike
+check_int('ds: Iron Butterfly',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL', -1, 100, '2026-06-20', -3.00),  # STO ATM call
+          _make_row('Equity Option', 'CALL',  1, 105, '2026-06-20',  1.00),  # BTO call wing
+          _make_row('Equity Option', 'PUT',  -1, 100, '2026-06-20', -3.00),  # STO ATM put (same strike)
+          _make_row('Equity Option', 'PUT',   1,  95, '2026-06-20',  1.00),  # BTO put wing
+      )), 'Iron Butterfly')
+
+# Reverse Iron Butterfly — long call and long put share the same ATM strike
+check_int('ds: Reverse Iron Butterfly',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL',  1, 100, '2026-06-20',  3.00),  # BTO ATM call
+          _make_row('Equity Option', 'CALL', -1, 105, '2026-06-20', -1.00),  # STO call wing
+          _make_row('Equity Option', 'PUT',   1, 100, '2026-06-20',  3.00),  # BTO ATM put (same strike)
+          _make_row('Equity Option', 'PUT',  -1,  95, '2026-06-20', -1.00),  # STO put wing
+      )), 'Reverse Iron Butterfly')
+
+# Jade Lizard still fires when there is NO long put (only 3 legs)
 # Big Lizard — short call + short put + long put
 check_int('ds: Big Lizard',
       detect_strategy(_make_df(

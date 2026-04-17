@@ -65,11 +65,36 @@ import hashlib as _hashlib
 from report_prompt import build_review_prompt
 
 # ==========================================
-# TastyMechanics v26.6
+# TastyMechanics v26.7
 # ==========================================
 #
 # Changelog (recent versions — full history in git log)
 # -----------------------------------------------------
+# v26.7 (2026-04-17)
+#   - FIX: detect_strategy() misidentified vertical call/put spreads as single legs.
+#     itertuples() silently renames space-containing columns (Expiration Date →_1 etc.),
+#     so every option mark lookup returned the default '' and never matched. Columns
+#     renamed before itertuples().
+#   - FIX: Live option marks never populated — TastyTrade exports Saturday OCC
+#     settlement dates; yfinance indexes chains under the Friday last-trading-day.
+#     market_data.py now falls back to the prior calendar day when the exact date
+#     is absent from the available expiries list.
+#   - FIX: Unrealised P/L footer showed misleading +$0.00 when yfinance returned no
+#     option chain data. Footer now hidden unless at least one leg received a live mark.
+#   - FIX: detect_strategy() misidentified a bear call spread (lc=1, sc=1) as 'Long
+#     Call'. Old check required lc > 1; replaced with proper vertical spread detection
+#     using strike comparison for both call and put spreads.
+#   - FEATURE: Open position card enhancements — explicit minus sign on negative
+#     unrealised P/L (was colour-only); per-share breakdown on stock legs
+#     (e.g. -$620.08 / -$6.20/sh); % of premium captured on single-leg short options
+#     (e.g. 23% captured); spread context row for call/put spreads showing net
+#     credit/debit, max loss/profit, and % of max profit.
+#   - FEATURE: Iron Condor, Reverse Iron Condor, Iron Butterfly, and Reverse Iron
+#     Butterfly added to detect_strategy() for open positions. These now take priority
+#     over Jade Lizard/Big Lizard which are subsets of the four-leg pattern.
+#     Classification logic mirrors _classify_trade_type() in mechanics.py.
+#   - TESTING: 311 tests passing (was 307).
+#
 # v26.6 (2026-03-30)
 #   - FEATURE: Call Ratio Spread, Put Ratio Spread, and Ratio Lizard (short put +
 #     unequal call spread, e.g. -1 45P / +1 65C / -2 70C) now detected as distinct
@@ -161,7 +186,7 @@ from report_prompt import build_review_prompt
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.6"
+APP_VERSION = "v26.7"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 

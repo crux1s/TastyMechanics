@@ -39,7 +39,11 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 
 **Open Positions tab**
 - Position cards per ticker: strategy badge, DTE progress bar, cost basis per leg
-- Live market prices via Yahoo Finance (opt-in toggle) — last price, day change, mark for options, unrealised P/L per leg and card total
+- Live market prices via Yahoo Finance (opt-in toggle) — last price, day change %, mark (bid/ask) for each option leg, unrealised P/L per leg and card total
+- Per-share unrealised breakdown on stock legs (e.g. `-$620.08 / -$6.20/sh`)
+- % of premium captured on single-leg short options (e.g. `23% captured`)
+- Spread context row for vertical spreads — net credit/debit, max loss/profit, % of max profit
+- Strategy detection covers Iron Condor, Reverse Iron Condor, Iron Butterfly, Reverse Iron Butterfly, Jade Lizard, Big Lizard, Short Strangle, Risk Reversal, vertical spreads, butterflies, calendars, covered structures
 - Expiry alert strip — all options expiring within 21 days, colour-coded by urgency
 
 **Portfolio Overview**
@@ -207,6 +211,13 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 ---
 
 ## Changelog
+
+**v26.7 — Open Position Card Fixes & Iron Condor Detection** (2026-04-17)
+- **Live option marks now work** — two silent bugs fixed: `itertuples()` was dropping space-containing column names (`Expiration Date` → `_1`) so every mark lookup missed; and TastyTrade exports Saturday OCC settlement dates while yfinance uses the Friday last-trading-day, so the chain fetch never matched. Both fixed.
+- **Iron Condor / Reverse Iron Condor / Iron Butterfly / Reverse Iron Butterfly** added to the open positions strategy detector. Previously a four-leg condor was misidentified as Jade Lizard (a subset match). These four structures now take priority and mirror the closed-trades classifier.
+- **Strategy badge fix** — vertical call/put spreads (e.g. a bear call credit spread) were showing as `Long Call`. Fixed by replacing an incorrect `lc > 1` guard with proper strike-comparison logic for both call and put spreads.
+- **Open position card improvements** — explicit minus sign on negative unrealised P/L (was colour-only); per-share breakdown on stock legs; % of premium captured on single-leg short options; spread context row showing net credit/debit, max loss, and % of max profit.
+- Test suite at **311 tests**.
 
 **v26.6 — Ratio Spread & Ratio Lizard Detection** (2026-03-30)
 - **Three new strategy labels** — Call Ratio Spread, Put Ratio Spread, and Ratio Lizard (short put + unequal call spread, e.g. -1 45P / +1 65C / -2 70C). Previously these fell through to 'Call Credit Spread' or 'Jade Lizard'.
