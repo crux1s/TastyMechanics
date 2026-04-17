@@ -26,6 +26,7 @@ from ui_components import (
     chart_layout, _badge_inline_style, render_position_card,
 )
 from ingestion import equity_mask, option_mask
+from market_data import fetch_live_prices
 from mechanics import (
     _iter_fifo_sells, build_option_chains,
     effective_basis, realized_pnl, calc_dte,
@@ -109,7 +110,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
     _open_rows = _summary_rows(open_camps) if open_camps else []
 
     # ── Header: title | CSV export | House Money toggle ───────────────────────
-    _col_hdr, _col_csv, _col_tog = st.columns([4, 1, 1])
+    _col_hdr, _col_csv, _col_live, _col_tog = st.columns([4, 1, 1, 1])
     with _col_hdr:
         st.subheader('🎯 Wheel Campaign Tracker')
     with _col_csv:
@@ -122,6 +123,16 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
                 use_container_width=True,
                 help='Download the open Wheel Campaigns table as a CSV file.',
             )
+    with _col_live:
+        wheel_live_on = st.toggle(
+            '📡 Live',
+            key='wheel_live_prices',
+            help=(
+                'Fetch current equity prices from Yahoo Finance to show '
+                'each campaign vs its cost basis. Cached 5 min. '
+                'Ticker symbols sent to Yahoo Finance servers.'
+            ),
+        )
     with _col_tog:
         st.toggle(
             'Lifetime "House Money"',
@@ -175,6 +186,22 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
     if closed_camps:
         with st.expander(f'📁 {len(closed_camps)} Closed Campaign{"s" if len(closed_camps) != 1 else ""}', expanded=False):
             _render_summary(_summary_rows(closed_camps))
+
+    # ── Live equity prices for campaign cards ────────────────────────────────
+    live_prices: dict = {}
+    if wheel_live_on:
+        _wheel_tickers = frozenset(
+            ticker for ticker, _, c in open_camps if c.total_shares > 0
+        )
+        if _wheel_tickers:
+            with st.spinner('Fetching live prices…'):
+                _raw = fetch_live_prices(_wheel_tickers, frozenset())
+            if _raw and any(v['last'] > 0 for v in _raw.values()):
+                live_prices = {t: d for t, d in _raw.items()}
+                st.caption(
+                    '📡 Prices: Yahoo Finance — near real-time during market hours. '
+                    'Cached 5 min. Ticker symbols sent to Yahoo Finance servers.'
+                )
 
     st.markdown('---')
 
@@ -231,6 +258,53 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
             _pre_camp_note = ''
         # Reuse the value already computed in _summary_rows — no recalculation needed
         _free_in_card = _open_rows[_camp_idx]['Free In']
+
+        # ── Live price strip ──────────────────────────────────────────────────
+        _ticker_live = live_prices.get(ticker)
+        if _ticker_live and _ticker_live.get('last', 0.0) and c.total_shares > 0:
+            _lp_last    = float(_ticker_live['last'])
+            _lp_prev    = float(_ticker_live.get('prev_close', _lp_last))
+            _lp_chg     = _lp_last - _lp_prev
+            _lp_chg_pct = (_lp_chg / _lp_prev * 100) if _lp_prev else 0.0
+            _lp_chg_sgn = '+' if _lp_chg >= 0 else ''
+            _lp_chg_col = COLOURS['green'] if _lp_chg >= 0 else COLOURS['red']
+            _lp_gap     = _lp_last - effb
+            _lp_gap_pct = (_lp_gap / effb * 100) if effb else 0.0
+            _lp_above   = _lp_gap >= 0
+            _lp_accent  = COLOURS['green'] if _lp_above else COLOURS['red']
+            _lp_gap_sgn = '+' if _lp_above else ''
+            _lp_unreal  = _lp_gap * c.total_shares
+            _lp_u_col   = COLOURS['green'] if _lp_unreal >= 0 else COLOURS['red']
+            _lp_u_sgn   = '+' if _lp_unreal >= 0 else ''
+            _lp_label   = 'ABOVE BASIS' if _lp_above else 'BELOW BASIS'
+            _mut        = COLOURS['text_muted']
+            _dim        = COLOURS['text_dim']
+            _txt        = COLOURS['text']
+            live_strip = (
+                f'<div style="margin-top:10px;padding:8px 14px;'
+                f'background:rgba(255,255,255,0.03);border-radius:6px;'
+                f'border-left:3px solid {_lp_accent};'
+                f'display:flex;flex-wrap:wrap;align-items:center;gap:8px 24px;">'
+                f'<div><div style="font-size:0.7em;color:{_mut};margin-bottom:1px;">LIVE</div>'
+                f'<div style="font-family:monospace;font-size:1.0em;font-weight:700;color:{_txt};">${_lp_last:,.2f}</div>'
+                f'<div style="font-family:monospace;font-size:0.75em;color:{_lp_chg_col};">{_lp_chg_sgn}{_lp_chg:.2f} ({_lp_chg_sgn}{_lp_chg_pct:.2f}%)</div></div>'
+                f'<div style="width:1px;height:38px;background:rgba(255,255,255,0.07);flex-shrink:0;"></div>'
+                f'<div><div style="font-size:0.7em;color:{_mut};margin-bottom:1px;">VS COST BASIS</div>'
+                f'<div style="font-family:monospace;font-size:1.0em;font-weight:700;color:{_lp_accent};">{_lp_label}</div>'
+                f'<div style="font-size:0.7em;color:{_dim};">basis ${effb:.2f}/sh</div></div>'
+                f'<div style="width:1px;height:38px;background:rgba(255,255,255,0.07);flex-shrink:0;"></div>'
+                f'<div><div style="font-size:0.7em;color:{_mut};margin-bottom:1px;">GAP TO B/E</div>'
+                f'<div style="font-family:monospace;font-size:1.0em;font-weight:700;color:{_lp_accent};">{_lp_gap_sgn}${abs(_lp_gap):.2f}/sh</div>'
+                f'<div style="font-family:monospace;font-size:0.75em;color:{_lp_accent};">{_lp_gap_sgn}{abs(_lp_gap_pct):.1f}%</div></div>'
+                f'<div style="width:1px;height:38px;background:rgba(255,255,255,0.07);flex-shrink:0;"></div>'
+                f'<div><div style="font-size:0.7em;color:{_mut};margin-bottom:1px;">UNREALISED</div>'
+                f'<div style="font-family:monospace;font-size:1.0em;font-weight:700;color:{_lp_u_col};">{_lp_u_sgn}${abs(_lp_unreal):,.2f}</div>'
+                f'<div style="font-size:0.7em;color:{_dim};">{int(c.total_shares)} sh × {_lp_gap_sgn}${abs(_lp_gap):.2f}</div></div>'
+                f'</div>'
+            )
+        else:
+            live_strip = ''
+
         card_html = (
             '<div style="border:1px solid {border};border-radius:10px;padding:16px 20px 12px 20px;'
             'margin-bottom:12px;background:rgba(255,255,255,0.03);">'
@@ -261,7 +335,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
             '<div style="font-size:0.7em;color:#888;">vs S&P ~10%</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">REALIZED P/L</div>'
             '<div style="font-size:1.1em;font-weight:700;color:{pnl_color};">${pnl:+.2f}</div></div>'
-            '</div>{assignment_note}{mid_asgn_note}{pre_camp_note}</div>'
+            '</div>{live_strip}{assignment_note}{mid_asgn_note}{pre_camp_note}</div>'
         ).format(
             border=COLOURS['green'] if is_open else '#444',
             ticker=xe(ticker), camp_n=i + 1,
@@ -275,6 +349,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
             free_in=_free_in_card,
             premiums=c.premiums, pnl=rpnl, pnl_color=pnl_color,
             camp_eff=_camp_eff_str, camp_eff_color=_camp_eff_color,
+            live_strip=live_strip,
             assignment_note=_assignment_note,
             mid_asgn_note=_mid_asgn_note,
             pre_camp_note=_pre_camp_note,
