@@ -5,6 +5,10 @@ All tuneable parameters and TastyTrade CSV field values live here.
 Change a value once and it applies everywhere.
 """
 
+import re as _re
+
+_FUTURES_CONTRACT_RE = _re.compile(r'[FGHJKMNQUVXZ]\d+$')
+
 # ── TastyTrade instrument type strings ────────────────────────────────────────
 OPT_TYPES   = ['Equity Option', 'Future Option']
 EQUITY_TYPE = 'Equity'
@@ -47,6 +51,79 @@ LEAPS_DTE_THRESHOLD = 90
 # If a position goes flat and the next STO is more than this many days later,
 # a new roll chain starts rather than continuing the existing one.
 ROLL_CHAIN_GAP_DAYS = 3
+
+# ── Futures options multipliers (dollars per index/price point) ───────────────
+# Used by _calculate_capital_risk() to convert strike-width to dollar risk.
+# Strip the contract month (e.g. /MESM6 → /MES) before looking up.
+# Equity options always use 100; futures use their contract spec multiplier.
+#
+# TODO: if you trade a futures product not listed here, Capital at Risk will
+# silently fall back to the equity multiplier (100), which will be wrong.
+# Add the root symbol and its CME contract spec multiplier ($/point) below
+# and verify against a known trade in your CSV before relying on the figure.
+FUTURES_MULTIPLIERS = {
+    # ── Equity index ──────────────────────────────────────────────────────────
+    '/MES':  5,        # Micro E-mini S&P 500        (5 × index)
+    '/ES':   50,       # E-mini S&P 500              (50 × index)
+    '/MNQ':  2,        # Micro E-mini Nasdaq-100     (2 × index)
+    '/NQ':   20,       # E-mini Nasdaq-100           (20 × index)
+    '/M2K':  5,        # Micro E-mini Russell 2000   (5 × index)
+    '/RTY':  50,       # E-mini Russell 2000         (50 × index)
+    '/MYM':  0.5,      # Micro E-mini Dow Jones      (0.50 × index)
+    '/YM':   5,        # E-mini Dow Jones            (5 × index)
+    # ── Volatility ────────────────────────────────────────────────────────────
+    '/VX':   1_000,    # CBOE VIX Futures            (1,000 × VIX)
+    # ── Energy ────────────────────────────────────────────────────────────────
+    '/CL':   1_000,    # WTI Crude Oil               (1,000 bbl; strikes in $/bbl)
+    '/MCL':  100,      # Micro WTI Crude Oil         (100 bbl)
+    '/NG':   10_000,   # Natural Gas                 (10,000 MMBtu; strikes in $/MMBtu)
+    '/RB':   42_000,   # RBOB Gasoline               (42,000 gal; strikes in $/gal) — verify on first use
+    '/HO':   42_000,   # Heating Oil / ULSD          (42,000 gal; strikes in $/gal) — verify on first use
+    # ── Metals ────────────────────────────────────────────────────────────────
+    '/GC':   100,      # Gold                        (100 troy oz; strikes in $/oz)
+    '/MGC':  10,       # Micro Gold                  (10 troy oz)
+    '/SI':   5_000,    # Silver                      (5,000 troy oz; strikes in $/oz)
+    '/SIL':  1_000,    # Micro Silver                (1,000 troy oz) — verify ticker on first use
+    '/MSI':  1_000,    # Micro Silver (alt ticker)
+    '/HG':   25_000,   # Copper                      (25,000 lb; strikes in $/lb) — verify on first use
+    # ── Interest rates ────────────────────────────────────────────────────────
+    '/ZB':   1_000,    # 30-yr T-Bond                ($100K face; 1 pt = $1,000)
+    '/ZN':   1_000,    # 10-yr T-Note                ($100K face; 1 pt = $1,000)
+    '/ZF':   1_000,    # 5-yr T-Note                 ($100K face; 1 pt = $1,000)
+    '/ZT':   2_000,    # 2-yr T-Note                 ($200K face; 1 pt = $2,000)
+    # ── Agriculture (grain strikes quoted in cents/bushel; 1 cent = $50) ─────
+    '/ZC':   50,       # Corn                        (5,000 bu; 1¢/bu = $50)
+    '/ZS':   50,       # Soybeans                    (5,000 bu; 1¢/bu = $50)
+    '/ZW':   50,       # Wheat                       (5,000 bu; 1¢/bu = $50)
+    '/ZL':   600,      # Soybean Oil                 (60,000 lb; 1¢/lb = $600)
+    '/ZM':   100,      # Soybean Meal                (100 short tons; $1/ton = $100)
+    '/HE':   400,      # Lean Hogs                   (40,000 lb; 1¢/lb = $400)
+    '/LE':   400,      # Live Cattle                 (40,000 lb; 1¢/lb = $400)
+    '/GF':   500,      # Feeder Cattle               (50,000 lb; 1¢/lb = $500)
+    # ── Currencies (strikes in USD per foreign unit) ──────────────────────────
+    '/6E':   125_000,  # Euro FX                     (€125,000)
+    '/6B':   62_500,   # British Pound               (£62,500)
+    '/6J':   1_250_000, # Japanese Yen              (¥12,500,000; quoted per ¥100 = ×100 reduction, net ×1.25M) — verify on first use
+    '/6A':   100_000,  # Australian Dollar           (A$100,000)
+    '/6C':   100_000,  # Canadian Dollar             (C$100,000)
+    '/6S':   125_000,  # Swiss Franc                 (CHF 125,000)
+    '/6N':   100_000,  # New Zealand Dollar          (NZD 100,000)
+    '/6M':   500_000,  # Mexican Peso                (MXN 500,000) — verify on first use
+}
+
+
+def get_opt_multiplier(ticker: str, instrument_type: str) -> float:
+    """Return the dollars-per-point multiplier for one option leg.
+
+    For equity options always returns 100.  For future options, strips the
+    contract-month suffix (e.g. /MESM6 → /MES) and looks up FUTURES_MULTIPLIERS,
+    falling back to 100 if the root is not in the table.
+    """
+    if instrument_type != 'Future Option':
+        return 100
+    root = _FUTURES_CONTRACT_RE.sub('', ticker.strip())
+    return FUTURES_MULTIPLIERS.get(root, 100)
+
 
 # ── Index option detection ────────────────────────────────────────────────────
 # Strikes above this threshold are treated as index underlyings (SPX, NDX,

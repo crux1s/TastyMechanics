@@ -11,7 +11,7 @@ constants used in colour lookups).
 
 import html
 import pandas as pd
-from config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT, WIN_RATE_GREEN, WIN_RATE_ORANGE, DTE_PROGRESS_MAX, DTE_ALERT_WARN, DTE_ALERT_CRIT, COLOURS
+from config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT, WIN_RATE_GREEN, WIN_RATE_ORANGE, DTE_PROGRESS_MAX, DTE_ALERT_WARN, DTE_ALERT_CRIT, COLOURS, get_opt_multiplier
 _C = COLOURS  # short alias — avoids quote conflicts in f-strings on Python < 3.12
 # is_share_row / is_option_row live in ingestion.py — that is the correct home
 # for anything that encodes TastyTrade field values.  Re-exported here so that
@@ -378,8 +378,10 @@ def render_position_card(ticker, t_df, ticker_live=None):
     _is_db_spread   = _is_spread and 'Debit'  in strat
     _spread_net_basis = float(t_df['Cost Basis'].sum()) if _is_spread else 0.0
     _spread_strikes   = t_df['Strike Price'].dropna() if _is_spread else pd.Series(dtype=float)
+    _inst_type        = t_df['Instrument Type'].iloc[0] if not t_df.empty else 'Equity Option'
+    _opt_mult         = get_opt_multiplier(ticker, _inst_type)
     _spread_width     = (
-        (_spread_strikes.max() - _spread_strikes.min()) * 100
+        (_spread_strikes.max() - _spread_strikes.min()) * _opt_mult
         if _is_spread and len(_spread_strikes) >= 2 else 0.0
     )
 

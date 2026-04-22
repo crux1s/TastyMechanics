@@ -45,6 +45,7 @@ from config import (
     FIFO_EPSILON, FIFO_ROUND,
     ANN_RETURN_CAP,
     CLOSE_EXPIRED, CLOSE_ASSIGNED, CLOSE_EXERCISED, CLOSE_CLOSED,
+    get_opt_multiplier,
 )
 from ingestion import equity_mask, option_mask, is_share_row, is_option_row
 
@@ -741,13 +742,15 @@ def _calculate_capital_risk(
     Pure function — computes Capital at Risk for a closed trade group.
     Uses opens['Total'].sum() (not net) for index premium proxy.
     """
+    inst_type   = grp['Instrument Type'].iloc[0] if not grp.empty else 'Equity Option'
+    mult        = get_opt_multiplier(ticker, inst_type)
     open_credit = opens['Total'].sum()
     n_long      = (opens['Net_Qty_Row'] > 0).sum()
 
     call_strikes = grp[grp['Call or Put'].str.upper().str.contains('CALL', na=False)]['Strike Price'].dropna().sort_values()
     put_strikes  = grp[grp['Call or Put'].str.upper().str.contains('PUT',  na=False)]['Strike Price'].dropna().sort_values()
-    w_call = (call_strikes.max() - call_strikes.min()) * 100 if len(call_strikes) >= 2 else 0
-    w_put  = (put_strikes.max()  - put_strikes.min())  * 100 if len(put_strikes)  >= 2 else 0
+    w_call = (call_strikes.max() - call_strikes.min()) * mult if len(call_strikes) >= 2 else 0
+    w_put  = (put_strikes.max()  - put_strikes.min())  * mult if len(put_strikes)  >= 2 else 0
 
     expirations = grp['Expiration Date'].dropna().unique()
     strikes_all = grp['Strike Price'].dropna().unique()
@@ -792,22 +795,22 @@ def _calculate_capital_risk(
         if n_short_legs == 0:
             return max(abs(open_credit), 1)
         elif is_butterfly:
-            wing_width = (strikes_all.max() - strikes_all.min()) * 100 / 2
+            wing_width = (strikes_all.max() - strikes_all.min()) * mult / 2
             return max(abs(open_credit), wing_width, 1)
         elif is_short_butterfly:
-            wing_width = (strikes_all.max() - strikes_all.min()) * 100 / 2
+            wing_width = (strikes_all.max() - strikes_all.min()) * mult / 2
             return max(wing_width - open_credit, 1)   # max loss = wing width minus credit received
         elif is_call_ratio or is_put_ratio:
             # Extra short leg is effectively naked — highest short strike is the risk proxy
             short_strikes = short_opens_sp['Strike Price'].dropna()
             max_short = float(short_strikes.max()) if not short_strikes.empty else 0.0
-            return max(max_short * 100 - abs(open_credit), 1)
+            return max(max_short * mult - abs(open_credit), 1)
         elif is_jade_lizard:
             _jl_put_strike = float(put_strikes.min()) if len(put_strikes) > 0 else 0.0
-            return max(_jl_put_strike * 100 - abs(open_credit), 1)
+            return max(_jl_put_strike * mult - abs(open_credit), 1)
         elif is_ratio_lizard:
             _jl_put_strike = float(put_strikes.min()) if len(put_strikes) > 0 else 0.0
-            return max(_jl_put_strike * 100 - abs(open_credit), 1)
+            return max(_jl_put_strike * mult - abs(open_credit), 1)
         elif is_calendar:
             return max(abs(open_credit), 1)
         elif w_call > 0 and w_put > 0:
@@ -823,7 +826,7 @@ def _calculate_capital_risk(
         return max(abs(open_credit), 1)
     strikes = grp['Strike Price'].dropna().tolist()
     max_strike = max(strikes) if strikes else 0
-    return max(max_strike * 100, 1)
+    return max(max_strike * mult, 1)
 
 
 def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = None) -> pd.DataFrame:

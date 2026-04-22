@@ -83,6 +83,13 @@ If a held ticker is acquired or merged, the original campaign may be orphaned wi
 ### In-the-money futures options expiry
 Cash-settled futures options (/MES, /ZS etc.) are included in P&L totals. Cash-settled expiry is handled correctly. In-the-money expiry that delivers a futures contract (not cash) is not handled and will produce incorrect P&L for that position.
 
+### Futures options — Capital at Risk multiplier coverage
+Capital at Risk and Ann Return % for futures options depend on a per-product dollar multiplier stored in `FUTURES_MULTIPLIERS` in `config.py`. Products not in that table silently fall back to the equity multiplier (100), which will produce a wrong Capital at Risk figure.
+
+Products confirmed correct (verified against real CSV data or CME spec): /MES, /ES, /MNQ, /NQ, /M2K, /RTY, /MYM, /YM, /VX, /CL, /MCL, /NG, /GC, /MGC, /SI, /SIL, /ZB, /ZN, /ZF, /ZT, /ZC, /ZS, /ZW, /6E, /6B, /6A, /6C, /6S, /6N.
+
+Products added from spec but not yet verified against a real trade: /RB, /HO, /HG, /ZL, /ZM, /HE, /LE, /GF, /6J, /6M. Confirm Capital at Risk on the first trade from any of these before relying on it. To add a missing product, append its root symbol and CME contract multiplier (dollars per full price point) to `FUTURES_MULTIPLIERS` in `config.py`.
+
 ---
 
 ## Other

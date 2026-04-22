@@ -116,12 +116,12 @@ def _summary(label):
 # ══════════════════════════════════════════════════════════════════════════════
 print('\n── 1. Data loading & parsing ──────────────────────────────────────────')
 
-check_int('Row count',           len(df), 428)
+check_int('Row count',           len(df), 432)
 check_int('Equity rows',         equity_mask(df['Instrument Type']).sum(), 24)
 check_int('Equity Option rows',  (df['Instrument Type'] == 'Equity Option').sum(), 336)
-check_int('Future Option rows',  (df['Instrument Type'] == 'Future Option').sum(), 20)
+check_int('Future Option rows',  (df['Instrument Type'] == 'Future Option').sum(), 24)
 check_int('Money Movement rows', (df['Type'] == 'Money Movement').sum(), 56)
-check('Total of all rows',       df['Total'].sum(), -3362.63)
+check('Total of all rows',       df['Total'].sum(), -3404.59)
 
 achr_assign = df[(df['Ticker'] == 'ACHR') & (df['Sub Type'] == 'Assignment')]
 check_int('Assignment Net_Qty_Row sign (+)', int(achr_assign['Net_Qty_Row'].sum()), 1)
@@ -159,7 +159,7 @@ check('AMD out of window (Nov 6 start)',
 print('\n── 3. Options cash flows ───────────────────────────────────────────────')
 
 opt_df = df[df['Instrument Type'].isin(OPT_TYPES) & df['Type'].isin(TRADE_TYPES)]
-check('Total options cash flow', opt_df['Total'].sum(), 1018.45)
+check('Total options cash flow', opt_df['Total'].sum(), 976.49)
 
 spx_all        = df[df['Ticker'] == 'SPX']
 spx_trade_opts = spx_all[spx_all['Instrument Type'].isin(OPT_TYPES) & spx_all['Type'].isin(TRADE_TYPES)]
@@ -231,11 +231,11 @@ all_eq       = sum(p - c for _, p, c in fifo_results)
 all_inc      = income['Total'].sum()
 ground_truth = all_opts + all_eq + all_inc
 
-check('Ground truth total realized P/L',  ground_truth, 1091.87)
-check('Options component',                all_opts,      1018.45)
+check('Ground truth total realized P/L',  ground_truth, 1049.91)
+check('Options component',                all_opts,       976.49)
 check('Equity FIFO component',            all_eq,          79.97)
 check('Dividend+interest component',      all_inc,         -6.55)
-check('Components sum to total',          all_opts + all_eq + all_inc, 1091.87)
+check('Components sum to total',          all_opts + all_eq + all_inc, 1049.91)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 7. DEPOSITS / PORTFOLIO STATS
@@ -247,8 +247,8 @@ wdrs = df[df['Sub Type'] == 'Withdrawal']['Total'].sum()
 check('Total deposited',       deps,            5998.00)
 check('Total withdrawn',       wdrs,             -55.00)
 check('Net deposited',         deps + wdrs,     5943.00)
-check('Realized ROR %',        ground_truth / (deps + wdrs) * 100, 18.37, tol=0.1)
-check('Cash balance (all rows summed)', df['Total'].sum(), -3362.63, tol=0.01)
+check('Realized ROR %',        ground_truth / (deps + wdrs) * 100, 17.67, tol=0.1)
+check('Cash balance (all rows summed)', df['Total'].sum(), -3404.59, tol=0.01)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 8. OPEN EQUITY POSITIONS
@@ -285,7 +285,7 @@ w_opts = df[df['Instrument Type'].isin(OPT_TYPES) & df['Type'].isin(TRADE_TYPES)
             (df['Date'] >= earliest)]['Total'].sum()
 w_eq   = sum(p - c for d, p, c in fifo_results if d >= earliest)
 w_inc  = df[df['Sub Type'].isin(INCOME_SUB_TYPES) & (df['Date'] >= earliest)]['Total'].sum()
-check('All Time window P/L == ground truth', w_opts + w_eq + w_inc, 1091.87)
+check('All Time window P/L == ground truth', w_opts + w_eq + w_inc, 1049.91)
 
 nov_start = pd.Timestamp('2025-11-01')
 nov_end   = pd.Timestamp('2025-11-30')
@@ -437,28 +437,28 @@ def window_pnl(start):
     return w_opts, w_eq, w_inc, w_opts + w_eq + w_inc
 
 o,e,i,t = window_pnl(latest_date - pd.Timedelta(days=7))
-check('1W opts',   o,   -45.56, tol=0.05)
-check('1W equity', e,   -20.84, tol=0.02)
+check('1W opts',   o,   -41.96, tol=0.05)
+check('1W equity', e,     0.00, tol=0.02)
 check('1W income', i,     0.00, tol=0.02)
-check('1W total',  t,   -66.40, tol=0.10)
+check('1W total',  t,   -41.96, tol=0.10)
 
 o,e,i,t = window_pnl(latest_date - pd.Timedelta(days=30))
-check('1M opts',   o,   216.96, tol=0.05)
-check('1M equity', e,   -20.84, tol=0.02)
-check('1M income', i,    -7.23, tol=0.02)
-check('1M total',  t,   188.89, tol=0.10)
+check('1M opts',   o,   -41.96, tol=0.05)
+check('1M equity', e,     0.00, tol=0.02)
+check('1M income', i,     0.00, tol=0.02)
+check('1M total',  t,   -41.96, tol=0.10)
 
 _,_,_,t = window_pnl(latest_date - pd.Timedelta(days=90))
-check('3M total',  t,   839.52, tol=0.20)
+check('3M total',  t,   175.44, tol=0.20)
 
 _,_,_,t = window_pnl(earliest)
-check('All Time window == ground truth', t, 1091.87, tol=0.02)
+check('All Time window == ground truth', t, 1049.91, tol=0.02)
 
 o,e,i,t = window_pnl(pd.Timestamp(f'{latest_date.year}-01-01'))
-check('YTD opts',   o,  582.23, tol=0.05)
+check('YTD opts',   o,  540.27, tol=0.05)
 check('YTD equity', e,  -20.84, tol=0.02)
 check('YTD income', i,   -8.25, tol=0.02)
-check('YTD total',  t,  553.14, tol=0.10)
+check('YTD total',  t,  511.18, tol=0.10)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 14. CAPITAL DEPLOYED
@@ -500,6 +500,7 @@ check('GLD  options P/L',   ticker_opts_pnl('GLD'),   -189.92)
 check('SPX  options P/L',   ticker_opts_pnl('SPX'),   -307.40)
 check('/ZSF6 options P/L',  ticker_opts_pnl('/ZSF6'),  -60.93)
 check('/MESZ5 options P/L', ticker_opts_pnl('/MESZ5'),  20.48)
+check('/MESM6 options P/L', ticker_opts_pnl('/MESM6'), -41.96)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 16. SELF-CALIBRATING INVARIANTS  (work with ANY TastyTrade CSV)
@@ -793,15 +794,15 @@ print('\n── 17. Closed trades — core aggregates ────────�
 
 _ct = build_closed_trades(df)
 
-check_int('CT: total trades',              len(_ct),                    95)
+check_int('CT: total trades',              len(_ct),                    96)
 check_int('CT: winning trades',            int(_ct['Won'].sum()),       80)
-check    ('CT: win rate %',                _ct['Won'].mean() * 100,     84.2105)
-check    ('CT: total net P/L',             _ct['Net P/L'].sum(),        834.05)
-check    ('CT: total premium received',    _ct['Net Premium'].sum(),   10377.80)
-check    ('CT: median capture %',          _ct[_ct['Is Credit']]['Capture %'].median(),   33.7950)
+check    ('CT: win rate %',                _ct['Won'].mean() * 100,     83.3333)
+check    ('CT: total net P/L',             _ct['Net P/L'].sum(),        792.09)
+check    ('CT: total premium received',    _ct['Net Premium'].sum(),   10435.88)
+check    ('CT: median capture %',          _ct[_ct['Is Credit']]['Capture %'].median(),   33.1695)
 check    ('CT: median days held',          _ct['Days Held'].median(),   6.0)
 check    ('CT: median DTE at open',        _ct['DTE at Open'].median(),    36.0)
-check_int('CT: credit trades',             int(_ct['Is Credit'].sum()), 91)
+check_int('CT: credit trades',             int(_ct['Is Credit'].sum()), 92)
 check_int('CT: debit trades',              int((~_ct['Is Credit']).sum()), 4)
 
 # ── Per-ticker net P/L ───────────────────────────────────────────────────────
@@ -814,6 +815,7 @@ check('CT ticker JOBY net P/L',   _ct_by_ticker['JOBY'],     52.32)
 check('CT ticker GLD  net P/L',   _ct_by_ticker['GLD'],    -189.92)
 check('CT ticker XYZ  net P/L',   _ct_by_ticker['XYZ'],    -354.46)
 check('CT ticker SPX  net P/L',   _ct_by_ticker['SPX'],    -307.40)
+check('CT ticker /MESM6 net P/L', _ct_by_ticker['/MESM6'],  -41.96)
 
 # ── Spot-check individual trade fields ──────────────────────────────────────
 # RKLB big strangle: Oct 16 → Dec 18 2025, 63 days, $1194.76 credit, $757.53 P/L
@@ -933,6 +935,15 @@ check('CT strategy Short Call total P/L',     _ct_strat.loc['Short Call',   'tot
 check('CT strategy Iron Condor total P/L',    _ct_strat.loc['Iron Condor',  'total_pnl'],  -419.13)
 check('CT strategy Iron Butterfly total P/L', _ct_strat.loc['Iron Butterfly','total_pnl'],    29.84)
 check('CT strategy Put Credit Spread P/L',    _ct_strat.loc['Put Credit Spread','total_pnl'], -638.86)
+check('CT strategy Call Credit Spread P/L',   _ct_strat.loc['Call Credit Spread','total_pnl'], -124.88)
+
+# /MESM6 futures call spread — verifies futures multiplier fix ($5/pt, not $100)
+_mesm6 = _ct[_ct['Ticker'] == '/MESM6'].iloc[0]
+check_int('CT /MESM6 trade type',         _mesm6['Trade Type'],      'Call Credit Spread')
+check    ('CT /MESM6 capital at risk',     _mesm6['Capital at Risk'],   41.92)
+check    ('CT /MESM6 net P/L',             _mesm6['Net P/L'],          -41.96)
+check    ('CT /MESM6 net premium',         _mesm6['Net Premium'],       58.08)
+check    ('CT /MESM6 capture %',           _mesm6['Capture %'],        -72.2452, tol=0.001)
 
 # Win counts
 check_int('CT strategy Short Call wins (all)',  int(_ct_strat.loc['Short Call', 'wins']), 22)
@@ -955,10 +966,10 @@ print('\n── 19. Closed trades — close types & debit trades ─────
 
 _close_counts = _ct['Close Reason'].value_counts()
 
-check_int('CT close type Closed count',   int(_close_counts.get('✂️ Closed',   0)), 90)
+check_int('CT close type Closed count',   int(_close_counts.get('✂️ Closed',   0)), 91)
 check_int('CT close type Expired count',  int(_close_counts.get('⏹️ Expired',  0)),  3)
 check_int('CT close type Assigned count', int(_close_counts.get('📋 Assigned', 0)),  2)
-check_int('CT close types sum to total',  int(_close_counts.sum()),                 95)
+check_int('CT close types sum to total',  int(_close_counts.sum()),                 96)
 
 _expired = _ct[_ct['Close Reason'] == '⏹️ Expired']
 # Expired trades — only check count; capture% varies (some expired worthless, some ITM)
@@ -1002,7 +1013,7 @@ print('\n── 20. Closed trades — window filtering ────────�
 
 from datetime import timedelta
 
-_latest = df['Date'].max()   # 2026-02-27
+_latest = df['Date'].max()   # 2026-04-20
 
 def _ct_window(start):
     """Closed trades whose Close Date falls on or after start."""
@@ -1010,19 +1021,19 @@ def _ct_window(start):
 
 # YTD (Jan 1 2026 →)
 _ytd = _ct_window(pd.Timestamp('2026-01-01'))
-check_int('CT YTD trade count',   len(_ytd),                    41)
-check    ('CT YTD net P/L',       _ytd['Net P/L'].sum(),       979.95)
+check_int('CT YTD trade count',   len(_ytd),                    42)
+check    ('CT YTD net P/L',       _ytd['Net P/L'].sum(),       937.99)
 check_int('CT YTD win count',     int(_ytd['Won'].sum()),        35)
 
 # 7d window
 _w7 = _ct_window(_latest - timedelta(days=7))
-check_int('CT 7d trade count',    len(_w7),                      8)
-check    ('CT 7d net P/L',        _w7['Net P/L'].sum(),         262.20)
+check_int('CT 7d trade count',    len(_w7),                      1)
+check    ('CT 7d net P/L',        _w7['Net P/L'].sum(),         -41.96)
 
 # 30d window
 _w30 = _ct_window(_latest - timedelta(days=30))
-check_int('CT 30d trade count',   len(_w30),                    22)
-check    ('CT 30d net P/L',       _w30['Net P/L'].sum(),        200.13)
+check_int('CT 30d trade count',   len(_w30),                     1)
+check    ('CT 30d net P/L',       _w30['Net P/L'].sum(),        -41.96)
 
 # All-time window == full table
 check_int('CT all-time == full table', len(_ct_window(df['Date'].min())), len(_ct))
