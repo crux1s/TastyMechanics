@@ -83,6 +83,11 @@ def detect_strategy(ticker_df):
     lc = (types == 'Long Call').sum()
     sp = (types == 'Short Put').sum()
     lp = (types == 'Long Put').sum()
+    # Quantity totals — needed to detect ratio legs (e.g. 2 short : 1 long)
+    sc_qty = abs(ticker_df[types == 'Short Call']['Net_Qty'].sum())
+    lc_qty =     ticker_df[types == 'Long Call' ]['Net_Qty'].sum()
+    sp_qty = abs(ticker_df[types == 'Short Put' ]['Net_Qty'].sum())
+    lp_qty =     ticker_df[types == 'Long Put'  ]['Net_Qty'].sum()
     strikes = ticker_df['Strike Price'].dropna().unique()
     exps    = ticker_df['Expiration Date'].dropna().unique()
     if lc > 0 and sc > 0 and len(exps) >= 2 and len(strikes) == 1: return 'Calendar Spread'
@@ -102,6 +107,11 @@ def detect_strategy(ticker_df):
     if lp == 1 and sp == 2 and len(strikes) == 3 and len(exps) == 1:
         return 'Short Put Butterfly'
     if ls > 0 and sc > 0 and sp > 0: return 'Covered Strangle'
+    # Covered ratio spread: stock + more short calls/puts than long calls/puts
+    if ls > 0 and sc > 0 and lc > 0 and sc_qty > lc_qty and sp == 0 and lp == 0:
+        return 'Covered Call Ratio Spread'
+    if ls > 0 and sp > 0 and lp > 0 and sp_qty > lp_qty and sc == 0 and lc == 0:
+        return 'Covered Put Ratio Spread'
     if ls > 0 and sc > 0:            return 'Covered Call'
     # Four-leg condor/butterfly structures — must precede Jade Lizard/Big Lizard
     # because those checks are subsets that would fire on the same legs.
@@ -126,6 +136,11 @@ def detect_strategy(ticker_df):
     if sc >= 1 and sp >= 1 and lp >= 1: return 'Big Lizard'
     if sc >= 1 and sp >= 1:             return 'Short Strangle'
     if lc >= 1 and sp >= 1:             return 'Risk Reversal'
+    # Ratio spreads — must precede vertical spread checks (same legs, different qty)
+    if sc > 0 and lc > 0 and sc_qty > lc_qty and sp == 0 and lp == 0:
+        return 'Call Ratio Spread'
+    if sp > 0 and lp > 0 and sp_qty > lp_qty and sc == 0 and lc == 0:
+        return 'Put Ratio Spread'
     # Vertical call spread: at least 1 long + 1 short call, same expiry, no puts
     if lc >= 1 and sc >= 1 and sp == 0 and lp == 0 and len(exps) == 1:
         _sc_str = ticker_df[types == 'Short Call']['Strike Price'].dropna()

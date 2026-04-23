@@ -1265,6 +1265,43 @@ check_int('ds: Custom/Mixed fallback',
           _make_row('Equity Option', 'CALL',  1, 105),
       )), 'Custom/Mixed')
 
+# ── Ratio spread detection (qty-based) ────────────────────────────────────────
+# Put Ratio Spread — 2 short puts + 1 long put (DKNG-style)
+check_int('ds: Put Ratio Spread',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'PUT', -2, 21.0),
+          _make_row('Equity Option', 'PUT',  1, 21.5),
+      )), 'Put Ratio Spread')
+
+# Call Ratio Spread — 2 short calls + 1 long call (no stock)
+check_int('ds: Call Ratio Spread',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL', -2, 16.0),
+          _make_row('Equity Option', 'CALL',  1, 15.5),
+      )), 'Call Ratio Spread')
+
+# Covered Call Ratio Spread — stock + 2 short calls + 1 long call (SMR-style)
+check_int('ds: Covered Call Ratio Spread',
+      detect_strategy(_make_df(
+          _make_row('Equity',        '',     100),
+          _make_row('Equity Option', 'CALL', -2, 16.0),
+          _make_row('Equity Option', 'CALL',  1, 15.5),
+      )), 'Covered Call Ratio Spread')
+
+# 1:1 put spread still classifies as Put Credit Spread (not ratio)
+check_int('ds: 1:1 put spread not misidentified as ratio',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'PUT', -1, 21.0),
+          _make_row('Equity Option', 'PUT',  1, 21.5),
+      )), 'Put Debit Spread')
+
+# 2:2 put spread (equal qty) still classifies as vertical, not ratio
+check_int('ds: 2:2 put spread not misidentified as ratio',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'PUT', -2, 21.0),
+          _make_row('Equity Option', 'PUT',  2, 21.5),
+      )), 'Put Debit Spread')
+
 # ══════════════════════════════════════════════════════════════════════════════
 # GRAND TOTAL
 # ══════════════════════════════════════════════════════════════════════════════
