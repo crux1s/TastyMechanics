@@ -633,7 +633,7 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
     ):
         log = all_cdf[['Ticker', 'Trade Type', 'Type', 'Close Reason', 'Open Date', 'Close Date',
                         'Days Held', 'Expiration', 'DTE at Close', 'Contracts',
-                        'Net Premium', '50% Target', 'Net P/L', 'Capture %',
+                        'Net Premium', 'Net P/L', 'Capture %',
                         'Capital at Risk', 'Ann Return %']].copy()
         log['Open Date']  = pd.to_datetime(log['Open Date'])
         log['Close Date'] = pd.to_datetime(log['Close Date'])
@@ -649,7 +649,6 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         st.dataframe(
             log.style.format({
                 'Net Premium':    lambda x: '${:.2f}'.format(x),
-                '50% Target': lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—',
                 'Days in Trade': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                 'DTE at Close': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                 'Contracts':  lambda v: '{:.0f}'.format(v) if pd.notna(v) else '—',

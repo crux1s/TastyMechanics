@@ -56,20 +56,6 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
             effb = effective_basis(c, use_lifetime)
             dur  = (c.end_date or latest_date) - c.start_date
 
-            if c.status == 'open':
-                _days_active  = max(1, (latest_date - c.start_date).days)
-                _income       = c.premiums + c.dividends
-                _remaining    = c.total_cost - _income
-                _rate         = _income / _days_active
-                if _remaining <= 0:
-                    _free_in = '✅ Free'
-                elif _rate > 0:
-                    _free_in = '~%dd' % int(_remaining / _rate)
-                else:
-                    _free_in = '—'
-            else:
-                _free_in = '—'
-
             rows.append({
                 'Ticker': ticker,
                 'Status': '✅ Closed' if c.status == 'closed' else '🟢 Open',
@@ -78,7 +64,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
                 'Divs': c.dividends, 'Exit': c.exit_proceeds,
                 'P/L': rpnl, 'Days': dur.days,
                 'Entry': c.start_date.strftime('%d/%m/%y'),
-                'Free In': _free_in,
+                'Time to B/E': '—',
             })
         return rows
 
@@ -256,8 +242,24 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
             )
         else:
             _pre_camp_note = ''
-        # Reuse the value already computed in _summary_rows — no recalculation needed
-        _free_in_card = _open_rows[_camp_idx]['Free In']
+        # ── Time to Breakeven (requires live prices) ──────────────────────────
+        # B/E means effective basis = current market price.
+        # Additional income needed = (effb - current_price) × shares.
+        _ticker_live_early = live_prices.get(ticker)
+        if _ticker_live_early and _ticker_live_early.get('last', 0.0) and c.total_shares > 0:
+            _be_price       = float(_ticker_live_early['last'])
+            _be_days_active = max(1, (latest_date - c.start_date).days)
+            _be_income      = c.premiums + c.dividends
+            _be_rate        = _be_income / _be_days_active
+            _be_gap         = (effb - _be_price) * c.total_shares  # positive = still underwater
+            if effb <= _be_price:
+                _time_to_be = '✅ B/E'
+            elif _be_rate > 0:
+                _time_to_be = '~%dd' % int(_be_gap / _be_rate)
+            else:
+                _time_to_be = '—'
+        else:
+            _time_to_be = '—'
 
         # ── Live price strip ──────────────────────────────────────────────────
         _ticker_live = live_prices.get(ticker)
@@ -325,9 +327,9 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">COST BASIS</div>'
             '<div style="font-size:1.0em;font-weight:600;">${eff_basis:.2f}/sh</div>'
             '<div style="font-size:0.7em;color:#00cc96;">▼ ${reduction:.2f} saved</div></div>'
-            '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">BASIS FREE IN</div>'
+            '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">TIME TO B/E</div>'
             '<div style="font-size:1.0em;font-weight:600;">{free_in}</div>'
-            '<div style="font-size:0.7em;color:#888;">at current rate</div></div>'
+            '<div style="font-size:0.7em;color:#888;">vs live price</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">PREMIUMS</div>'
             '<div style="font-size:1.0em;font-weight:600;">${premiums:.2f}</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">CAP EFF (ann)</div>'
@@ -346,7 +348,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
             shares=int(c.total_shares),
             entry_basis=c.blended_basis, eff_basis=effb,
             reduction=basis_reduction if basis_reduction > 0 else 0,
-            free_in=_free_in_card,
+            free_in=_time_to_be,
             premiums=c.premiums, pnl=rpnl, pnl_color=pnl_color,
             camp_eff=_camp_eff_str, camp_eff_color=_camp_eff_color,
             live_strip=live_strip,
