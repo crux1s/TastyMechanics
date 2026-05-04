@@ -5,20 +5,23 @@ tabs/tab0_open_positions.py — Tab0 Open Positions tab renderer.
 import streamlit as st
 import pandas as pd
 
+from config import COLOURS
 from ui_components import (
     identify_pos_type, translate_readable, detect_strategy,
     _dte_chip, render_position_card,
 )
 from ingestion import equity_mask, option_mask
-from mechanics import calc_dte
+from mechanics import calc_dte, effective_basis
 from market_data import fetch_live_prices
 
 
-def render_tab0(df_open, _expiry_alerts, latest_date):
+def render_tab0(df_open, _expiry_alerts, latest_date, all_campaigns=None):
     """Tab 0 — Active Positions: open position cards + expiry alert strip."""
-    _c_hdr, _c_tog = st.columns([6, 1])
+
+    _c_hdr, _c_csv, _c_tog = st.columns([5, 1, 1])
     with _c_hdr:
         st.subheader('📡 Open Positions')
+    # _c_csv is filled later, after live_prices + _camp_lookup are available.
     with _c_tog:
         live_on = st.toggle(
             '📡 Live',
@@ -132,11 +135,110 @@ def render_tab0(df_open, _expiry_alerts, latest_date):
                     'Check your internet connection.'
                 )
 
+    # ── Campaign lookup: ticker → most recent open Campaign with shares ───────
+    _use_lifetime = st.session_state.get('use_lifetime', False)
+    _camp_lookup: dict = {}
+    if all_campaigns:
+        for _t, _cs in all_campaigns.items():
+            _open_c = [_c for _c in _cs if _c.status == 'open' and _c.total_shares > 0]
+            if _open_c:
+                _camp_lookup[_t] = _open_c[-1]
+
+    # ── CSV export (deferred until live_prices + _camp_lookup are ready) ──────
+    def _positions_csv():
+        """Per-leg CSV enriched with campaign basis and live unrealised when available."""
+        base_cols = [c for c in [
+            'Ticker', 'Instrument Type', 'Call or Put', 'Expiration Date',
+            'Strike Price', 'Quantity', 'Average Price', 'Cost Basis',
+        ] if c in df_open.columns]
+        out = df_open[base_cols].sort_values('Ticker').copy()
+        if _camp_lookup:
+            out['Eff. Basis/sh'] = out['Ticker'].map(
+                lambda t: round(effective_basis(_camp_lookup[t], _use_lifetime), 4)
+                if t in _camp_lookup else ''
+            )
+        if live_prices and _camp_lookup:
+            def _unreal_vs_eff(row):
+                camp = _camp_lookup.get(row['Ticker'])
+                if not camp:
+                    return ''
+                last = float((live_prices.get(row['Ticker']) or {}).get('last', 0.0))
+                if not last:
+                    return ''
+                return round((last - effective_basis(camp, _use_lifetime)) * camp.total_shares, 2)
+            out['Unreal P/L (vs eff. basis)'] = out.apply(_unreal_vs_eff, axis=1)
+        return out.to_csv(index=False)
+
+    with _c_csv:
+        if not df_open.empty:
+            st.download_button(
+                label='⬇️ Export CSV',
+                data=_positions_csv(),
+                file_name='open_positions.csv',
+                mime='text/csv',
+                use_container_width=True,
+                help='Download all open position legs as a CSV file.',
+            )
+
     # ── Position cards ────────────────────────────────────────────────────────
     col_a, col_b = st.columns(2, gap='medium')
     for i, ticker in enumerate(tickers_open):
-        t_df = df_open[df_open['Ticker'] == ticker].copy()
+        t_df      = df_open[df_open['Ticker'] == ticker].copy()
         card_html = render_position_card(ticker, t_df, ticker_live=live_prices.get(ticker))
+
+        # Append wheel campaign basis strip when this ticker has an open campaign
+        _camp = _camp_lookup.get(ticker)
+        if _camp:
+            _c_effb  = effective_basis(_camp, _use_lifetime)
+            _c_entry = _camp.blended_basis
+            _c_reduc = _c_entry - _c_effb
+            _c_prems = _camp.premiums + _camp.dividends
+            _mut     = COLOURS['text_muted']
+            _grn     = COLOURS['green']
+            _red     = COLOURS['red']
+
+            # Unrealised P/L vs effective basis — only when live price is available
+            _lp = live_prices.get(ticker, {})
+            _lp_last = float(_lp.get('last', 0.0)) if _lp else 0.0
+            if _lp_last and _camp.total_shares > 0:
+                _unreal      = (_lp_last - _c_effb) * _camp.total_shares
+                _u_col       = _grn if _unreal >= 0 else _red
+                _u_sgn       = '+' if _unreal >= 0 else '-'
+                _unreal_html = (
+                    f'<div style="width:1px;height:28px;background:rgba(255,255,255,0.07);flex-shrink:0;"></div>'
+                    f'<div><div style="font-size:0.65em;color:{_mut};">UNREAL (vs eff.)</div>'
+                    f'<div style="font-family:monospace;font-size:0.88em;font-weight:700;color:{_u_col};">'
+                    f'{_u_sgn}${abs(_unreal):,.2f}</div></div>'
+                )
+            else:
+                _unreal_html = ''
+
+            card_html += (
+                f'<div style="margin-top:-4px;margin-bottom:12px;padding:7px 14px;'
+                f'background:rgba(0,204,150,0.04);border-radius:0 0 8px 8px;'
+                f'border:1px solid rgba(0,204,150,0.15);border-top:none;'
+                f'display:flex;flex-wrap:wrap;align-items:center;gap:6px 20px;">'
+                f'<div style="font-size:0.68em;color:{_mut};font-weight:600;'
+                f'letter-spacing:0.04em;margin-right:4px;">🎯 WHEEL</div>'
+                f'<div><div style="font-size:0.65em;color:{_mut};">ENTRY BASIS</div>'
+                f'<div style="font-family:monospace;font-size:0.88em;font-weight:600;">'
+                f'${_c_entry:.2f}/sh</div></div>'
+                f'<div style="width:1px;height:28px;background:rgba(255,255,255,0.07);flex-shrink:0;"></div>'
+                f'<div><div style="font-size:0.65em;color:{_mut};">EFF. BASIS</div>'
+                f'<div style="font-family:monospace;font-size:0.88em;font-weight:700;color:{_grn};">'
+                f'${_c_effb:.2f}/sh</div></div>'
+                f'<div style="width:1px;height:28px;background:rgba(255,255,255,0.07);flex-shrink:0;"></div>'
+                f'<div><div style="font-size:0.65em;color:{_mut};">BASIS REDUCED</div>'
+                f'<div style="font-family:monospace;font-size:0.88em;font-weight:600;color:{_grn};">'
+                f'▼ ${_c_reduc:.2f}/sh</div></div>'
+                f'<div style="width:1px;height:28px;background:rgba(255,255,255,0.07);flex-shrink:0;"></div>'
+                f'<div><div style="font-size:0.65em;color:{_mut};">PREMIUMS BANKED</div>'
+                f'<div style="font-family:monospace;font-size:0.88em;font-weight:600;color:{_grn};">'
+                f'${_c_prems:.2f}</div></div>'
+                f'{_unreal_html}'
+                f'</div>'
+            )
+
         if i % 2 == 0:
             col_a.markdown(card_html, unsafe_allow_html=True)
         else:

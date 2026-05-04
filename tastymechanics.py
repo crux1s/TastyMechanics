@@ -887,7 +887,7 @@ def main():
         '💰 Deposits, Dividends & Fees'
     ])
 
-    with tab0: render_tab0(df_open, _expiry_alerts, latest_date)
+    with tab0: render_tab0(df_open, _expiry_alerts, latest_date, all_campaigns)
     with tab1:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,
