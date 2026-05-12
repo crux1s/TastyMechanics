@@ -291,11 +291,16 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 sub_type = str(row.Sub_Type)
                 if is_share_row(inst):
                     if row.Net_Qty_Row > 0:
+                        pps_e   = abs(total) / row.Net_Qty_Row if row.Net_Qty_Row else 0.0
+                        asgn_sfx = ' (Assigned)' if sub_type.lower() == SUB_ASSIGNMENT else ''
                         events.append({'date': row.Date, 'type': 'Entry/Add',
-                            'detail': f'Bought {row.Net_Qty_Row} shares', 'cash': total})
+                            'detail': 'Bought %.0f @ $%.2f/sh%s' % (row.Net_Qty_Row, pps_e, asgn_sfx),
+                            'cash': total})
                     else:
+                        pps_s = abs(total) / abs(row.Net_Qty_Row) if abs(row.Net_Qty_Row) else 0.0
                         events.append({'date': row.Date, 'type': 'Exit',
-                            'detail': f'Sold {abs(row.Net_Qty_Row)} shares', 'cash': total})
+                            'detail': 'Sold %.0f @ $%.2f/sh' % (abs(row.Net_Qty_Row), pps_s),
+                            'cash': total})
                 elif is_option_row(inst):
                     if row.Date >= start_date:
                         premiums += total

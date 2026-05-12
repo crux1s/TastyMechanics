@@ -53,13 +53,18 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
         rows = []
         for ticker, i, c in camp_list:
             rpnl = realized_pnl(c, use_lifetime)
-            effb = effective_basis(c)
+            if use_lifetime and c.total_shares > 0:
+                avg_price = (c.total_cost + c.premiums + c.dividends) / c.total_shares
+                effb      = c.blended_basis
+            else:
+                avg_price = c.blended_basis
+                effb      = effective_basis(c)
             dur  = (c.end_date or latest_date) - c.start_date
 
             rows.append({
                 'Ticker': ticker,
                 'Status': '✅ Closed' if c.status == 'closed' else '🟢 Open',
-                'Qty': int(c.total_shares), 'Avg Price': c.blended_basis,
+                'Qty': int(c.total_shares), 'Avg Price': avg_price,
                 'Cost Basis': effb, 'Premiums': c.premiums,
                 'Divs': c.dividends, 'Exit': c.exit_proceeds,
                 'P/L': rpnl, 'Days': dur.days,
@@ -194,10 +199,15 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
     # ── Open campaign cards ───────────────────────────────────────────────────
     for _camp_idx, (ticker, i, c) in enumerate(open_camps):
         rpnl = realized_pnl(c, use_lifetime)
-        effb = effective_basis(c)
+        if use_lifetime and c.total_shares > 0:
+            _entry_basis_card = (c.total_cost + c.premiums + c.dividends) / c.total_shares
+            effb = c.blended_basis
+        else:
+            _entry_basis_card = c.blended_basis
+            effb = effective_basis(c)
         is_open         = True
         pnl_color       = COLOURS['green'] if rpnl >= 0 else COLOURS['red']
-        basis_reduction = c.blended_basis - effb
+        basis_reduction = _entry_basis_card - effb
         _camp_deployed  = c.total_shares * c.blended_basis
         _camp_days      = max((latest_date - c.start_date).days, 1)
         _camp_eff       = (
@@ -346,7 +356,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
             badge_col=COLOURS['green'] if is_open else '#888',
             acquired=c.start_date.strftime('%d/%m/%y'),
             shares=int(c.total_shares),
-            entry_basis=c.blended_basis, eff_basis=effb,
+            entry_basis=_entry_basis_card, eff_basis=effb,
             reduction=basis_reduction if basis_reduction > 0 else 0,
             free_in=_time_to_be,
             premiums=c.premiums, pnl=rpnl, pnl_color=pnl_color,
@@ -484,10 +494,15 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
         with st.expander(f'📁 {len(closed_camps)} Closed Campaign{"s" if len(closed_camps) != 1 else ""} — click to expand cards', expanded=False):
             for ticker, i, c in closed_camps:
                 rpnl = realized_pnl(c, use_lifetime)
-                effb = effective_basis(c)
+                if use_lifetime and c.total_shares > 0:
+                    _entry_basis_card = (c.total_cost + c.premiums + c.dividends) / c.total_shares
+                    effb = c.blended_basis
+                else:
+                    _entry_basis_card = c.blended_basis
+                    effb = effective_basis(c)
                 is_open         = False
                 pnl_color       = COLOURS['green'] if rpnl >= 0 else COLOURS['red']
-                basis_reduction = c.blended_basis - effb
+                basis_reduction = _entry_basis_card - effb
                 _asgn_events = [e for e in c.events if str(e.get('type', '')).startswith('Assignment Put')]
                 if _asgn_events:
                     _excl = sum(e.get('cash', 0) for e in _asgn_events)
@@ -555,7 +570,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
                     badge_bg='rgba(100,100,100,0.2)', badge_col='#888',
                     acquired=c.start_date.strftime('%d/%m/%y'),
                     shares=int(c.total_shares),
-                    entry_basis=c.blended_basis, eff_basis=effb,
+                    entry_basis=_entry_basis_card, eff_basis=effb,
                     reduction=basis_reduction if basis_reduction > 0 else 0,
                     premiums=c.premiums, pnl=rpnl, pnl_color=pnl_color,
                     assignment_note=_assignment_note,

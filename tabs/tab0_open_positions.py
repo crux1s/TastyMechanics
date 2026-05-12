@@ -152,9 +152,14 @@ def render_tab0(df_open, _expiry_alerts, latest_date, all_campaigns=None):
             'Strike Price', 'Quantity', 'Average Price', 'Cost Basis',
         ] if c in df_open.columns]
         out = df_open[base_cols].sort_values('Ticker').copy()
+        def _eff_basis(camp):
+            if _use_lifetime and camp.total_shares > 0:
+                return camp.blended_basis
+            return effective_basis(camp)
+
         if _camp_lookup:
             out['Eff. Basis/sh'] = out['Ticker'].map(
-                lambda t: round(effective_basis(_camp_lookup[t], _use_lifetime), 4)
+                lambda t: round(_eff_basis(_camp_lookup[t]), 4)
                 if t in _camp_lookup else ''
             )
         if live_prices and _camp_lookup:
@@ -165,7 +170,7 @@ def render_tab0(df_open, _expiry_alerts, latest_date, all_campaigns=None):
                 last = float((live_prices.get(row['Ticker']) or {}).get('last', 0.0))
                 if not last:
                     return ''
-                return round((last - effective_basis(camp, _use_lifetime)) * camp.total_shares, 2)
+                return round((last - _eff_basis(camp)) * camp.total_shares, 2)
             out['Unreal P/L (vs eff. basis)'] = out.apply(_unreal_vs_eff, axis=1)
         return out.to_csv(index=False)
 
@@ -189,8 +194,12 @@ def render_tab0(df_open, _expiry_alerts, latest_date, all_campaigns=None):
         # Append wheel campaign basis strip when this ticker has an open campaign
         _camp = _camp_lookup.get(ticker)
         if _camp:
-            _c_effb  = effective_basis(_camp, _use_lifetime)
-            _c_entry = _camp.blended_basis
+            if _use_lifetime and _camp.total_shares > 0:
+                _c_entry = (_camp.total_cost + _camp.premiums + _camp.dividends) / _camp.total_shares
+                _c_effb  = _camp.blended_basis
+            else:
+                _c_entry = _camp.blended_basis
+                _c_effb  = effective_basis(_camp)
             _c_reduc = _c_entry - _c_effb
             _c_prems = _camp.premiums + _camp.dividends
             _mut     = COLOURS['text_muted']
