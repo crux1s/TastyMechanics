@@ -53,7 +53,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
         rows = []
         for ticker, i, c in camp_list:
             rpnl = realized_pnl(c, use_lifetime)
-            effb = effective_basis(c, use_lifetime)
+            effb = effective_basis(c)
             dur  = (c.end_date or latest_date) - c.start_date
 
             rows.append({
@@ -194,7 +194,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
     # ── Open campaign cards ───────────────────────────────────────────────────
     for _camp_idx, (ticker, i, c) in enumerate(open_camps):
         rpnl = realized_pnl(c, use_lifetime)
-        effb = effective_basis(c, use_lifetime)
+        effb = effective_basis(c)
         is_open         = True
         pnl_color       = COLOURS['green'] if rpnl >= 0 else COLOURS['red']
         basis_reduction = c.blended_basis - effb
@@ -484,7 +484,7 @@ def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capita
         with st.expander(f'📁 {len(closed_camps)} Closed Campaign{"s" if len(closed_camps) != 1 else ""} — click to expand cards', expanded=False):
             for ticker, i, c in closed_camps:
                 rpnl = realized_pnl(c, use_lifetime)
-                effb = effective_basis(c, use_lifetime)
+                effb = effective_basis(c)
                 is_open         = False
                 pnl_color       = COLOURS['green'] if rpnl >= 0 else COLOURS['red']
                 basis_reduction = c.blended_basis - effb
