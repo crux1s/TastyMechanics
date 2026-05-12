@@ -29,7 +29,8 @@ Each group is then matched:
 | Net P/L | Premium received minus buyback cost |
 | Capture % | Net P&L ÷ Premium Received × 100 (blank for debit trades) |
 | Ann Return % | Net P&L ÷ Capital Risk × 365 ÷ Days Held × 100 (capped at ±500%) |
-| Prem/Day | Premium Received ÷ Days Held |
+| Prem/Day | Premium Received ÷ Days Held (credit trades only) |
+| Daily θ % | Prem/Day ÷ Capital Risk × 100 — entry quality score: daily credit yield per unit of max risk (capped at 5%, credit trades only) |
 | Capital Risk | Maximum potential loss (see below) |
 | Close Type | How the position was closed |
 | Won | True if Net P&L > 0 |
@@ -39,7 +40,7 @@ Each group is then matched:
 
 ## Capital Risk calculation
 
-Capital Risk is used to compute Ann Return % and gives context for position sizing.
+Capital Risk is used to compute Ann Return % and Daily θ %, and gives context for position sizing.
 
 | Strategy | Capital Risk |
 |---|---|

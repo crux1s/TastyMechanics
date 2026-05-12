@@ -170,6 +170,11 @@ TRADE_LOSS_HIGHLIGHT = -200   # dollars
 # Annualised return is capped at ±ANN_RETURN_CAP % to prevent a 1-day trade
 # from producing a meaningless 50,000 % figure in the trade log.
 ANN_RETURN_CAP = 500
+# Daily θ % = Prem/Day ÷ Capital at Risk × 100 — measures entry quality at trade open.
+# Cap suppresses distorted 0DTE figures; thresholds drive green/orange/red colouring.
+DAILY_THETA_CAP    = 5     # % per day hard cap
+DAILY_THETA_GREEN  = 0.10  # % per day → solid (≈36% ARR equivalent on max risk)
+DAILY_THETA_ORANGE = 0.05  # % per day → acceptable (≈18% ARR equivalent)
 
 # ── Scorecard colour thresholds ───────────────────────────────────────────────
 # Win rate colouring in Performance by Ticker table:

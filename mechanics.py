@@ -43,7 +43,7 @@ from config import (
     KNOWN_INDEXES,
     SPLIT_DSC_PATTERNS,
     FIFO_EPSILON, FIFO_ROUND,
-    ANN_RETURN_CAP,
+    ANN_RETURN_CAP, DAILY_THETA_CAP,
     CLOSE_EXPIRED, CLOSE_ASSIGNED, CLOSE_EXERCISED, CLOSE_CLOSED,
     get_opt_multiplier,
 )
@@ -851,7 +851,16 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
 
         open_credit = opens['Total'].sum()
         _short_opens = opens[opens['Net_Qty_Row'] < 0]
-        n_contracts = int(abs(_short_opens['Net_Qty_Row'].sum())) if not _short_opens.empty else int(abs(opens['Net_Qty_Row'].sum()))  # short legs only
+        # n_contracts = number of complete structures traded.
+        # Group short legs by option type and sum — so an IC (1 short call + 1 short put)
+        # gives max(1, 1)=1, while a 2-lot short put gives max(2)=2.
+        if not _short_opens.empty:
+            n_contracts = int(
+                _short_opens.groupby(_short_opens['Call or Put'].fillna(''))['Net_Qty_Row']
+                .apply(lambda x: x.abs().sum()).max()
+            )
+        else:
+            n_contracts = int(opens['Net_Qty_Row'].abs().max())
         net_pnl     = grp['Total'].sum()
         # open_date is the earliest open across ALL legs in the trade group,
         # including legs from subsequent rolls. For a rolled position this means
@@ -923,6 +932,8 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
             'Ann Return %': max(min(net_pnl / capital_risk * 365 / days_held * 100, ANN_RETURN_CAP), -ANN_RETURN_CAP)
                 if capital_risk > 0 else None,
             'Prem/Day': open_credit / days_held if is_credit else None,  # credit trades only
+            'Daily θ %': min(open_credit / days_held / capital_risk * 100, DAILY_THETA_CAP)
+                if (is_credit and capital_risk > 0) else None,
             'Won': net_pnl > 0, 'DTE at Open': dte_open, 'Close Reason': close_type,
             '50% Target': round(open_credit * 0.50, 2) if is_credit else None,
             'Expiration': expiry_date,

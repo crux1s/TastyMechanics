@@ -11,7 +11,7 @@ constants used in colour lookups).
 
 import html
 import pandas as pd
-from config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT, WIN_RATE_GREEN, WIN_RATE_ORANGE, DTE_PROGRESS_MAX, DTE_ALERT_WARN, DTE_ALERT_CRIT, COLOURS, get_opt_multiplier
+from config import SUB_DIVIDEND, SUB_CREDIT_INT, SUB_DEBIT_INT, WIN_RATE_GREEN, WIN_RATE_ORANGE, DTE_PROGRESS_MAX, DTE_ALERT_WARN, DTE_ALERT_CRIT, COLOURS, get_opt_multiplier, DAILY_THETA_CAP, DAILY_THETA_GREEN, DAILY_THETA_ORANGE
 _C = COLOURS  # short alias — avoids quote conflicts in f-strings on Python < 3.12
 # is_share_row / is_option_row live in ingestion.py — that is the correct home
 # for anything that encodes TastyTrade field values.  Re-exported here so that
@@ -175,6 +175,16 @@ def color_pnl_cell(val):
     if not isinstance(val, (int, float)) or pd.isna(val): return ''
     return 'color: ' + COLOURS['green'] if val > 0 else 'color: ' + COLOURS['red'] if val < 0 else ''
 
+def color_daily_theta(val):
+    """Green/orange/red colouring for Daily θ % cells in st.dataframe."""
+    try:
+        v = float(val)
+    except (TypeError, ValueError):
+        return ''
+    if v >= DAILY_THETA_GREEN:  return 'color: ' + COLOURS['green']
+    if v >= DAILY_THETA_ORANGE: return 'color: ' + COLOURS['orange']
+    return 'color: ' + COLOURS['red']
+
 def _fmt_ann_ret(row):
     """Format Ann Ret % cell — appends * for trades held < 4 days."""
     v = row['Ann Ret %']
@@ -194,6 +204,42 @@ def _style_ann_ret(row):
             styles[idx] = 'color: ' + COLOURS['tan']
     except (ValueError, KeyError):
         pass  # 'Ann Ret %' column absent in this table variant — safe to skip
+    return styles
+
+def _fmt_daily_theta(row):
+    """Format Daily θ % cell — appends * for trades held < 4 days, ⚠ at cap."""
+    v = row.get('Daily θ %')
+    if v is None or pd.isna(v):
+        return '—'
+    _days = row.get('Days in Trade', row.get('Days Held'))
+    suffix = '*' if pd.notna(_days) and _days < 4 else ''
+    cap_marker = '⚠ ' if v >= DAILY_THETA_CAP else ''
+    return '{}{:.2f}%{}'.format(cap_marker, v, suffix)
+
+def _style_daily_theta(row):
+    """Row-level style: colour Daily θ % green/orange/red by entry quality threshold."""
+    styles = [''] * len(row)
+    try:
+        idx = list(row.index).index('Daily θ %')
+        raw = row['Daily θ %']
+        # column may already be a formatted string from _fmt_daily_theta
+        if isinstance(raw, str):
+            s = raw.replace('⚠ ', '').rstrip('*').rstrip('%').strip()
+            if s == '—':
+                return styles
+            v = float(s)
+        elif pd.isna(raw):
+            return styles
+        else:
+            v = float(raw)
+        if v >= DAILY_THETA_GREEN:
+            styles[idx] = 'color: ' + COLOURS['green']
+        elif v >= DAILY_THETA_ORANGE:
+            styles[idx] = 'color: ' + COLOURS['orange']
+        else:
+            styles[idx] = 'color: ' + COLOURS['red']
+    except (ValueError, KeyError):
+        pass
     return styles
 
 def _style_chain_row(row):

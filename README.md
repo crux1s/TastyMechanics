@@ -45,6 +45,8 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 - Spread context row for vertical spreads — net credit/debit, max loss/profit, % of max profit
 - Strategy detection covers Iron Condor, Reverse Iron Condor, Iron Butterfly, Reverse Iron Butterfly, Jade Lizard, Big Lizard, Short Strangle, Risk Reversal, vertical spreads, butterflies, calendars, covered structures
 - Expiry alert strip — all options expiring within 21 days, colour-coded by urgency
+- Wheel Campaign basis strip — cost-basis summary per active campaign
+- CSV export button for the full open positions list
 
 **Portfolio Overview**
 - Realized P/L, Return on Capital, Capital Efficiency Score (annualised)
@@ -53,11 +55,11 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 - Period comparison card — current vs prior equivalent window with deltas
 
 **Derivatives Performance tab**
-- Premium selling scorecard: win rate, median capture %, median days held, annualised return, banked $/day
+- Premium selling scorecard: win rate, median capture %, median days held, annualised return, banked $/day, **Med Daily θ %** (entry quality score)
 - Avg winner / loser, win/loss ratio, total fees and fees as % of P/L
 - Call vs Put performance table
 - Defined vs Undefined Risk breakdown by strategy
-- Performance by ticker table
+- Performance by ticker table — includes **Daily θ %** per ticker (median entry quality)
 - DTE at open distribution, rolling win rate chart
 - Options P/L by week and month (candlestick — shows equity curve OHLC per period)
 
@@ -68,10 +70,10 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 - DTE Discipline section — win rate and avg P/L by DTE at open, close distribution with TastyTrade target zone
 - Trade Quality section — win/loss P/L histogram, rolling 10-trade capture % and win rate
 - Timing & Concentration — P/L by day of week and hour, ticker × month heatmap
-- Best/Worst 5 trades and full closed trade log
+- Best/Worst 5 trades and full closed trade log — includes **Daily θ %** column (entry quality, coloured green/orange/red)
 
 **Wheel Campaigns tab**
-- Per-ticker campaign cards: entry basis, effective basis, premiums banked, realised P/L
+- Per-ticker campaign cards: entry basis, effective basis, premiums banked, realised P/L, live price strip
 - **"Days to Free"** — projected days until effective cost basis reaches $0 at current premium/dividend rate
 - Pre-purchase option attribution note when pre-campaign closing debits affect the premium total
 - Option roll chain visualisation — calls and puts tracked as separate chains
@@ -211,6 +213,15 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 ---
 
 ## Changelog
+
+**v26.8 — Daily θ %, Open Positions Enhancements & Fixes** (2026-05-12)
+- **Daily θ % metric** — new trade entry quality score: `Prem/Day ÷ Capital at Risk × 100`. Answers "was this trade worth putting on?" at the time of entry, regardless of how it ended. Appears in the Premium Selling Scorecard (Tab 1, 8th card), Performance by Ticker table, and Full Closed Trade Log. Coloured green (≥ 0.10%/day), orange (≥ 0.05%/day), red below — capped at 5%/day to suppress 0DTE distortion.
+- **Open Positions tab** — Wheel Campaign basis strip added to active campaign summaries; CSV export button added for the open positions list.
+- **Wheel Campaign cards** — live price strip added showing current equity/option marks inline on the card.
+- **Fix**: `detect_strategy()` for ratio spreads now counts option quantities instead of row counts, fixing misclassification of multi-row single-expiry ratio spread structures.
+- **Fix**: Futures options capital at risk now uses the correct per-product multiplier instead of a hardcoded fallback.
+- **UX**: 50% Target column removed from the closed trade log. "Basis Free In" renamed to "Time to B/E".
+- Test suite at **324 tests**.
 
 **v26.7 — Open Position Card Fixes & Iron Condor Detection** (2026-04-17)
 - **Live option marks now work** — two silent bugs fixed: `itertuples()` was dropping space-containing column names (`Expiration Date` → `_1`) so every mark lookup missed; and TastyTrade exports Saturday OCC settlement dates while yfinance uses the Friday last-trading-day, so the chain fetch never matched. Both fixed.

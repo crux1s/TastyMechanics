@@ -70,6 +70,22 @@ from report_prompt import build_review_prompt
 #
 # Changelog (recent versions — full history in git log)
 # -----------------------------------------------------
+# v26.8 (2026-05-12)
+#   - FEATURE: Daily θ % — trade entry quality metric: Prem/Day ÷ Capital at Risk × 100.
+#     Answers "was this trade worth putting on?" at entry, independent of outcome.
+#     Added to Full Closed Trade Log (Tab 2) with green/orange/red colour coding, and to
+#     the Premium Selling Scorecard (8th metric card) and Performance by Ticker table (Tab 1).
+#     Capped at 5%/day to prevent 0DTE outliers distorting the scale.
+#   - FEATURE: Wheel Campaign basis strip on Open Positions tab.
+#   - FEATURE: CSV export button on Open Positions tab.
+#   - FEATURE: Live price strip on Wheel Campaign cards.
+#   - FIX: detect_strategy() for ratio spreads — count option quantities not row counts,
+#     fixing misclassification of multi-row single-expiry ratio spreads.
+#   - FIX: Futures options capital at risk — use correct per-product multiplier.
+#   - UX: 50% Target column removed from trade log.
+#   - UX: "Basis Free In" renamed to "Time to B/E".
+#   - TESTING: 324 tests passing (was 311).
+#
 # v26.7 (2026-04-17)
 #   - FIX: detect_strategy() misidentified vertical call/put spreads as single legs.
 #     itertuples() silently renames space-containing columns (Expiration Date →_1 etc.),
@@ -186,7 +202,7 @@ from report_prompt import build_review_prompt
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.7"
+APP_VERSION = "v26.8"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 

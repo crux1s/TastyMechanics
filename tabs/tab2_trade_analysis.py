@@ -16,13 +16,14 @@ from config import (
     PAT_CLOSE, PAT_EXPIR, PAT_ASSIGN, PAT_EXERCISE, PAT_CLOSING,
     WHEEL_MIN_SHARES, LEAPS_DTE_THRESHOLD, ROLL_CHAIN_GAP_DAYS,
     ANN_RETURN_CAP, COLOURS,
+    DAILY_THETA_CAP, DAILY_THETA_GREEN, DAILY_THETA_ORANGE,
 )
 from ui_components import (
     xe, is_share_row, is_option_row,
     identify_pos_type, translate_readable, format_cost_basis, detect_strategy,
     fmt_dollar, color_win_rate, color_pnl_cell,
     _pnl_chip, _cmp_block, _dte_chip,
-    _fmt_ann_ret, _style_ann_ret, _style_chain_row,
+    _fmt_ann_ret, _style_ann_ret, _fmt_daily_theta, _style_daily_theta, _style_chain_row,
     _color_cash_row, _color_cash_total,
     chart_layout, _badge_inline_style, render_position_card,
 )
@@ -634,7 +635,7 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         log = all_cdf[['Ticker', 'Trade Type', 'Type', 'Close Reason', 'Open Date', 'Close Date',
                         'Days Held', 'Expiration', 'DTE at Close', 'Contracts',
                         'Net Premium', 'Net P/L', 'Capture %',
-                        'Capital at Risk', 'Ann Return %']].copy()
+                        'Capital at Risk', 'Ann Return %', 'Daily θ %']].copy()
         log['Open Date']  = pd.to_datetime(log['Open Date'])
         log['Close Date'] = pd.to_datetime(log['Close Date'])
         log.rename(columns={
@@ -646,6 +647,7 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
         }, inplace=True)
         log = log.sort_values('Close', ascending=False)
         log['Ann Ret %'] = log.apply(_fmt_ann_ret, axis=1)
+        log['Daily θ %'] = log.apply(_fmt_daily_theta, axis=1)
         st.dataframe(
             log.style.format({
                 'Net Premium':    lambda x: '${:.2f}'.format(x),
@@ -657,7 +659,9 @@ def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                 'Capture %': lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
                 'Ann Ret %': lambda v: v if isinstance(v, str) else
                              ('{:.0f}%'.format(v) if pd.notna(v) else '—'),
-            }).apply(_style_ann_ret, axis=1).apply(_style_pnl_row, axis=1).map(color_pnl_cell, subset=['P/L']),
+                'Daily θ %': lambda v: v if isinstance(v, str) else
+                             ('{:.2f}%'.format(v) if pd.notna(v) else '—'),
+            }).apply(_style_ann_ret, axis=1).apply(_style_daily_theta, axis=1).apply(_style_pnl_row, axis=1).map(color_pnl_cell, subset=['P/L']),
             width='stretch', hide_index=True,
             column_config={
                 'Open':        st.column_config.DateColumn('Open',        format='DD/MM/YY'),
