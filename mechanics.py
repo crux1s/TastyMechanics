@@ -33,6 +33,8 @@ from typing import Any, Iterator, Optional
 import pandas as pd
 
 from models import Campaign, AppData, ParsedData
+from dataclasses import dataclass
+
 from config import (
     OPT_TYPES, TRADE_TYPES, MONEY_TYPES,
     SUB_SELL_OPEN, SUB_ASSIGNMENT, SUB_DIVIDEND,
@@ -946,6 +948,92 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
             if pd.notna(r['Expiration']) else None, axis=1
         )
     return ct
+
+
+# ── MARK-TO-MARKET ─────────────────────────────────────────────────────────────
+
+@dataclass
+class UnrealizedPnL:
+    equity:     float  # unrealized P/L on open equity positions
+    options:    float  # unrealized P/L on open option legs
+    total:      float  # equity + options
+    notional:   float  # equity capital deployed (cost basis × shares) — ROR denominator
+    coverage:   int    # tickers for which a live price was found
+    total_open: int    # total tickers with open positions in df_open
+
+
+def compute_unrealized_pnl(
+    df_open: pd.DataFrame,
+    all_campaigns: dict,
+    live_prices: dict,
+) -> UnrealizedPnL:
+    """
+    Compute unrealized P/L for all open positions given live_prices from fetch_live_prices().
+
+    Equity uses blended_basis (raw acquisition cost) so premiums already counted in
+    realized P/L are not double-counted here.  Options use the unified formula:
+        mark × Net_Qty × multiplier − Cost_Basis
+    which is correct for both longs (Cost_Basis > 0) and shorts (Cost_Basis < 0).
+    """
+    if df_open.empty or not live_prices:
+        n = len(df_open['Ticker'].dropna().unique()) if not df_open.empty else 0
+        return UnrealizedPnL(0.0, 0.0, 0.0, 0.0, 0, n)
+
+    eq_unreal   = 0.0
+    eq_notional = 0.0
+    opt_unreal  = 0.0
+    covered: set = set()
+
+    # 1. Wheel campaign equity — use blended_basis as cost (premiums already in realized)
+    campaign_tickers: set = set()
+    for ticker, camps in all_campaigns.items():
+        c = next((c for c in reversed(camps)
+                  if c.status == 'open' and c.total_shares > FIFO_EPSILON), None)
+        if c is None:
+            continue
+        campaign_tickers.add(ticker)
+        lp = live_prices.get(ticker, {}).get('last', 0.0)
+        if lp > 0:
+            eq_unreal   += (lp - c.blended_basis) * c.total_shares
+            eq_notional += c.blended_basis * c.total_shares
+            covered.add(ticker)
+
+    # 2. Non-campaign equity in df_open (long shares not part of a wheel)
+    eq_rows = df_open[equity_mask(df_open['Instrument Type'])]
+    for _, row in eq_rows.iterrows():
+        t = row['Ticker']
+        if t in campaign_tickers or row['Net_Qty'] <= FIFO_EPSILON:
+            continue
+        lp = live_prices.get(t, {}).get('last', 0.0)
+        if lp > 0:
+            cost_per_share = row['Cost Basis'] / row['Net_Qty']
+            eq_unreal   += (lp - cost_per_share) * row['Net_Qty']
+            eq_notional += row['Cost Basis']
+            covered.add(t)
+
+    # 3. Open option legs — mark × Net_Qty × multiplier − Cost_Basis
+    opt_rows = df_open[option_mask(df_open['Instrument Type'])]
+    for _, row in opt_rows.iterrows():
+        t = row['Ticker']
+        if t not in live_prices:
+            continue
+        try:
+            exp_key = row['Expiration Date']
+            strike  = float(row['Strike Price'])
+            cp      = str(row['Call or Put']).upper()
+            mark    = live_prices[t]['options'].get((exp_key, strike, cp), {}).get('mark')
+            if mark is None:
+                continue
+            mult = get_opt_multiplier(row.get('Root Symbol', t))
+            opt_unreal += mark * row['Net_Qty'] * mult - row['Cost Basis']
+            covered.add(t)
+        except Exception:
+            pass
+
+    all_tickers_open = set(df_open['Ticker'].dropna()) if not df_open.empty else set()
+    total = eq_unreal + opt_unreal
+    return UnrealizedPnL(eq_unreal, opt_unreal, total, eq_notional,
+                         len(covered), len(all_tickers_open))
 
 
 # ── ROLL CHAIN ENGINE ──────────────────────────────────────────────────────────

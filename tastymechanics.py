@@ -17,6 +17,7 @@ from config import (
     SPLIT_DSC_PATTERNS, ZERO_COST_WARN_TYPES,
     REQUIRED_COLUMNS,
     ANN_RETURN_CAP,
+    MTM_ROR_GREEN, MTM_ROR_ORANGE,
     COLOURS,
 )
 
@@ -41,7 +42,7 @@ from ingestion import (
     detect_corporate_actions, apply_split_adjustments,
     validate_columns, parse_csv,
     CSVParseError,
-)
+)  # option_mask also used by _build_live_specs / _remap_live_prices at module level
 
 
 # ── Analytics engine (pure Python — no Streamlit dependency) ──────────────────
@@ -56,7 +57,9 @@ from mechanics import (
     build_option_chains,
     calc_dte,
     compute_app_data,
+    compute_unrealized_pnl, UnrealizedPnL,
 )
+from market_data import fetch_live_prices
 
 import json as _json
 import os as _os
@@ -204,6 +207,47 @@ from report_prompt import build_review_prompt
 
 APP_VERSION = "v26.8"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
+
+
+# ── MTM helpers (module-level so they don't re-define on every Streamlit rerun) ──
+
+def _build_live_specs(df_open: pd.DataFrame):
+    """Return (tickers_frozen, option_specs_frozen) suitable for fetch_live_prices()."""
+    if df_open.empty:
+        return frozenset(), frozenset()
+    tickers = frozenset(df_open['Ticker'].dropna().unique())
+    specs: set = set()
+    for _, row in df_open[option_mask(df_open['Instrument Type'])].iterrows():
+        try:
+            ey = pd.to_datetime(row['Expiration Date'], dayfirst=False).strftime('%Y-%m-%d')
+            specs.add((row['Ticker'], ey, float(row['Strike Price']),
+                       str(row['Call or Put']).upper()))
+        except Exception:
+            pass
+    return tickers, frozenset(specs)
+
+
+def _remap_live_prices(raw_prices: dict, df_open: pd.DataFrame) -> dict:
+    """Remap yfinance expiry keys (YYYY-MM-DD) back to original CSV expiry strings."""
+    ymd_to_orig: dict = {}
+    if not df_open.empty:
+        for _, row in df_open[option_mask(df_open['Instrument Type'])].iterrows():
+            try:
+                t  = row['Ticker']
+                ey = pd.to_datetime(row['Expiration Date'], dayfirst=False).strftime('%Y-%m-%d')
+                ymd_to_orig.setdefault(t, {})[ey] = str(row['Expiration Date'])
+            except Exception:
+                pass
+    result: dict = {}
+    for ticker, data in raw_prices.items():
+        opts_remapped: dict = {}
+        t_map = ymd_to_orig.get(ticker, {})
+        for (ey, strike, cp), opt_data in data['options'].items():
+            orig = t_map.get(ey, ey)
+            opts_remapped[(orig, strike, cp)] = opt_data
+        result[ticker] = {'last': data['last'], 'prev_close': data['prev_close'],
+                          'options': opts_remapped}
+    return result
 
 
 def main():
@@ -804,7 +848,94 @@ def main():
         unsafe_allow_html=True
     )
 
+    # ── Mark-to-Market (MTM) ────────────────────────────────────────────────────────
+    _MTM_LABEL = ('font-size:10px;font-weight:700;letter-spacing:0.1em;'
+                  'opacity:0.55;text-transform:uppercase')
+    _mtm_hdr, _mtm_toggle_col = st.columns([6, 1])
+    with _mtm_hdr:
+        st.markdown(f'<span style="{_MTM_LABEL}">Mark-to-Market (live prices · all-time)</span>',
+                    unsafe_allow_html=True)
+    with _mtm_toggle_col:
+        _mtm_live = st.toggle('📡 Live', key='mtm_live', value=False,
+                              help='Fetch live prices from Yahoo Finance to compute unrealised P/L. '
+                                   'Equity near real-time; options ~15 min delayed. Cached 5 min.')
 
+    _mtm: UnrealizedPnL | None = None
+    if _mtm_live:
+        _tickers_f, _opt_specs_f = _build_live_specs(df_open)
+        with st.spinner('Fetching live prices…'):
+            _raw_lp = fetch_live_prices(_tickers_f, _opt_specs_f)
+        if _raw_lp and any(v.get('last', 0) > 0 for v in _raw_lp.values()):
+            _live_prices_mtm = _remap_live_prices(_raw_lp, df_open)
+            _mtm = compute_unrealized_pnl(df_open, all_campaigns, _live_prices_mtm)
+        else:
+            from market_data import _YF_AVAILABLE
+            if not _YF_AVAILABLE:
+                st.warning('`yfinance` not installed — run `pip install yfinance` and restart.')
+            else:
+                st.warning('Live prices unavailable — check internet connection.')
+
+    # Always use all-time realized P/L for MTM (never windowed)
+    _mtm_realized   = total_realized_pnl
+    _unreal_val     = _mtm.total   if _mtm else None
+    _mtm_pnl_val    = (_mtm_realized + _mtm.total) if _mtm else None
+    _mtm_ror_val    = (_mtm_pnl_val / net_deposited * 100) if (_mtm and net_deposited > 0) else None
+    _unreal_ror_val = (_mtm.total / _mtm.notional * 100)   if (_mtm and _mtm.notional > 0) else None
+
+    # Hero stat — MTM ROR rendered larger than a standard st.metric
+    if _mtm_ror_val is not None:
+        _hero_color = (COLOURS['green']  if _mtm_ror_val > MTM_ROR_GREEN  else
+                       COLOURS['orange'] if _mtm_ror_val >= MTM_ROR_ORANGE else
+                       COLOURS['red'])
+        _hero_html = (
+            f'<div style="font-family:IBM Plex Mono,monospace;font-size:2.0rem;'
+            f'font-weight:700;color:{_hero_color};line-height:1.1;">%.1f%%</div>'
+            f'<div style="font-size:0.72rem;color:{COLOURS["text_muted"]};'
+            f'text-transform:uppercase;letter-spacing:0.05em;margin-top:2px;">MTM ROR</div>'
+            f'<div style="font-size:0.72rem;color:{COLOURS["text_dim"]};margin-top:4px;">'
+            f'Realized + unrealised ÷ deposits</div>'
+        ) % _mtm_ror_val
+    else:
+        _hero_html = (
+            f'<div style="font-family:IBM Plex Mono,monospace;font-size:2.0rem;'
+            f'font-weight:700;color:{COLOURS["text_muted"]};line-height:1.1;">—</div>'
+            f'<div style="font-size:0.72rem;color:{COLOURS["text_muted"]};'
+            f'text-transform:uppercase;letter-spacing:0.05em;margin-top:2px;">MTM ROR</div>'
+            f'<div style="font-size:0.72rem;color:{COLOURS["text_dim"]};margin-top:4px;">'
+            f'Enable 📡 Live above to compute</div>'
+        )
+
+    mm1, mm2, mm3, mm4 = st.columns([1.5, 1, 1, 1])
+    with mm1:
+        st.markdown(_hero_html, unsafe_allow_html=True)
+    mm2.metric(
+        'MTM P/L',
+        fmt_dollar(_mtm_pnl_val) if _mtm_pnl_val is not None else '—',
+        delta=('%+.1f%% vs realized' % (
+            _mtm.total / abs(_mtm_realized) * 100 if _mtm and _mtm_realized else 0
+        )) if _mtm else None,
+        help='Realized P/L (all time) + unrealized P/L at current market prices. '
+             'The total you would pocket if you closed every position right now.',
+    )
+    mm3.metric(
+        'Unrealized P/L',
+        fmt_dollar(_unreal_val) if _unreal_val is not None else '—',
+        help='Current mark minus cost basis across all open positions. '
+             'Equity uses blended acquisition cost (premiums already counted in realized). '
+             'Options: mark × quantity × multiplier − entry premium. '
+             'Options notional is not included in the Unrealized ROR denominator.',
+    )
+    mm4.metric(
+        'Unrealized ROR',
+        ('%.1f%%' % _unreal_ror_val) if _unreal_ror_val is not None else '—',
+        help='Unrealized P/L ÷ equity capital deployed (blended cost basis × shares held). '
+             'Options notional excluded — focuses on the equity bag at risk.',
+    )
+    if _mtm and _mtm.coverage < _mtm.total_open:
+        st.caption(
+            f'📡 Live prices available for {_mtm.coverage} of {_mtm.total_open} open tickers. '
+            'MTM figures may be incomplete for tickers with no Yahoo Finance quote.'
+        )
 
     # ── Period Comparison Card — rendered inside tab4 ──────────────────────────────
 

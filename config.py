@@ -176,6 +176,13 @@ DAILY_THETA_CAP    = 5     # % per day hard cap
 DAILY_THETA_GREEN  = 0.10  # % per day → solid (≈36% ARR equivalent on max risk)
 DAILY_THETA_ORANGE = 0.05  # % per day → acceptable (≈18% ARR equivalent)
 
+# MTM ROR colour thresholds — applied to the hero MTM ROR stat in Portfolio Overview:
+#   > MTM_ROR_GREEN  → green  (strong total return)
+#   >= MTM_ROR_ORANGE → orange (positive but modest)
+#   <  MTM_ROR_ORANGE → red    (net loss when marking to market)
+MTM_ROR_GREEN  = 10.0  # %
+MTM_ROR_ORANGE = 0.0   # %
+
 # ── Scorecard colour thresholds ───────────────────────────────────────────────
 # Win rate colouring in Performance by Ticker table:
 #   >= WIN_RATE_GREEN  → green  (strong edge)
