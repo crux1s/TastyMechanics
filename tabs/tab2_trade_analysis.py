@@ -2,6 +2,8 @@
 tabs/tab2_trade_analysis.py — Tab2 Trade Analysis tab renderer.
 """
 
+from __future__ import annotations
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -48,8 +50,18 @@ def _style_pnl_row(row):
     return [''] * len(row)
 
 
-def render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
-                df_window, _win_label, _win_suffix, _win_start_str, _win_end_str):
+def render_tab2(
+    closed_trades_df: pd.DataFrame,
+    all_cdf: pd.DataFrame,
+    credit_cdf: pd.DataFrame,
+    has_credit: bool,
+    has_data: bool,
+    df_window: pd.DataFrame,
+    _win_label: str,
+    _win_suffix: str,
+    _win_start_str: str,
+    _win_end_str: str,
+) -> None:
     """Tab 2 — Discipline & Patterns: ThetaGang metrics, equity curves, DTE discipline,
     trade quality, timing patterns, and the full closed trade log."""
     if closed_trades_df.empty:

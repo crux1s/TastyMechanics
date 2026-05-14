@@ -2,6 +2,8 @@
 tabs/tab3_wheel_campaigns.py — Tab3 Wheel Campaigns tab renderer.
 """
 
+from __future__ import annotations
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -31,9 +33,17 @@ from mechanics import (
     _iter_fifo_sells, build_option_chains,
     effective_basis, realized_pnl, calc_dte,
 )
+from models import Campaign
 
 
-def render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capital_deployed=0.0):
+def render_tab3(
+    all_campaigns: dict[str, list[Campaign]],
+    df: pd.DataFrame,
+    latest_date: pd.Timestamp,
+    start_date: pd.Timestamp,
+    use_lifetime: bool,
+    capital_deployed: float = 0.0,
+) -> None:
     """Tab 3 — Wheel Campaigns: summary table, per-campaign cards, roll chains, waterfall."""
     # Read toggle state early — required for data computation and the CSV export button.
     # Session state already holds the user's last toggle interaction before any widget renders.

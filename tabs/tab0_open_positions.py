@@ -2,10 +2,15 @@
 tabs/tab0_open_positions.py — Tab0 Open Positions tab renderer.
 """
 
+from __future__ import annotations
+
+from typing import Optional
+
 import streamlit as st
 import pandas as pd
 
 from config import COLOURS
+from models import Campaign
 from ui_components import (
     identify_pos_type, translate_readable, detect_strategy,
     _dte_chip, render_position_card,
@@ -15,7 +20,12 @@ from mechanics import calc_dte, effective_basis
 from market_data import fetch_live_prices
 
 
-def render_tab0(df_open, _expiry_alerts, latest_date, all_campaigns=None):
+def render_tab0(
+    df_open: pd.DataFrame,
+    _expiry_alerts: list,
+    latest_date: pd.Timestamp,
+    all_campaigns: Optional[dict[str, list[Campaign]]] = None,
+) -> None:
     """Tab 0 — Active Positions: open position cards + expiry alert strip."""
 
     _c_hdr, _c_csv, _c_tog = st.columns([5, 1, 1])

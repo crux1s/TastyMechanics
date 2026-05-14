@@ -16,12 +16,6 @@ Nothing active right now.
 
 ---
 
-## Readability & Maintainability
-
-- **Type hints on tab render functions** (`tabs/tab0`–`tab5`) — each takes several positional arguments with no hints. Low priority.
-
----
-
 ## 0DTE Support
 
 ### Quick wins (existing tabs)

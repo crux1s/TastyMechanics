@@ -1,4 +1,4 @@
-# TastyMechanics — Claude Context
+# TastyMechanics — Codex Context
 
 A Streamlit dashboard for wheel traders and theta harvesters on TastyTrade. Analyzes CSV transaction exports to produce realized P/L, wheel campaign tracking, premium selling scorecard, and portfolio analytics.
 
@@ -28,7 +28,7 @@ Always run after any change:
 PYTHONIOENCODING=utf-8 python3 test_tastymechanics.py
 ```
 
-Expected: `324 tests | 324 passed | 0 failed` (24 sections)
+Expected: `299 tests | 299 passed | 0 failed` (24 sections)
 
 The `PYTHONIOENCODING=utf-8` prefix is required on Windows — omitting it causes a `charmap` codec error on the Unicode characters in test output.
 
