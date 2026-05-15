@@ -422,30 +422,38 @@ def render_tab3(
                     )
                     with st.expander(chain_label, expanded=is_open_chain):
                         chain_rows = []
-                        last_open_date = None
+                        _open_dates    = {}   # (strike, exp) -> open date for days-held lookup
+                        _open_pair_idx = {}   # (strike, exp) -> pair_idx so BTC shares its STO's colour
                         pair_idx = -1
                         for leg_i, leg in enumerate(chain):
-                            sub = str(leg['sub_type']).lower()
+                            sub  = str(leg['sub_type']).lower()
+                            _key = (leg['strike'], leg['exp'])
                             if 'to open' in sub:
                                 pair_idx += 1
                                 action = '↪️ Sell to Open'
-                                last_open_date = leg['date']
-                                dit_str = ''
+                                _open_dates[_key]    = leg['date']
+                                _open_pair_idx[_key] = pair_idx
+                                dit_str  = ''
+                                row_pair = pair_idx
                             elif PAT_CLOSE in sub:
-                                action = '↩️ Buy to Close'
-                                dit_str = '%dd' % (leg['date'] - last_open_date).days if last_open_date else ''
-                                last_open_date = None
+                                action   = '↩️ Buy to Close'
+                                _od      = _open_dates.pop(_key, None)
+                                dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
+                                row_pair = _open_pair_idx.pop(_key, pair_idx)
                             elif PAT_EXPIR in sub:
-                                action = '⏹️ Expired'
-                                dit_str = '%dd' % (leg['date'] - last_open_date).days if last_open_date else ''
-                                last_open_date = None
+                                action   = '⏹️ Expired'
+                                _od      = _open_dates.pop(_key, None)
+                                dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
+                                row_pair = _open_pair_idx.pop(_key, pair_idx)
                             elif PAT_ASSIGN in sub:
-                                action = '📋 Assigned'
-                                dit_str = '%dd' % (leg['date'] - last_open_date).days if last_open_date else ''
-                                last_open_date = None
+                                action   = '📋 Assigned'
+                                _od      = _open_dates.pop(_key, None)
+                                dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
+                                row_pair = _open_pair_idx.pop(_key, pair_idx)
                             else:
-                                action = leg['sub_type']
-                                dit_str = ''
+                                action   = leg['sub_type']
+                                dit_str  = ''
+                                row_pair = pair_idx
                             dte_str = ''
                             if 'to open' in sub:
                                 try:
@@ -460,7 +468,7 @@ def render_tab3(
                                 'Strike': '%.1f%s' % (leg['strike'], cp[0]),
                                 'Expiry': leg['exp'], 'DTE': dte_str, 'Days Held': dit_str,
                                 'Credit/Debit Rcvd': leg['total'], '_open': is_open_leg,
-                                '_pair': pair_idx,
+                                '_pair': row_pair,
                             })
                         ch_df = pd.DataFrame(chain_rows)
                         ch_df = pd.concat([ch_df, pd.DataFrame([{

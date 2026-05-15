@@ -249,10 +249,7 @@ def render_tab1(
             strat_df_display = pd.concat([strat_df, _strat_total], ignore_index=True)
 
             def _style_strat_row(row):
-                """Risk tint for defined/undefined rows; dim low-count rows (< 5 trades)."""
-                trades = row.get('Trades', 0)
-                if pd.notna(trades) and int(trades) < 5 and row.get('Strategy', '') != '— Total':
-                    return ['color: rgba(200,200,200,0.40); font-style:italic'] * len(row)
+                """Risk tint for defined/undefined rows."""
                 risk = row.get('_risk', None)
                 if risk is True:
                     return ['background-color: rgba(88,166,255,0.09)'] * len(row)
@@ -261,7 +258,7 @@ def render_tab1(
                 return [''] * len(row)
 
             st.markdown(f'##### 🧩 Defined vs Undefined Risk — by Strategy {_win_label}', unsafe_allow_html=True)
-            st.caption('🔵 Defined risk (spread / protected)   🟠 Undefined risk (naked short)   Dim rows = fewer than 5 trades')
+            st.caption('🔵 Defined risk (spread / protected)   🟠 Undefined risk (naked short)')
             st.dataframe(
                 strat_df_display[['Strategy', 'Trades', 'Win %', 'P/L', 'Capture %', 'Med Days in Trade', 'DTE at Entry', '_risk']]
                 .style.apply(_style_strat_row, axis=1)
