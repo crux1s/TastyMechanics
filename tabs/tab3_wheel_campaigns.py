@@ -615,11 +615,88 @@ def render_tab3(
                         for ci, chain in enumerate(chains):
                             cp     = chain[0]['cp']
                             ch_pnl = sum(leg['total'] for leg in chain)
-                            ch_col = COLOURS['green'] if ch_pnl >= 0 else COLOURS['red']
-                            for pos in chain:
-                                st.markdown(
-                                    render_position_card(ticker, pd.DataFrame([pos])),
-                                    unsafe_allow_html=True
+                            _net = 0
+                            _last_sto_idx = -1
+                            for _i, _leg in enumerate(chain):
+                                _sub = str(_leg['sub_type']).lower()
+                                if 'to open' in _sub and _leg['qty'] < 0:
+                                    _net += abs(_leg['qty'])
+                                    _last_sto_idx = _i
+                                elif _net > 0 and (PAT_CLOSE in _sub or 'expiration' in _sub or 'assignment' in _sub):
+                                    _net = max(_net - abs(_leg['qty']), 0)
+                            is_open_chain = _net > 0
+                            n_rolls       = sum(1 for leg in chain
+                                                if PAT_CLOSE in str(leg['sub_type']).lower())
+                            chain_label = '%s %s %s Chain %d — %d roll(s) | Net: $%.2f' % (
+                                '🟢' if is_open_chain else '✅',
+                                '📞' if cp == 'CALL' else '📉',
+                                cp.title(), ci + 1, n_rolls, ch_pnl
+                            )
+                            with st.expander(chain_label, expanded=is_open_chain):
+                                chain_rows = []
+                                _open_dates    = {}
+                                _open_pair_idx = {}
+                                pair_idx = -1
+                                for leg_i, leg in enumerate(chain):
+                                    sub  = str(leg['sub_type']).lower()
+                                    _key = (leg['strike'], leg['exp'])
+                                    if 'to open' in sub:
+                                        pair_idx += 1
+                                        action = '↪️ Sell to Open'
+                                        _open_dates[_key]    = leg['date']
+                                        _open_pair_idx[_key] = pair_idx
+                                        dit_str  = ''
+                                        row_pair = pair_idx
+                                    elif PAT_CLOSE in sub:
+                                        action   = '↩️ Buy to Close'
+                                        _od      = _open_dates.pop(_key, None)
+                                        dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
+                                        row_pair = _open_pair_idx.pop(_key, pair_idx)
+                                    elif PAT_EXPIR in sub:
+                                        action   = '⏹️ Expired'
+                                        _od      = _open_dates.pop(_key, None)
+                                        dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
+                                        row_pair = _open_pair_idx.pop(_key, pair_idx)
+                                    elif PAT_ASSIGN in sub:
+                                        action   = '📋 Assigned'
+                                        _od      = _open_dates.pop(_key, None)
+                                        dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
+                                        row_pair = _open_pair_idx.pop(_key, pair_idx)
+                                    else:
+                                        action   = leg['sub_type']
+                                        dit_str  = ''
+                                        row_pair = pair_idx
+                                    dte_str = ''
+                                    if 'to open' in sub:
+                                        try:
+                                            exp_dt  = pd.to_datetime(leg['exp'], dayfirst=True)
+                                            dte_str = '%dd' % max((exp_dt - leg['date']).days, 0)
+                                        except (ValueError, TypeError):
+                                            dte_str = ''
+                                    is_open_leg = is_open_chain and leg_i == _last_sto_idx
+                                    chain_rows.append({
+                                        'Date':   leg['date'].strftime('%d/%m/%y'),
+                                        'Action': ('🟢 ' + action) if is_open_leg else action,
+                                        'Strike': '%.1f%s' % (leg['strike'], cp[0]),
+                                        'Expiry': leg['exp'], 'DTE': dte_str, 'Days Held': dit_str,
+                                        'Credit/Debit Rcvd': leg['total'], '_open': is_open_leg,
+                                        '_pair': row_pair,
+                                    })
+                                ch_df = pd.DataFrame(chain_rows)
+                                ch_df = pd.concat([ch_df, pd.DataFrame([{
+                                    'Date': '', 'Action': '━━ Chain Total',
+                                    'Strike': '', 'Expiry': '', 'DTE': '', 'Days Held': '',
+                                    'Credit/Debit Rcvd': ch_pnl, '_open': False, '_pair': -1,
+                                }])], ignore_index=True)
+                                st.dataframe(
+                                    ch_df[['Date', 'Action', 'Strike', 'Expiry', 'DTE', 'Days Held', 'Credit/Debit Rcvd', '_open', '_pair']]
+                                    .style.apply(_style_chain_row, axis=1)
+                                    .format({'Credit/Debit Rcvd': lambda x: '${:.2f}'.format(x)})
+                                    .map(lambda v: 'color: #00cc96' if isinstance(v, float) and v > 0
+                                        else ('color: #ef553b' if isinstance(v, float) and v < 0 else ''),
+                                        subset=['Credit/Debit Rcvd']),
+                                    width='stretch', hide_index=True,
+                                    column_config={'_open': None, '_pair': None}
                                 )
 
                     st.markdown('**📋 Share & Dividend Events**')
