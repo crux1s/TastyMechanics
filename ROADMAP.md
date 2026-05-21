@@ -40,7 +40,6 @@ Nothing active right now.
 
 Waiting on the right CSV scenarios to appear naturally:
 
-- **Closed campaign test** — a ticker where shares were fully exited. Verify campaign P/L, exit proceeds, effective basis at close.
 - **Stock split test** — forward or reverse split. Verify FIFO lot adjustment and correct post-split cost basis.
 - **Futures open position test** — an open /MES or /ZS position. Verify it appears in open positions and does not distort equity P/L.
 

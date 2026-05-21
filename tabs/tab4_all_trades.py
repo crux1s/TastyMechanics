@@ -164,7 +164,7 @@ def render_tab4(
     )
     rows = []
     for ticker, camps in sorted(all_campaigns.items()):
-        tr = sum(realized_pnl(c, use_lifetime) for c in camps)
+        tr = sum(realized_pnl(c) for c in camps)  # always real P/L — not affected by House Money toggle
         td = sum(c.total_cost for c in camps if c.status == 'open')
         tp = sum(c.premiums for c in camps)
         tv = sum(c.dividends for c in camps)
@@ -198,7 +198,21 @@ def render_tab4(
             'Campaigns': '—', 'Options': opt_flow, 'Equity': eq_fifo_pnl, 'Income': t_div,
             'Deployed': cap_dep, 'P/L': pnl})
     if rows:
-        deep_df   = pd.DataFrame(rows)
+        deep_df = pd.DataFrame(rows)
+
+        # Account-level interest (debit/credit interest not attributable to any ticker).
+        # These rows exist in the CSV but don't appear in any ticker bucket, so the
+        # Income column total would be understated without this row.
+        _total_income_csv   = df[df['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
+        _attributed_income  = deep_df['Income'].sum()
+        _account_interest   = _total_income_csv - _attributed_income
+        if abs(_account_interest) > 0.005:
+            deep_df = pd.concat([deep_df, pd.DataFrame([{
+                'Ticker': 'Account', 'Type': '💳 Interest', 'Campaigns': '—',
+                'Options': 0.0, 'Equity': 0.0, 'Income': _account_interest,
+                'Deployed': 0.0, 'P/L': _account_interest,
+            }])], ignore_index=True)
+
         total_row = {
             'Ticker': 'TOTAL', 'Type': '', 'Campaigns': '',
             'Options':  deep_df['Options'].sum(),

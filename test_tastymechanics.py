@@ -116,12 +116,12 @@ def _summary(label):
 # ══════════════════════════════════════════════════════════════════════════════
 print('\n── 1. Data loading & parsing ──────────────────────────────────────────')
 
-check_int('Row count',           len(df), 598)
-check_int('Equity rows',         equity_mask(df['Instrument Type']).sum(), 31)
-check_int('Equity Option rows',  (df['Instrument Type'] == 'Equity Option').sum(), 479)
+check_int('Row count',           len(df), 642)
+check_int('Equity rows',         equity_mask(df['Instrument Type']).sum(), 33)
+check_int('Equity Option rows',  (df['Instrument Type'] == 'Equity Option').sum(), 519)
 check_int('Future Option rows',  (df['Instrument Type'] == 'Future Option').sum(), 24)
-check_int('Money Movement rows', (df['Type'] == 'Money Movement').sum(), 78)
-check('Total of all rows',       df['Total'].sum(), -769.71)
+check_int('Money Movement rows', (df['Type'] == 'Money Movement').sum(), 80)
+check('Total of all rows',       df['Total'].sum(), 19.83)
 
 achr_assign = df[(df['Ticker'] == 'ACHR') & (df['Sub Type'] == 'Assignment')]
 check_int('Assignment Net_Qty_Row sign (+)', int(achr_assign['Net_Qty_Row'].sum()), 1)
@@ -139,7 +139,7 @@ check('AMZN FIFO P/L (bought 1@219.00, sold 1@250.06)', ticker_fifo_pnl('AMZN'),
 check('TLT  FIFO P/L (bought 1@91.48,  sold 1@88.92)',  ticker_fifo_pnl('TLT'),    -2.56)
 check('ETHA FIFO P/L (bought 1@35.71,  sold 1@14.87)',  ticker_fifo_pnl('ETHA'),  -20.84)
 check('Total FIFO equity P/L (all tickers)',
-      sum(p - c for _, p, c in fifo_results), 79.70)
+      sum(p - c for _, p, c in fifo_results), -181.92)
 
 unh_net  = df[(df['Ticker'] == 'UNH')  & equity_mask(df['Instrument Type'])]['Net_Qty_Row'].sum()
 meta_net = df[(df['Ticker'] == 'META') & equity_mask(df['Instrument Type'])]['Net_Qty_Row'].sum()
@@ -159,7 +159,7 @@ check('AMD out of window (Nov 6 start)',
 print('\n── 3. Options cash flows ───────────────────────────────────────────────')
 
 opt_df = df[df['Instrument Type'].isin(OPT_TYPES) & df['Type'].isin(TRADE_TYPES)]
-check('Total options cash flow', opt_df['Total'].sum(), 1828.24)
+check('Total options cash flow', opt_df['Total'].sum(), 2036.60)
 
 spx_all        = df[df['Ticker'] == 'SPX']
 spx_trade_opts = spx_all[spx_all['Instrument Type'].isin(OPT_TYPES) & spx_all['Type'].isin(TRADE_TYPES)]
@@ -179,10 +179,10 @@ check('All expirations Total = 0', df[df['Sub Type'] == 'Expiration']['Total'].s
 print('\n── 4. Dividends & interest ─────────────────────────────────────────────')
 
 income = df[df['Sub Type'].isin(INCOME_SUB_TYPES)]
-check('Total dividends + interest', income['Total'].sum(), -44.23)
+check('Total dividends + interest', income['Total'].sum(), -56.30)
 check('Dividends total',       df[df['Sub Type'] == 'Dividend']['Total'].sum(),           2.61)
 check('Credit interest total', df[df['Sub Type'] == 'Credit Interest']['Total'].sum(),    0.12)
-check('Debit interest total',  df[df['Sub Type'] == 'Debit Interest']['Total'].sum(),   -46.96)
+check('Debit interest total',  df[df['Sub Type'] == 'Debit Interest']['Total'].sum(),   -59.03)
 check('META net dividends',
       df[(df['Ticker'] == 'META') & (df['Sub Type'] == 'Dividend')]['Total'].sum(), 0.18)
 check('TLT total dividends',
@@ -195,7 +195,7 @@ print('\n── 5. Campaign accounting ─────────────�
 
 achr_post = df[(df['Ticker'] == 'ACHR') & df['Instrument Type'].isin(OPT_TYPES) &
                df['Type'].isin(TRADE_TYPES) & (df['Date'] >= pd.Timestamp('2025-12-19'))]['Total'].sum()
-check('ACHR campaign premiums (post-purchase only, excl assignment STO)', achr_post, 175.34)
+check('ACHR campaign premiums (post-purchase only, excl assignment STO)', achr_post, 175.60)
 
 achr_pre = df[(df['Ticker'] == 'ACHR') & df['Instrument Type'].isin(OPT_TYPES) &
               df['Type'].isin(TRADE_TYPES) & (df['Date'] < pd.Timestamp('2025-12-19'))]['Total'].sum()
@@ -203,7 +203,7 @@ check('ACHR pre-purchase STO (outside window = 27.89)', achr_pre, 27.89)
 
 sofi_post = df[(df['Ticker'] == 'SOFI') & df['Instrument Type'].isin(OPT_TYPES) &
                df['Type'].isin(TRADE_TYPES) & (df['Date'] >= pd.Timestamp('2025-12-01'))]['Total'].sum()
-check('SOFI campaign premiums (post-Dec-1 options)', sofi_post, 557.79)
+check('SOFI campaign premiums (post-Dec-1 options)', sofi_post, 584.53)
 
 sofi_pre = df[(df['Ticker'] == 'SOFI') & df['Instrument Type'].isin(OPT_TYPES) &
               df['Type'].isin(TRADE_TYPES) & (df['Date'] < pd.Timestamp('2025-12-01'))]['Total'].sum()
@@ -215,7 +215,7 @@ check('SMR pre-purchase options (outside window = 352.79)', smr_pre, 352.79)
 
 smr_post = df[(df['Ticker'] == 'SMR') & df['Instrument Type'].isin(OPT_TYPES) &
               df['Type'].isin(TRADE_TYPES) & (df['Date'] >= pd.Timestamp('2026-01-09'))]['Total'].sum()
-check('SMR campaign premiums (post-purchase)', smr_post, 127.26)
+check('SMR campaign premiums (post-purchase)', smr_post, 148.13)
 
 joby_pre = df[(df['Ticker'] == 'JOBY') & df['Instrument Type'].isin(OPT_TYPES) &
               df['Type'].isin(TRADE_TYPES) & (df['Date'] < pd.Timestamp('2026-01-09'))]['Total'].sum()
@@ -231,11 +231,11 @@ all_eq       = sum(p - c for _, p, c in fifo_results)
 all_inc      = income['Total'].sum()
 ground_truth = all_opts + all_eq + all_inc
 
-check('Ground truth total realized P/L',  ground_truth, 1863.71)
-check('Options component',                all_opts,      1828.24)
-check('Equity FIFO component',            all_eq,          79.70)
-check('Dividend+interest component',      all_inc,        -44.23)
-check('Components sum to total',          all_opts + all_eq + all_inc, 1863.71)
+check('Ground truth total realized P/L',  ground_truth, 1798.38)
+check('Options component',                all_opts,      2036.60)
+check('Equity FIFO component',            all_eq,        -181.92)
+check('Dividend+interest component',      all_inc,        -56.30)
+check('Components sum to total',          all_opts + all_eq + all_inc, 1798.38)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 7. DEPOSITS / PORTFOLIO STATS
@@ -247,8 +247,8 @@ wdrs = df[df['Sub Type'] == 'Withdrawal']['Total'].sum()
 check('Total deposited',       deps,            7635.10)
 check('Total withdrawn',       wdrs,             -55.00)
 check('Net deposited',         deps + wdrs,     7580.10)
-check('Realized ROR %',        ground_truth / (deps + wdrs) * 100, 24.59, tol=0.1)
-check('Cash balance (all rows summed)', df['Total'].sum(), -769.71, tol=0.01)
+check('Realized ROR %',        ground_truth / (deps + wdrs) * 100, 23.73, tol=0.1)
+check('Cash balance (all rows summed)', df['Total'].sum(), 19.83, tol=0.01)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 8. OPEN EQUITY POSITIONS
@@ -258,11 +258,11 @@ print('\n── 8. Open equity positions ─────────────
 eq_net  = df[equity_mask(df['Instrument Type'])].groupby('Ticker')['Net_Qty_Row'].sum()
 open_eq = eq_net[eq_net.abs() > 0.001]
 
-check_int('Number of open equity positions', len(open_eq), 6)
+check_int('Number of open equity positions', len(open_eq), 5)
 check('SMR  open shares', open_eq.get('SMR',  0), 100.0)
 check('SOFI open shares', open_eq.get('SOFI', 0), 200.0)
 check('JOBY open shares', open_eq.get('JOBY', 0), 100.0)
-check('ACHR open shares', open_eq.get('ACHR', 0), 100.0)
+check('ACHR open shares (fully closed)', open_eq.get('ACHR', 0), 0.0)
 check('IBIT open shares', open_eq.get('IBIT', 0),   1.0)
 check('META open shares', open_eq.get('META', 0),   0.2)
 check('UNH  fully closed (0 open shares)', open_eq.get('UNH', 0),   0.0)
@@ -285,7 +285,7 @@ w_opts = df[df['Instrument Type'].isin(OPT_TYPES) & df['Type'].isin(TRADE_TYPES)
             (df['Date'] >= earliest)]['Total'].sum()
 w_eq   = sum(p - c for d, p, c in fifo_results if d >= earliest)
 w_inc  = df[df['Sub Type'].isin(INCOME_SUB_TYPES) & (df['Date'] >= earliest)]['Total'].sum()
-check('All Time window P/L == ground truth', w_opts + w_eq + w_inc, 1863.71)
+check('All Time window P/L == ground truth', w_opts + w_eq + w_inc, 1798.38)
 
 nov_start = pd.Timestamp('2025-11-01')
 nov_end   = pd.Timestamp('2025-11-30')
@@ -321,7 +321,7 @@ check('SPX Cash Settled Exercise (should be +242)',
       spx_rd_nonzero[spx_rd_nonzero['Sub Type'] == 'Cash Settled Exercise']['Total'].sum(), 242.00)
 
 exp_rows = df[df['Sub Type'] == 'Expiration']
-check_int('Expiration row count', len(exp_rows), 5)
+check_int('Expiration row count', len(exp_rows), 8)
 check('All expirations are $0', exp_rows['Total'].sum(), 0.00)
 
 sofi_feb20_eq = df[(df['Ticker'] == 'SOFI') &
@@ -353,7 +353,7 @@ check('/MESZ5 is pure cash-settled (no equity rows)',
 check('/MESZ5 P/L = sum of trade rows', mesz5['Total'].sum(), 20.48)
 
 bal_adj = df[df['Sub Type'] == 'Balance Adjustment']
-check_int('Balance Adjustment rows', len(bal_adj), 36)
+check_int('Balance Adjustment rows', len(bal_adj), 37)
 check('Balance Adjustments NOT in income calc',
       float(bal_adj['Sub Type'].isin(INCOME_SUB_TYPES).any()), 0.0)
 check_int('Transfer rows', len(df[df['Sub Type'] == 'Transfer']), 1)
@@ -381,32 +381,54 @@ def _camp(ticker):
                 premiums=all_premiums, divs=all_divs, eff_basis=eff, camp_pnl=pnl)
 
 a = _camp('ACHR')
-check('ACHR cost basis (100 @ 8.55)',  a['cost'],      855.00)
-check('ACHR shares held',              a['shares'],    100.0)
-check('ACHR raw basis/sh',             a['basis'],       8.55)
-check('ACHR campaign premiums',        a['premiums'],  175.34)
-check('ACHR dividends',                a['divs'],        0.00)
-check('ACHR effective basis/sh',       a['eff_basis'],   6.80, tol=0.01)
-check('ACHR open campaign P/L',        a['camp_pnl'],  175.34)
+check('ACHR total cost (100 @ 8.55)',       a['cost'],      855.00)
+check('ACHR shares held (closed = 0)',      a['shares'],      0.0)
+check('ACHR campaign premiums (closed)',    a['premiums'],  175.60)
+check('ACHR dividends',                     a['divs'],        0.00)
+check('ACHR effective basis (closed = 0)', a['eff_basis'],    0.00)
+check('ACHR closed campaign P/L',          a['camp_pnl'],  -86.02)
 
 s = _camp('SOFI')
 check('SOFI cost basis (200 shares)',  s['cost'],     5558.08)
 check('SOFI shares held',              s['shares'],    200.0)
-check('SOFI campaign premiums',        s['premiums'],  557.79)
-check('SOFI effective basis/sh',       s['eff_basis'],  25.00, tol=0.01)
-check('SOFI open campaign P/L',        s['camp_pnl'],  557.79)
+check('SOFI campaign premiums',        s['premiums'],  584.53)
+check('SOFI effective basis/sh',       s['eff_basis'],  24.87, tol=0.01)
+check('SOFI open campaign P/L',        s['camp_pnl'],  584.53)
 
 m = _camp('SMR')
 check('SMR cost basis (100 @ 20.48)', m['cost'],     2048.08)
-check('SMR campaign premiums',         m['premiums'],  127.26)
-check('SMR effective basis/sh',        m['eff_basis'],  19.21, tol=0.01)
-check('SMR open campaign P/L',         m['camp_pnl'],  127.26)
+check('SMR campaign premiums',         m['premiums'],  148.13)
+check('SMR effective basis/sh',        m['eff_basis'],  19.00, tol=0.01)
+check('SMR open campaign P/L',         m['camp_pnl'],  148.13)
 
 j = _camp('JOBY')
 check('JOBY cost basis (100 @ 15.33)', j['cost'],    1533.08)
-check('JOBY campaign premiums',         j['premiums'],  130.98)
-check('JOBY effective basis/sh',        j['eff_basis'],  14.02, tol=0.01)
-check('JOBY open campaign P/L',         j['camp_pnl'],  130.98)
+check('JOBY campaign premiums',         j['premiums'],  191.72)
+check('JOBY effective basis/sh',        j['eff_basis'],  13.41, tol=0.01)
+check('JOBY open campaign P/L',         j['camp_pnl'],  191.72)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 11b. CLOSED CAMPAIGN — ACHR exit proceeds, status, end_date
+# First real-data test of a fully closed wheel campaign.
+# Entry: 100 shares assigned via put on 2025-12-20 @ $8.50 ($855 total).
+# Exit:  100 shares sold on 2026-05-20 ($593.38 total proceeds).
+# Premiums: 10 covered-call / short-put cycles net $182.72.
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 11b. Closed campaign (ACHR) ─────────────────────────────────────────')
+
+achr_camps = build_campaigns(df, 'ACHR', use_lifetime=False)
+ac = achr_camps[-1]   # single closed campaign
+
+check_int('ACHR campaign count',             len(achr_camps),              1)
+check_int('ACHR campaign status is closed',  int(ac.status == 'closed'),   1)
+check_int('ACHR end_date is set',            int(ac.end_date is not None), 1)
+check('ACHR total_shares after close',       ac.total_shares,            0.0)
+check('ACHR total_cost',                     ac.total_cost,           855.00)
+check('ACHR exit_proceeds',                  ac.exit_proceeds,         593.38)
+check('ACHR premiums',                       ac.premiums,              175.60)
+check('ACHR dividends',                      ac.dividends,               0.00)
+check('ACHR realized_pnl',                   realized_pnl(ac),          -86.02)
+check('ACHR effective_basis (closed = 0)',   effective_basis(ac),         0.00)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 12. OUTSIDE-WINDOW OPTIONS — real pure_options_pnl()
@@ -437,28 +459,28 @@ def window_pnl(start):
     return w_opts, w_eq, w_inc, w_opts + w_eq + w_inc
 
 o,e,i,t = window_pnl(latest_date - pd.Timedelta(days=7))
-check('1W opts',   o,  418.86, tol=0.05)
-check('1W equity', e,   -0.27, tol=0.02)
-check('1W income', i,    0.00, tol=0.02)
-check('1W total',  t,  418.59, tol=0.10)
+check('1W opts',   o,  208.36, tol=0.05)
+check('1W equity', e, -261.62, tol=0.02)
+check('1W income', i,  -12.07, tol=0.02)
+check('1W total',  t,  -65.33, tol=0.10)
 
 o,e,i,t = window_pnl(latest_date - pd.Timedelta(days=30))
-check('1M opts',   o,  183.30, tol=0.05)
-check('1M equity', e,   -0.27, tol=0.02)
-check('1M income', i,  -15.92, tol=0.02)
-check('1M total',  t,  167.11, tol=0.10)
+check('1M opts',   o,  233.98, tol=0.05)
+check('1M equity', e, -261.89, tol=0.02)
+check('1M income', i,  -12.07, tol=0.02)
+check('1M total',  t,  -39.98, tol=0.10)
 
 _,_,_,t = window_pnl(latest_date - pd.Timedelta(days=90))
-check('3M total',  t,  535.41, tol=0.20)
+check('3M total',  t,  667.99, tol=0.20)
 
 _,_,_,t = window_pnl(earliest)
-check('All Time window == ground truth', t, 1863.71, tol=0.02)
+check('All Time window == ground truth', t, 1798.38, tol=0.02)
 
 o,e,i,t = window_pnl(pd.Timestamp(f'{latest_date.year}-01-01'))
-check('YTD opts',   o,  1392.02, tol=0.05)
-check('YTD equity', e,    -21.11, tol=0.02)
-check('YTD income', i,    -45.93, tol=0.02)
-check('YTD total',  t,  1324.98, tol=0.10)
+check('YTD opts',   o,  1600.38, tol=0.05)
+check('YTD equity', e,  -282.73, tol=0.02)
+check('YTD income', i,   -58.00, tol=0.02)
+check('YTD total',  t,  1259.65, tol=0.10)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 14. CAPITAL DEPLOYED
@@ -472,7 +494,7 @@ def capital_deployed(ticker):
     buys = t_eq[t_eq['Net_Qty_Row'] > 0]
     return net * buys['Total'].apply(abs).sum() / buys['Net_Qty_Row'].sum()
 
-check('ACHR capital deployed', capital_deployed('ACHR'),   855.00)
+check('ACHR capital deployed (closed = 0)', capital_deployed('ACHR'),   0.00)
 check('SOFI capital deployed', capital_deployed('SOFI'),  5558.08)
 check('SMR  capital deployed', capital_deployed('SMR'),   2048.08)
 check('JOBY capital deployed', capital_deployed('JOBY'),  1533.08)
@@ -481,7 +503,7 @@ check('META capital deployed', capital_deployed('META'),   150.22)
 check('UNH  capital deployed (position closed)', capital_deployed('UNH'),      0.00)
 check('Total capital deployed',
       sum(capital_deployed(t) for t in ['ACHR','SOFI','SMR','JOBY','IBIT','META','UNH']),
-      10207.36)
+      9352.36)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 15. TICKER-LEVEL OPTIONS P/L
@@ -493,7 +515,7 @@ def ticker_opts_pnl(ticker):
               df['Instrument Type'].isin(OPT_TYPES) &
               df['Type'].isin(TRADE_TYPES)]['Total'].sum()
 
-check('RKLB options P/L',   ticker_opts_pnl('RKLB'),  1233.01)
+check('RKLB options P/L',   ticker_opts_pnl('RKLB'),  1575.76)
 check('INTC options P/L',   ticker_opts_pnl('INTC'),   110.79)
 check('XYZ  options P/L',   ticker_opts_pnl('XYZ'),   -354.46)
 check('GLD  options P/L',   ticker_opts_pnl('GLD'),   -189.92)
@@ -794,24 +816,24 @@ print('\n── 17. Closed trades — core aggregates ────────�
 
 _ct = build_closed_trades(df)
 
-check_int('CT: total trades',              len(_ct),                    142)
-check_int('CT: winning trades',            int(_ct['Won'].sum()),       119)
-check    ('CT: win rate %',                _ct['Won'].mean() * 100,     83.8028)
-check    ('CT: total net P/L',             _ct['Net P/L'].sum(),       1559.01)
-check    ('CT: total premium received',    _ct['Net Premium'].sum(),  14266.29)
+check_int('CT: total trades',              len(_ct),                    152)
+check_int('CT: winning trades',            int(_ct['Won'].sum()),       128)
+check    ('CT: win rate %',                _ct['Won'].mean() * 100,     84.2105)
+check    ('CT: total net P/L',             _ct['Net P/L'].sum(),       1572.63)
+check    ('CT: total premium received',    _ct['Net Premium'].sum(),  14753.39)
 check    ('CT: median capture %',          _ct[_ct['Is Credit']]['Capture %'].median(),   39.4132)
 check    ('CT: median days held',          _ct['Days Held'].median(),   6.0)
-check    ('CT: median DTE at open',        _ct['DTE at Open'].median(),    35.0)
-check_int('CT: credit trades',             int(_ct['Is Credit'].sum()), 137)
+check    ('CT: median DTE at open',        _ct['DTE at Open'].median(),    32.0)
+check_int('CT: credit trades',             int(_ct['Is Credit'].sum()), 147)
 check_int('CT: debit trades',              int((~_ct['Is Credit']).sum()), 5)
 
 # ── Per-ticker net P/L ───────────────────────────────────────────────────────
 _ct_by_ticker = _ct.groupby('Ticker')['Net P/L'].sum()
 check('CT ticker RKLB net P/L',   _ct_by_ticker['RKLB'],   1233.01)
-check('CT ticker SOFI net P/L',   _ct_by_ticker['SOFI'],    663.80)
-check('CT ticker SMR  net P/L',   _ct_by_ticker['SMR'],     462.18)
+check('CT ticker SOFI net P/L',   _ct_by_ticker['SOFI'],    675.67)
+check('CT ticker SMR  net P/L',   _ct_by_ticker['SMR'],     480.05)
 check('CT ticker INTC net P/L',   _ct_by_ticker['INTC'],    110.79)
-check('CT ticker JOBY net P/L',   _ct_by_ticker['JOBY'],    113.11)
+check('CT ticker JOBY net P/L',   _ct_by_ticker['JOBY'],    130.98)
 check('CT ticker GLD  net P/L',   _ct_by_ticker['GLD'],    -189.92)
 check('CT ticker XYZ  net P/L',   _ct_by_ticker['XYZ'],    -354.46)
 check('CT ticker SPX  net P/L',   _ct_by_ticker['SPX'],    -307.40)
@@ -922,17 +944,17 @@ _ct_strat = _ct.groupby('Trade Type').agg(
 )
 
 # Trade counts per strategy
-check_int('CT strategy Short Put count',        int(_ct_strat.loc['Short Put',    'count']), 38)
-check_int('CT strategy Short Call count',       int(_ct_strat.loc['Short Call',   'count']), 50)
-check_int('CT strategy Iron Condor count',      int(_ct_strat.loc['Iron Condor',  'count']), 19)
+check_int('CT strategy Short Put count',        int(_ct_strat.loc['Short Put',    'count']), 39)
+check_int('CT strategy Short Call count',       int(_ct_strat.loc['Short Call',   'count']), 54)
+check_int('CT strategy Iron Condor count',      int(_ct_strat.loc['Iron Condor',  'count']), 23)
 check_int('CT strategy Iron Butterfly count',   int(_ct_strat.loc['Iron Butterfly','count']), 1)
 check_int('CT strategy Short Strangle count',   int(_ct_strat.loc['Short Strangle','count']), 8)
 check_int('CT strategy Put Credit Spread count',int(_ct_strat.loc['Put Credit Spread','count']), 13)
 
 # Net P/L per strategy
-check('CT strategy Short Put total P/L',      _ct_strat.loc['Short Put',    'total_pnl'],  1704.21)
-check('CT strategy Short Call total P/L',     _ct_strat.loc['Short Call',   'total_pnl'],   824.16)
-check('CT strategy Iron Condor total P/L',    _ct_strat.loc['Iron Condor',  'total_pnl'],  -330.13)
+check('CT strategy Short Put total P/L',      _ct_strat.loc['Short Put',    'total_pnl'],  1742.96)
+check('CT strategy Short Call total P/L',     _ct_strat.loc['Short Call',   'total_pnl'],   889.53)
+check('CT strategy Iron Condor total P/L',    _ct_strat.loc['Iron Condor',  'total_pnl'],  -430.13)
 check('CT strategy Iron Butterfly total P/L', _ct_strat.loc['Iron Butterfly','total_pnl'],    29.84)
 check('CT strategy Put Credit Spread P/L',    _ct_strat.loc['Put Credit Spread','total_pnl'], -710.39)
 check('CT strategy Call Credit Spread P/L',   _ct_strat.loc['Call Credit Spread','total_pnl'], -286.42)
@@ -946,9 +968,9 @@ check    ('CT /MESM6 net premium',         _mesm6['Net Premium'],       58.08)
 check    ('CT /MESM6 capture %',           _mesm6['Capture %'],        -72.2452, tol=0.001)
 
 # Win counts
-check_int('CT strategy Short Call wins (all)',  int(_ct_strat.loc['Short Call', 'wins']), 46)
-check_int('CT strategy Short Put wins',         int(_ct_strat.loc['Short Put',  'wins']), 36)
-check_int('CT strategy Iron Condor wins',        int(_ct_strat.loc['Iron Condor',   'wins']), 15)
+check_int('CT strategy Short Call wins (all)',  int(_ct_strat.loc['Short Call', 'wins']), 50)
+check_int('CT strategy Short Put wins',         int(_ct_strat.loc['Short Put',  'wins']), 37)
+check_int('CT strategy Iron Condor wins',        int(_ct_strat.loc['Iron Condor',   'wins']), 18)
 check_int('CT strategy Iron Butterfly wins',    int(_ct_strat.loc['Iron Butterfly','wins']),  1)
 
 # Short Put (x2) — multi-contract trade recorded as single row
@@ -966,19 +988,19 @@ print('\n── 19. Closed trades — close types & debit trades ─────
 
 _close_counts = _ct['Close Reason'].value_counts()
 
-check_int('CT close type Closed count',   int(_close_counts.get('✂️ Closed',   0)), 137)
-check_int('CT close type Expired count',  int(_close_counts.get('⏹️ Expired',  0)),   3)
+check_int('CT close type Closed count',   int(_close_counts.get('✂️ Closed',   0)), 144)
+check_int('CT close type Expired count',  int(_close_counts.get('⏹️ Expired',  0)),   6)
 check_int('CT close type Assigned count', int(_close_counts.get('📋 Assigned', 0)),   2)
-check_int('CT close types sum to total',  int(_close_counts.sum()),                  142)
+check_int('CT close types sum to total',  int(_close_counts.sum()),                  152)
 
 _expired = _ct[_ct['Close Reason'] == '⏹️ Expired']
 # Expired trades — only check count; capture% varies (some expired worthless, some ITM)
 check_int('CT expired: SOFI expired worthless (100% capture)',
-          int((_expired[_expired['Ticker'] == 'SOFI']['Capture %'] == 100.0).sum()), 1)
+          int((_expired[_expired['Ticker'] == 'SOFI']['Capture %'] == 100.0).sum()), 2)
 check_int('CT expired: SPX expired ITM (loss, capture < 0)',
           int((_expired[_expired['Ticker'] == 'SPX']['Net P/L'] < 0).sum()), 1)
 check_int('CT expired: all 3 are in the expired set',
-          len(_expired), 3)
+          len(_expired), 6)
 
 # Debit trades (Calendar Spread, Debit Spread, Butterfly)
 _debit = _ct[~_ct['Is Credit']]
@@ -1021,19 +1043,19 @@ def _ct_window(start):
 
 # YTD (Jan 1 2026 →)
 _ytd = _ct_window(pd.Timestamp('2026-01-01'))
-check_int('CT YTD trade count',   len(_ytd),                    88)
-check    ('CT YTD net P/L',       _ytd['Net P/L'].sum(),      1704.91)
-check_int('CT YTD win count',     int(_ytd['Won'].sum()),        74)
+check_int('CT YTD trade count',   len(_ytd),                    98)
+check    ('CT YTD net P/L',       _ytd['Net P/L'].sum(),      1718.53)
+check_int('CT YTD win count',     int(_ytd['Won'].sum()),        83)
 
 # 7d window
 _w7 = _ct_window(_latest - timedelta(days=7))
-check_int('CT 7d trade count',    len(_w7),                      7)
-check    ('CT 7d net P/L',        _w7['Net P/L'].sum(),         444.25)
+check_int('CT 7d trade count',    len(_w7),                      10)
+check    ('CT 7d net P/L',        _w7['Net P/L'].sum(),          13.62)
 
 # 30d window
 _w30 = _ct_window(_latest - timedelta(days=30))
-check_int('CT 30d trade count',   len(_w30),                    22)
-check    ('CT 30d net P/L',       _w30['Net P/L'].sum(),        371.44)
+check_int('CT 30d trade count',   len(_w30),                    26)
+check    ('CT 30d net P/L',       _w30['Net P/L'].sum(),        377.82)
 
 # All-time window == full table
 check_int('CT all-time == full table', len(_ct_window(df['Date'].min())), len(_ct))

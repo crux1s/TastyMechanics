@@ -68,11 +68,29 @@ import hashlib as _hashlib
 from report_prompt import build_review_prompt
 
 # ==========================================
-# TastyMechanics v26.7
+# TastyMechanics v26.9
 # ==========================================
 #
 # Changelog (recent versions — full history in git log)
 # -----------------------------------------------------
+# v26.9 (2026-05-21)
+#   - FIX: mechanics.py build_campaigns() — total_shares and blended_basis now
+#     correctly zeroed when a campaign closes (all shares sold). Previously the
+#     Campaign object retained the pre-sale share count, causing closed campaigns
+#     to appear as still holding shares.
+#   - FIX: Portfolio Overview Realized P/L no longer changes when the House Money
+#     toggle is flipped. build_all_data() now always uses use_lifetime=False for
+#     portfolio-wide metrics; use_lifetime is a display-only lens for Tab 3 only.
+#   - FIX: Wheel Campaigns tab Capital Deployed no longer changes with House Money
+#     toggle. capital_deployed is always sourced from the use_lifetime=False build.
+#   - FIX: Per-Ticker P/L Summary — added "Account / Interest" row for debit and
+#     credit interest not attributable to any ticker. TOTAL row Income and P/L now
+#     match the Portfolio Overview ground truth.
+#   - TYPE HINTS: all tab render functions (tab0–tab5) now have full type annotations.
+#   - TEST: closed campaign test verified with real ACHR data (first fully closed
+#     wheel campaign — assigned Dec 2025, shares sold May 2026).
+#   - TEST: updated all expected values for new 260521 CSV (44 new rows).
+#
 # v26.8 (2026-05-12)
 #   - FEATURE: Daily θ % — trade entry quality metric: Prem/Day ÷ Capital at Risk × 100.
 #     Answers "was this trade worth putting on?" at entry, independent of outcome.
@@ -205,7 +223,7 @@ from report_prompt import build_review_prompt
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.8"
+APP_VERSION = "v26.9"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 
@@ -466,11 +484,15 @@ def main():
 
     latest_date = df['Date'].max()
 
-    # ── Lifetime toggle — lives in tab3 but affects whole-app data ──────────────
+    # ── Lifetime toggle — display-only lens for the Wheel Campaigns tab ──────────
     use_lifetime = st.session_state.get('use_lifetime', False)
 
     # ── Unpack cached heavy computation ───────────────────────────────────────────
-    _d = build_all_data(_parsed, use_lifetime, _file_hash)
+    # Always build with use_lifetime=False so portfolio-wide metrics (Realized P/L,
+    # ROR, Capital Efficiency) are never affected by the Lifetime / House Money toggle.
+    _d = build_all_data(_parsed, False, _file_hash)
+    # Separate campaign view for tab3 only — rebuilt with the toggle when active.
+    _d_camp = build_all_data(_parsed, True, _file_hash) if use_lifetime else _d
     all_campaigns          = _d.all_campaigns
     wheel_tickers          = _d.wheel_tickers
     pure_options_tickers   = _d.pure_options_tickers
@@ -1050,7 +1072,7 @@ def main():
                          on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab2']}))
         render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                     df_window, _win_label, _win_suffix, _win_start_str, _win_end_str)
-    with tab3: render_tab3(all_campaigns, df, latest_date, start_date, use_lifetime, capital_deployed)
+    with tab3: render_tab3(_d_camp.all_campaigns, df, latest_date, start_date, use_lifetime, _d.capital_deployed)
     with tab4:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,

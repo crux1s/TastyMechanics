@@ -425,11 +425,16 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 current.events.append({'date': row.Date, 'type': 'Exit',
                     'detail': 'Sold %.0f @ $%.2f/sh' % (abs(qty), pps), 'cash': total})
                 if running_shares < FIFO_EPSILON:
+                    current.total_shares  = 0.0
+                    current.blended_basis = 0.0
                     current.end_date = row.Date
                     current.status   = 'closed'
                     campaigns.append(current)
                     current        = None
                     running_shares = 0.0
+                else:
+                    current.total_shares  = running_shares
+                    current.blended_basis = current.total_cost / running_shares
 
         # ── Option premium ─────────────────────────────────────────────────
         elif is_option_row(inst) and current is not None:
