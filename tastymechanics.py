@@ -994,6 +994,9 @@ def main():
                 net_deposited=total_deposited,
                 selected_period=selected_period,
                 daily_pnl_all=_daily_pnl_all,
+                all_campaigns=all_campaigns,
+                capital_deployed=capital_deployed,
+                closed_camp_pnl=closed_camp_pnl,
             )
             _report_fname = 'tastymechanics_report_%s.html' % _win_start_str.replace('/', '-')
             st.download_button(
@@ -1030,6 +1033,8 @@ def main():
                     net_deposited=net_deposited,
                     realized_ror=realized_ror,
                     use_lifetime=use_lifetime,
+                    capital_deployed=capital_deployed,
+                    closed_camp_pnl=closed_camp_pnl,
                 )
             if st.session_state.get('_ai_prompt'):
                 st.caption('Copy and paste into any LLM — use the icon in the top-right corner of the box below.')
