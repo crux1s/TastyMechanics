@@ -51,6 +51,8 @@ def build_review_prompt(
     net_deposited,
     realized_ror,
     use_lifetime,
+    capital_deployed=0.0,
+    closed_camp_pnl=0.0,
 ):
     """
     Build a plain-text AI review prompt populated with the current window's metrics.
@@ -69,12 +71,14 @@ def build_review_prompt(
 
     # ── 1. Portfolio overview ─────────────────────────────────────────────────
     add('## 1. Portfolio Overview')
-    add(f'- Realized P/L (window):  {fmt_dollar(window_realized_pnl)}')
-    add(f'- Realized P/L (all-time): {fmt_dollar(total_realized_pnl)}')
-    add(f'- Net deposited capital:   {fmt_dollar(net_deposited)}')
-    add(f'- Return on capital (RoR): {realized_ror:.1f}%')
-    add(f'- Dividend income (window): {fmt_dollar(div_income)}')
-    add(f'- Interest net (window):    {fmt_dollar(int_net)}')
+    add(f'- Realized P/L (window):        {fmt_dollar(window_realized_pnl)}')
+    add(f'- Realized P/L (all-time):       {fmt_dollar(total_realized_pnl)}')
+    add(f'- Net deposited capital:          {fmt_dollar(net_deposited)}')
+    add(f'- Return on capital (RoR):        {realized_ror:.1f}%')
+    add(f'- Capital deployed (open wheels): {fmt_dollar(capital_deployed)}')
+    add(f'- Closed wheel campaigns P/L:     {fmt_dollar(closed_camp_pnl)}')
+    add(f'- Dividend income (window):       {fmt_dollar(div_income)}')
+    add(f'- Interest net (window):          {fmt_dollar(int_net)}')
     add('')
 
     if all_cdf.empty:
@@ -146,6 +150,11 @@ def build_review_prompt(
         if 'Capture %' in _short_cdf.columns and not _short_cdf.empty
         else None
     )
+    med_daily_theta = (
+        _short_cdf['Daily θ %'].median()
+        if 'Daily θ %' in _short_cdf.columns and not _short_cdf.empty
+        else None
+    )
 
     _sp = _short_cdf[
         _short_cdf['Type'].str.upper().str.contains('PUT', na=False)
@@ -168,6 +177,7 @@ def build_review_prompt(
     add(f'- Median DTE at close:      {med_dte_close:.0f}d' if med_dte_close is not None else '- Median DTE at close:      —')
     add(f'- Early mgmt rate (≥21 DTE): {early_rate:.0f}%  (TastyTrade target: close before gamma risk)')
     add(f'- Avg capture %:            {avg_capture:.0f}%' if avg_capture is not None else '- Avg capture %:            —')
+    add(f'- Median Daily θ %:         {med_daily_theta:.2f}%' if med_daily_theta is not None else '- Median Daily θ %:         —')
     add(f'- Assignment rate:          {_pct(n_assigned, n_sp_total)}  ({n_assigned} of {n_sp_total} short puts)')
     add(f'- Top 3 concentration:      {top3_pct:.0f}%  ({top3_names})')
     add('')
@@ -228,8 +238,29 @@ def build_review_prompt(
         add('No open wheel campaigns.')
     add('')
 
-    # ── 6. Best & worst trades ────────────────────────────────────────────────
-    add('## 7. Best 5 Trades')
+    # ── 6. Closed wheel campaigns ─────────────────────────────────────────────
+    add('## 7. Closed Wheel Campaigns')
+    closed_camps = [
+        (ticker, c)
+        for ticker, camps in (all_campaigns.items() if hasattr(all_campaigns, 'items') else [])
+        for c in camps
+        if c.status == 'closed'
+    ]
+    if closed_camps:
+        add(f'{"Ticker":<8} {"Cost":>9}  {"Exit Proceeds":>13}  {"Premiums":>9}  {"Realized P/L":>13}  {"Days":>5}')
+        add('-' * 68)
+        for ticker, c in closed_camps:
+            rpnl = realized_pnl(c)
+            days = (c.end_date - c.start_date).days if c.end_date else '—'
+            add(f'{ticker:<8} {fmt_dollar(c.total_cost):>9}  {fmt_dollar(c.exit_proceeds):>13}  '
+                f'{fmt_dollar(c.premiums):>9}  {fmt_dollar(rpnl):>13}  '
+                f'{("%dd" % days) if isinstance(days, int) else days:>5}')
+    else:
+        add('No closed wheel campaigns yet.')
+    add('')
+
+    # ── 7. Best & worst trades ────────────────────────────────────────────────
+    add('## 8. Best 5 Trades')
     _best_cols = [c for c in ['Ticker', 'Trade Type', 'Days Held', 'Net P/L'] if c in all_cdf.columns]
     for _, row in all_cdf.nlargest(5, 'Net P/L')[_best_cols].iterrows():
         tkr   = row.get('Ticker', '?')
@@ -238,7 +269,7 @@ def build_review_prompt(
         add(f'  {tkr}  {strat}  held {days}  →  {fmt_dollar(row["Net P/L"])}')
     add('')
 
-    add('## 8. Worst 5 Trades')
+    add('## 9. Worst 5 Trades')
     for _, row in all_cdf.nsmallest(5, 'Net P/L')[_best_cols].iterrows():
         tkr   = row.get('Ticker', '?')
         strat = row.get('Trade Type', '?')
