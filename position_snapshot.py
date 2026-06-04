@@ -201,19 +201,36 @@ def build_position_snapshot(
                 ask_str  = f'${ask:.2f}'
                 iv_str   = f'{iv_raw*100:.1f}%' if iv_raw else '—'
 
-            add(f'  Mark {mark_str}  |  Bid {bid_str}  Ask {ask_str}  |  IV {iv_str}  |  DTE {dte_str}  |  '
-                f'Cost basis {fmt_dollar(cost_b)}')
+            # Stock price context + open P/L
+            live_tk = live_prices.get(ticker, {}) if has_live else {}
+            S = live_tk.get('last', 0.0) or 0.0
 
-            # Greeks
-            if iv_raw and iv_raw > 0 and dte_val and dte_val > 0:
-                live_tk  = live_prices.get(ticker, {})
-                S        = live_tk.get('last', 0.0) or 0.0
+            stock_str = f'${S:.2f}' if S else '—'
+            if S and strike:
+                otm_pct = (S / strike - 1) * 100 if cp == 'CALL' else (strike / S - 1) * 100
+                otm_str = f'{otm_pct:+.1f}%% OTM' if otm_pct >= 0 else f'{abs(otm_pct):.1f}%% ITM'
+            else:
+                otm_str = '—'
+
+            if opt_key:
+                mark_val = opt_key.get('mark', 0.0) or 0.0
+                open_pnl = (cost_b + mark_val * 100) if net_qty < 0 else (mark_val * 100 - cost_b)
+                open_pnl_str = fmt_dollar(open_pnl)
+            else:
+                open_pnl_str = '—'
+
+            add(f'  Stock {stock_str} ({otm_str})  |  Mark {mark_str}  |  Bid {bid_str}  Ask {ask_str}')
+            add(f'  IV {iv_str}  |  DTE {dte_str}  |  Cost basis {fmt_dollar(cost_b)}  |  Open P/L {open_pnl_str}')
+
+            # Greeks — theta sign flipped for short positions (seller collects decay)
+            if iv_raw and iv_raw > 0 and dte_val and dte_val > 0 and S > 0:
                 T        = dte_val / 365.0
                 greeks   = bs_greeks(S, strike, T, _RISK_FREE_RATE, iv_raw, cp)
-                delta_s  = _fmt_greek(greeks['delta'], '.2f')
-                gamma_s  = _fmt_greek(greeks['gamma'], '.4f')
-                theta_s  = _fmt_greek(greeks['theta'], '+.2f')
-                vega_s   = _fmt_greek(greeks['vega'],  '.2f')
+                direction = -1 if net_qty < 0 else 1   # short = collect theta (positive)
+                delta_s  = _fmt_greek(greeks['delta'],            '.2f')
+                gamma_s  = _fmt_greek(greeks['gamma'],            '.4f')
+                theta_s  = _fmt_greek(greeks['theta'] * direction, '+.2f')
+                vega_s   = _fmt_greek(greeks['vega'],              '.2f')
                 add(f'  Δ {delta_s}  Γ {gamma_s}  θ {theta_s}/day  ν {vega_s}')
             elif not has_live:
                 add('  (enable live data for Greeks)')
