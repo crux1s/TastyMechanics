@@ -212,7 +212,7 @@ def build_position_snapshot(
             stock_str = f'${S:.2f}' if S else '—'
             if S and strike:
                 otm_pct = (S / strike - 1) * 100 if cp == 'CALL' else (strike / S - 1) * 100
-                otm_str = f'{otm_pct:+.1f}%% OTM' if otm_pct >= 0 else f'{abs(otm_pct):.1f}%% ITM'
+                otm_str = f'{otm_pct:+.1f}% OTM' if otm_pct >= 0 else f'{abs(otm_pct):.1f}% ITM'
             else:
                 otm_str = '—'
 

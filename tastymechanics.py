@@ -65,7 +65,6 @@ import json as _json
 import os as _os
 import hashlib as _hashlib
 
-from position_snapshot import build_position_snapshot
 
 # ==========================================
 # TastyMechanics v26.9
@@ -972,37 +971,6 @@ def main():
     # ── Sidebar exports — here all window data is ready ──────────────────────
     with st.sidebar:
         st.markdown('---')
-        st.markdown('#### 📊 Position Snapshot')
-        if has_data:
-            if st.button('Generate Position Snapshot',
-                         use_container_width=True,
-                         help='Fetches live prices and builds a current-positions data snapshot ready to paste into any LLM.'):
-                _snap_tickers, _snap_specs = _build_live_specs(df_open)
-                with st.spinner('Fetching live prices…'):
-                    _snap_live = fetch_live_prices(_snap_tickers, _snap_specs)
-                st.session_state['_position_snapshot'] = build_position_snapshot(
-                    df_open=df_open,
-                    all_campaigns=all_campaigns,
-                    all_cdf=all_cdf,
-                    credit_cdf=credit_cdf,
-                    live_prices=_snap_live,
-                    latest_date=latest_date,
-                    total_realized_pnl=total_realized_pnl,
-                    capital_deployed=capital_deployed,
-                    open_premiums_banked=open_premiums_banked,
-                    use_lifetime=use_lifetime,
-                )
-            if st.session_state.get('_position_snapshot'):
-                st.caption('Copy and paste into any LLM — use the icon in the top-right corner of the box below.')
-                st.code(st.session_state['_position_snapshot'], language=None, wrap_lines=True)
-                st.caption(
-                    '⚠️ This snapshot contains position data and live prices. '
-                    'Pasting it into an external LLM sends that data outside this app.'
-                )
-        else:
-            st.caption('Upload data to generate a position snapshot.')
-
-        st.markdown('---')
         st.markdown('#### 📄 Export Report')
         if has_data:
             _rpt_opt_rows = df_window[
@@ -1056,7 +1024,14 @@ def main():
         '💰 Deposits, Dividends & Fees'
     ])
 
-    with tab0: render_tab0(df_open, _expiry_alerts, latest_date, all_campaigns)
+    with tab0: render_tab0(
+        df_open, _expiry_alerts, latest_date, all_campaigns,
+        all_cdf=all_cdf,
+        credit_cdf=credit_cdf,
+        total_realized_pnl=total_realized_pnl,
+        capital_deployed=capital_deployed,
+        open_premiums_banked=open_premiums_banked,
+    )
     with tab1:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,
