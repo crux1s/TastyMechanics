@@ -18,6 +18,7 @@ from ui_components import (
 from ingestion import equity_mask, option_mask
 from mechanics import calc_dte, effective_basis
 from market_data import fetch_live_prices
+from position_snapshot import build_position_snapshot
 
 
 def render_tab0(
@@ -25,6 +26,11 @@ def render_tab0(
     _expiry_alerts: list,
     latest_date: pd.Timestamp,
     all_campaigns: Optional[dict[str, list[Campaign]]] = None,
+    all_cdf: Optional[pd.DataFrame] = None,
+    credit_cdf: Optional[pd.DataFrame] = None,
+    total_realized_pnl: float = 0.0,
+    capital_deployed: float = 0.0,
+    open_premiums_banked: float = 0.0,
 ) -> None:
     """Tab 0 — Active Positions: open position cards + expiry alert strip."""
 
@@ -80,7 +86,7 @@ def render_tab0(
 
     live_prices: dict = {}
     if live_on:
-        tickers_frozen = frozenset(tickers_open)
+        tickers_frozen = frozenset(tickers_open) | {'SPY'}  # SPY needed for beta-weighted delta
 
         # Build (ticker, expiry_ymd, strike, cp) specs for every open option leg,
         # keeping the original expiry string so we can remap after fetching.
@@ -127,6 +133,7 @@ def render_tab0(
                     'last': data['last'],
                     'prev_close': data['prev_close'],
                     'options': opts_remapped,
+                    'beta': data.get('beta'),   # pass through for BWD calculation
                 }
             st.caption(
                 '📡 Prices: Yahoo Finance — equity near real-time, options ~15 min delayed. '
@@ -154,45 +161,28 @@ def render_tab0(
             if _open_c:
                 _camp_lookup[_t] = _open_c[-1]
 
-    # ── CSV export (deferred until live_prices + _camp_lookup are ready) ──────
-    def _positions_csv():
-        """Per-leg CSV enriched with campaign basis and live unrealised when available."""
-        base_cols = [c for c in [
-            'Ticker', 'Instrument Type', 'Call or Put', 'Expiration Date',
-            'Strike Price', 'Quantity', 'Average Price', 'Cost Basis',
-        ] if c in df_open.columns]
-        out = df_open[base_cols].sort_values('Ticker').copy()
-        def _eff_basis(camp):
-            if _use_lifetime and camp.total_shares > 0:
-                return camp.blended_basis
-            return effective_basis(camp)
-
-        if _camp_lookup:
-            out['Eff. Basis/sh'] = out['Ticker'].map(
-                lambda t: round(_eff_basis(_camp_lookup[t]), 4)
-                if t in _camp_lookup else ''
-            )
-        if live_prices and _camp_lookup:
-            def _unreal_vs_eff(row):
-                camp = _camp_lookup.get(row['Ticker'])
-                if not camp:
-                    return ''
-                last = float((live_prices.get(row['Ticker']) or {}).get('last', 0.0))
-                if not last:
-                    return ''
-                return round((last - _eff_basis(camp)) * camp.total_shares, 2)
-            out['Unreal P/L (vs eff. basis)'] = out.apply(_unreal_vs_eff, axis=1)
-        return out.to_csv(index=False)
-
+    # ── Position Snapshot download ────────────────────────────────────────────
     with _c_csv:
         if not df_open.empty:
+            _snap_txt = build_position_snapshot(
+                df_open=df_open,
+                all_campaigns=all_campaigns,
+                all_cdf=all_cdf if all_cdf is not None else pd.DataFrame(),
+                credit_cdf=credit_cdf if credit_cdf is not None else pd.DataFrame(),
+                live_prices=live_prices,
+                latest_date=latest_date,
+                total_realized_pnl=total_realized_pnl,
+                capital_deployed=capital_deployed,
+                open_premiums_banked=open_premiums_banked,
+                use_lifetime=_use_lifetime,
+            )
             st.download_button(
-                label='⬇️ Export CSV',
-                data=_positions_csv(),
-                file_name='open_positions.csv',
-                mime='text/csv',
+                label='⬇️ Snapshot',
+                data=_snap_txt,
+                file_name='position_snapshot.txt',
+                mime='text/plain',
                 use_container_width=True,
-                help='Download all open position legs as a CSV file.',
+                help='Download a plain-text position snapshot with live marks, IV, and Greeks — ready to paste into any LLM.',
             )
 
     # ── Position cards ────────────────────────────────────────────────────────

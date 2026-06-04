@@ -65,7 +65,6 @@ import json as _json
 import os as _os
 import hashlib as _hashlib
 
-from report_prompt import build_review_prompt
 
 # ==========================================
 # TastyMechanics v26.9
@@ -969,7 +968,7 @@ def main():
     has_credit = not credit_cdf.empty
     has_data   = not all_cdf.empty
 
-    # ── Report download sidebar — here all window data is ready ──────────────────
+    # ── Sidebar exports — here all window data is ready ──────────────────────
     with st.sidebar:
         st.markdown('---')
         st.markdown('#### 📄 Export Report')
@@ -1010,42 +1009,6 @@ def main():
         else:
             st.caption('Upload data to enable report export.')
 
-        # ── AI Review Prompt ──────────────────────────────────────────────────
-        st.markdown('---')
-        st.markdown('#### 🤖 AI Review Prompt')
-        if has_data:
-            if st.button('📋 Generate AI Review Prompt',
-                         use_container_width=True,
-                         help='Builds a prompt with your trading metrics ready to paste into Claude, ChatGPT, or any LLM.'):
-                st.session_state['_ai_prompt'] = build_review_prompt(
-                    all_cdf=all_cdf,
-                    credit_cdf=credit_cdf,
-                    all_campaigns=all_campaigns,
-                    df_window=df_window,
-                    latest_date=latest_date,
-                    start_date=start_date,
-                    selected_period=selected_period,
-                    window_realized_pnl=window_realized_pnl,
-                    total_realized_pnl=total_realized_pnl,
-                    div_income=div_income,
-                    int_net=int_net,
-                    total_deposited=total_deposited,
-                    net_deposited=net_deposited,
-                    realized_ror=realized_ror,
-                    use_lifetime=use_lifetime,
-                    capital_deployed=capital_deployed,
-                    closed_camp_pnl=closed_camp_pnl,
-                )
-            if st.session_state.get('_ai_prompt'):
-                st.caption('Copy and paste into any LLM — use the icon in the top-right corner of the box below.')
-                st.code(st.session_state['_ai_prompt'], language=None, wrap_lines=True)
-                st.caption(
-                    '⚠️ This prompt contains aggregate metrics, not raw transactions. '
-                    'Pasting it into an external LLM sends that data outside this app.'
-                )
-        else:
-            st.caption('Upload data to generate a review prompt.')
-
     # ── TABS ───────────────────────────────────────────────────────────────────────
     # Keep all in-tab selectors visually in sync. Must happen before widgets are
     # rendered — Streamlit ignores `index=` once a key exists in session state.
@@ -1061,7 +1024,14 @@ def main():
         '💰 Deposits, Dividends & Fees'
     ])
 
-    with tab0: render_tab0(df_open, _expiry_alerts, latest_date, all_campaigns)
+    with tab0: render_tab0(
+        df_open, _expiry_alerts, latest_date, all_campaigns,
+        all_cdf=all_cdf,
+        credit_cdf=credit_cdf,
+        total_realized_pnl=total_realized_pnl,
+        capital_deployed=capital_deployed,
+        open_premiums_banked=open_premiums_banked,
+    )
     with tab1:
         with st.columns([4, 1])[1]:
             st.selectbox('Time Window', time_options,

@@ -9,6 +9,7 @@ Tickers are the only data sent externally — no transaction amounts or account
 details leave the app.
 """
 
+import math
 import pandas as pd
 import streamlit as st
 
@@ -33,7 +34,12 @@ def fetch_live_prices(tickers: frozenset, option_specs: frozenset) -> dict:
     -------
     dict  {ticker: {'last': float,
                     'prev_close': float,
-                    'options': {(expiry_ymd, strike, cp): {'bid', 'ask', 'mark'}}}}
+                    'beta': float | None,
+                    'options': {(expiry_ymd, strike, cp): {'bid', 'ask', 'mark', 'iv'}}}}
+
+    Betas are computed from 90-day rolling returns vs SPY (more reliable than
+    yfinance .info which is frequently rate-limited). SPY should be included in
+    tickers for beta computation; if absent all betas will be None.
 
     Failed lookups are silently omitted so a bad ticker never crashes the UI.
     """
@@ -84,16 +90,112 @@ def fetch_live_prices(tickers: frozenset, option_specs: frozenset) -> dict:
                     for _, row in all_legs.iterrows():
                         bid  = float(row.get('bid', 0.0) or 0.0)
                         ask  = float(row.get('ask', 0.0) or 0.0)
+                        iv   = row.get('impliedVolatility', None)
+                        iv   = float(iv) if iv is not None and iv == iv else None  # nan-safe
                         # Key by the original expiry string so the remapping in
                         # tab0 can match it back to the CSV value.
                         opts[(expiry, float(row['strike']), str(row['cp']))] = {
-                            'bid': bid, 'ask': ask, 'mark': (bid + ask) / 2,
+                            'bid': bid, 'ask': ask, 'mark': (bid + ask) / 2, 'iv': iv,
                         }
                 except Exception:
                     pass  # Expiry not available in yfinance — skip silently
 
-            result[ticker] = {'last': last, 'prev_close': prev, 'options': opts}
+            result[ticker] = {'last': last, 'prev_close': prev, 'options': opts, 'beta': None}
         except Exception:
             pass  # Ticker lookup failed — skip silently
 
+    # ── Beta computation from 90-day rolling returns vs SPY ──────────────────
+    # yfinance .info is frequently rate-limited; yf.download() is more reliable.
+    # SPY must be in the tickers set (added by tab0) for beta to be computed.
+    if result and _YF_AVAILABLE:
+        try:
+            _beta_tickers = sorted(result.keys())
+            if 'SPY' not in _beta_tickers:
+                _beta_tickers.append('SPY')
+            hist = yf.download(
+                _beta_tickers, period='3mo', interval='1d',
+                progress=False, auto_adjust=True,
+            )
+            if not hist.empty:
+                # MultiIndex when multiple tickers, flat when single
+                if isinstance(hist.columns, pd.MultiIndex):
+                    closes = hist['Close']
+                else:
+                    closes = hist[['Close']].rename(columns={'Close': _beta_tickers[0]})
+                if 'SPY' in closes.columns:
+                    spy_ret = closes['SPY'].pct_change().dropna()
+                    for ticker in list(result.keys()):
+                        if ticker == 'SPY' or ticker not in closes.columns:
+                            continue
+                        tkr_ret = closes[ticker].pct_change().dropna()
+                        aligned = pd.concat([tkr_ret, spy_ret], axis=1).dropna()
+                        if len(aligned) > 15:
+                            cov = float(aligned.iloc[:, 0].cov(aligned.iloc[:, 1]))
+                            var = float(aligned.iloc[:, 1].var())
+                            if var > 0:
+                                result[ticker]['beta'] = round(cov / var, 2)
+        except Exception:
+            pass  # Beta computation failed — betas remain None (snapshot defaults to 1.0)
+
     return result
+
+
+# ── Black-Scholes Greeks ───────────────────────────────────────────────────────
+
+def bs_greeks(S: float, K: float, T: float, r: float, sigma: float, cp: str) -> dict:
+    """Compute Black-Scholes Greeks for a European option.
+
+    Parameters
+    ----------
+    S     : current stock price
+    K     : strike price
+    T     : time to expiry in years  (DTE / 365)
+    r     : risk-free rate as a decimal  (e.g. 0.045)
+    sigma : implied volatility as a decimal  (e.g. 0.35 for 35 %%)
+    cp    : 'CALL' or 'PUT'
+
+    Returns
+    -------
+    dict with keys: delta, gamma, theta, vega
+      delta — per-share directional exposure  (−1 to +1)
+      gamma — per-share rate of delta change
+      theta — $/day per contract  (×100 shares; negative = time value decays against holder)
+      vega  — $ per 1 %% move in IV per contract  (×100 shares)
+    """
+    if T <= 0 or sigma is None or sigma <= 0 or S <= 0 or K <= 0:
+        return {'delta': 0.0, 'gamma': 0.0, 'theta': 0.0, 'vega': 0.0}
+    try:
+        sqrt_T = math.sqrt(T)
+        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt_T)
+        d2 = d1 - sigma * sqrt_T
+
+        def _N(x):
+            return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+        def _n(x):
+            return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+        gamma_ps = _n(d1) / (S * sigma * sqrt_T)          # per share
+        vega_ps  = S * _n(d1) * sqrt_T * 0.01             # per share, per 1%% IV move
+
+        if cp.upper() == 'CALL':
+            delta = _N(d1)
+            theta_ps = (
+                -(S * _n(d1) * sigma) / (2.0 * sqrt_T)
+                - r * K * math.exp(-r * T) * _N(d2)
+            ) / 365.0
+        else:
+            delta = _N(d1) - 1.0
+            theta_ps = (
+                -(S * _n(d1) * sigma) / (2.0 * sqrt_T)
+                + r * K * math.exp(-r * T) * _N(-d2)
+            ) / 365.0
+
+        return {
+            'delta': delta,
+            'gamma': gamma_ps,
+            'theta': theta_ps * 100.0,   # per contract
+            'vega':  vega_ps  * 100.0,   # per contract
+        }
+    except Exception:
+        return {'delta': 0.0, 'gamma': 0.0, 'theta': 0.0, 'vega': 0.0}
