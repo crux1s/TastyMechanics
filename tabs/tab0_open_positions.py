@@ -86,7 +86,7 @@ def render_tab0(
 
     live_prices: dict = {}
     if live_on:
-        tickers_frozen = frozenset(tickers_open)
+        tickers_frozen = frozenset(tickers_open) | {'SPY'}  # SPY needed for beta-weighted delta
 
         # Build (ticker, expiry_ymd, strike, cp) specs for every open option leg,
         # keeping the original expiry string so we can remap after fetching.

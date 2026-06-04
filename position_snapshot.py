@@ -6,12 +6,17 @@ plain-text string ready to paste into any LLM (Claude, ChatGPT, Gemini, etc.).
 
 Options are presented in TastyTrade-style human-readable notation:
     SOFI  15 Aug 25  $12.50 Put   (short, ×1)
+
+Portfolio Greeks (Section 5):
+  - Net Δ, Γ, θ, ν  — summed across all open option positions.
+  - Beta-weighted Δ to SPY — uses Yahoo Finance betas; requires SPY to be in live_prices.
+  - Buying power usage requires the TastyTrade API and is not shown.
 """
 
 import math
 import pandas as pd
 
-from config import OPT_TYPES, INCOME_SUB_TYPES, PAT_CLOSING, LEAPS_DTE_THRESHOLD
+from config import OPT_TYPES, EQUITY_TYPE
 from ui_components import fmt_dollar
 from mechanics import realized_pnl, effective_basis
 from market_data import bs_greeks
@@ -57,6 +62,11 @@ def _fmt_greek(v, fmt='+.2f'):
     return format(v, fmt)
 
 
+def _fmt_delta(v):
+    """Format delta with sign, 2 dp."""
+    return _fmt_greek(v, '+.2f')
+
+
 # ── main builder ──────────────────────────────────────────────────────────────
 
 def build_position_snapshot(
@@ -82,6 +92,7 @@ def build_position_snapshot(
     all_cdf              : closed trades DataFrame (for condensed scorecard)
     credit_cdf           : credit trades DataFrame (for capture %, DTE stats)
     live_prices          : fetch_live_prices() return value — may be empty dict
+                           Should include 'SPY' for beta-weighted delta.
     latest_date          : pd.Timestamp (today / last CSV date)
     total_realized_pnl   : float
     capital_deployed     : float
@@ -95,10 +106,11 @@ def build_position_snapshot(
     has_live = bool(live_prices)
 
     add('# TastyMechanics — Open Position Snapshot')
-    add(f'As of: {as_of.strftime("%d %b %Y")}  ({"live prices; ~15 min delay" if has_live else "no live prices — enable the Live toggle in the Open Positions tab"})')
+    add(f'As of: {as_of.strftime("%d %b %Y")}  '
+        f'({"live prices; ~15 min delay" if has_live else "no live prices — enable the Live toggle in the Open Positions tab"})')
     add('')
-    add('⚠️  IVR and portfolio-level Greeks require TastyTrade API access.')
-    add('   NLV, buying power, and beta-weighted delta are not shown here.')
+    add('⚠️  IVR and buying power usage require TastyTrade API access and are not shown here.')
+    add('   Beta-weighted delta uses Yahoo Finance betas (may differ slightly from TastyTrade).')
     add('')
 
     # ── 1. Account Summary ────────────────────────────────────────────────────
@@ -107,6 +119,14 @@ def build_position_snapshot(
     add(f'- Capital deployed (shares):        {fmt_dollar(capital_deployed)}')
     add(f'- Premiums banked (open wheels):    {fmt_dollar(open_premiums_banked)}')
     add('')
+
+    # ── identify wheel vs standalone equity ───────────────────────────────────
+    _wheel_tickers = {
+        ticker
+        for ticker, camps in (all_campaigns.items() if hasattr(all_campaigns, 'items') else [])
+        for c in camps
+        if c.status == 'open' and c.total_shares > 0
+    }
 
     # ── 2. Open Wheel Campaigns ───────────────────────────────────────────────
     add('## 2. Open Wheel Campaigns')
@@ -121,8 +141,8 @@ def build_position_snapshot(
     add('')
     if open_camps:
         add(f'{"Ticker":<7} {"Shares":>6}  {"Entry":>7}  {"Premiums":>9}  {"Eff Basis":>9}  '
-            f'{"Last":>7}  {"Gross Unreal":>12}  {"Net Unreal":>10}  {"Days":>5}')
-        add('-' * 95)
+            f'{"Last":>7}  {"Gross Unreal":>12}  {"Net Unreal":>10}  {"Δ equity":>9}  {"Days":>5}')
+        add('-' * 107)
         for ticker, c in open_camps:
             effb = effective_basis(c, use_lifetime)
             days = (as_of - pd.Timestamp(c.start_date)).days
@@ -134,19 +154,42 @@ def build_position_snapshot(
                 gross_unreal = (last - c.blended_basis) * c.total_shares
                 net_unreal   = (last - effb) * c.total_shares
                 last_str     = f'${last:>6.2f}'
+                eq_delta_str = f'{c.total_shares:+.0f}'    # long stock = positive delta
             else:
                 gross_unreal = None
                 net_unreal   = None
                 last_str     = '—'
+                eq_delta_str = f'{c.total_shares:+.0f}' if c.total_shares else '—'
 
             gross_str = fmt_dollar(gross_unreal) if gross_unreal is not None else '—'
             net_str   = fmt_dollar(net_unreal)   if net_unreal   is not None else '—'
             add(f'{ticker:<7} {int(c.total_shares):>6}  ${c.blended_basis:>6.2f}  '
                 f'{fmt_dollar(c.premiums):>9}  ${effb:>8.2f}  '
-                f'{last_str:>7}  {gross_str:>12}  {net_str:>10}  {days:>4}d')
+                f'{last_str:>7}  {gross_str:>12}  {net_str:>10}  {eq_delta_str:>9}  {days:>4}d')
     else:
         add('No open wheel campaigns.')
     add('')
+
+    # ── 2b. Standalone equity positions (non-wheel) ───────────────────────────
+    _equity_rows = pd.DataFrame()
+    if not df_open.empty and 'Instrument Type' in df_open.columns:
+        _eq_mask     = df_open['Instrument Type'] == EQUITY_TYPE
+        _equity_rows = df_open[_eq_mask & ~df_open['Ticker'].isin(_wheel_tickers)].copy()
+
+    if not _equity_rows.empty:
+        add('## 2b. Other Long Stock Positions')
+        add(f'{"Ticker":<7} {"Shares":>6}  {"Cost Basis":>10}  {"Last":>7}  {"Unreal $":>9}  {"Δ equity":>9}')
+        add('-' * 60)
+        for _, row in _equity_rows.iterrows():
+            tkr      = str(row.get('Ticker', '?'))
+            shares   = float(row.get('Net_Qty', 0.0) or 0.0)
+            cost_b   = float(row.get('Cost Basis', 0.0) or 0.0)
+            live_tk  = live_prices.get(tkr, {}) if has_live else {}
+            last     = live_tk.get('last', None)
+            unreal_s = fmt_dollar((last - cost_b / shares) * shares) if (last and shares) else '—'
+            last_s   = f'${last:.2f}' if last else '—'
+            add(f'{tkr:<7} {int(shares):>6}  {fmt_dollar(cost_b):>10}  {last_s:>7}  {unreal_s:>9}  {shares:>+9.0f}')
+        add('')
 
     # ── 3. Open Option Positions ──────────────────────────────────────────────
     add('## 3. Open Option Positions')
@@ -155,6 +198,9 @@ def build_position_snapshot(
     if not df_open.empty and 'Instrument Type' in df_open.columns:
         _opt_mask = df_open['Instrument Type'].isin(OPT_TYPES)
         _opt_rows = df_open[_opt_mask].copy()
+
+    # Accumulate data for portfolio metrics
+    _port_opts = []   # {ticker, net_qty, delta, theta, gamma, vega, S, beta}
 
     if _opt_rows.empty:
         add('No open option positions.')
@@ -181,10 +227,8 @@ def build_position_snapshot(
 
             if has_live:
                 live_tk = live_prices.get(ticker, {})
-                # Try to find a matching key — strike may have float precision differences
                 for (exp_k, str_k, cp_k), opt_data in live_tk.get('options', {}).items():
                     if cp_k == cp and abs(str_k - strike) < 0.01:
-                        # expiry key match — check date proximity
                         try:
                             exp_date = pd.to_datetime(expiry, format='mixed', errors='coerce').normalize()
                             key_date = pd.to_datetime(exp_k, errors='coerce').normalize()
@@ -195,9 +239,9 @@ def build_position_snapshot(
                             pass
 
             if opt_key:
-                bid  = opt_key.get('bid', 0.0) or 0.0
-                ask  = opt_key.get('ask', 0.0) or 0.0
-                mark = opt_key.get('mark', 0.0) or 0.0
+                bid    = opt_key.get('bid', 0.0) or 0.0
+                ask    = opt_key.get('ask', 0.0) or 0.0
+                mark   = opt_key.get('mark', 0.0) or 0.0
                 iv_raw = opt_key.get('iv', None)
 
                 mark_str = f'${mark:.2f}'
@@ -205,19 +249,17 @@ def build_position_snapshot(
                 ask_str  = f'${ask:.2f}'
                 iv_str   = f'{iv_raw*100:.1f}%' if iv_raw else '—'
 
-            # Stock price context + open P/L
-            live_tk = live_prices.get(ticker, {}) if has_live else {}
-            S = live_tk.get('last', 0.0) or 0.0
+            # Stock price, OTM/ITM, P/L
+            live_tk  = live_prices.get(ticker, {}) if has_live else {}
+            S        = live_tk.get('last', 0.0) or 0.0
+            beta_raw = live_tk.get('beta', None)
 
             stock_str = f'${S:.2f}' if S else '—'
             if S and strike:
-                # pct = how far stock is above the strike (positive = stock above strike)
                 pct = (S - strike) / strike * 100
                 if cp == 'CALL':
-                    # Call OTM when stock < strike (pct < 0)
                     otm_str = f'{abs(pct):.1f}% OTM' if pct < 0 else f'{pct:.1f}% ITM'
                 else:
-                    # Put OTM when stock > strike (pct > 0)
                     otm_str = f'{pct:.1f}% OTM' if pct > 0 else f'{abs(pct):.1f}% ITM'
             else:
                 otm_str = '—'
@@ -225,20 +267,17 @@ def build_position_snapshot(
             n_contracts = abs(int(round(net_qty))) or 1
             is_short    = net_qty < 0
 
-            # cost_b sign convention: negative = credit received (short), positive = debit paid (long)
             if is_short:
                 basis_label = f'Prem rcvd {fmt_dollar(abs(cost_b))}'
             else:
                 basis_label = f'Cost paid {fmt_dollar(cost_b)}'
 
             if opt_key:
-                mark_val  = opt_key.get('mark', 0.0) or 0.0
+                mark_val   = opt_key.get('mark', 0.0) or 0.0
                 mark_total = mark_val * 100 * n_contracts
                 if is_short:
-                    # short: P/L = premium received - current cost to close
                     open_pnl = abs(cost_b) - mark_total
                 else:
-                    # long: P/L = current value - cost paid
                     open_pnl = mark_total - cost_b
                 open_pnl_str = fmt_dollar(open_pnl)
             else:
@@ -247,16 +286,28 @@ def build_position_snapshot(
             add(f'  Stock {stock_str} ({otm_str})  |  Mark {mark_str}  |  Bid {bid_str}  Ask {ask_str}')
             add(f'  IV {iv_str}  |  DTE {dte_str}  |  {basis_label}  |  Open P/L {open_pnl_str}')
 
-            # Greeks — theta sign flipped for short positions (seller collects decay)
+            # Per-position Greeks + accumulate portfolio data
             if iv_raw and iv_raw > 0 and dte_val and dte_val > 0 and S > 0:
                 T        = dte_val / 365.0
                 greeks   = bs_greeks(S, strike, T, _RISK_FREE_RATE, iv_raw, cp)
-                direction = -1 if is_short else 1   # short = collect theta (positive)
-                delta_s  = _fmt_greek(greeks['delta'],            '.2f')
-                gamma_s  = _fmt_greek(greeks['gamma'],            '.4f')
-                theta_s  = _fmt_greek(greeks['theta'] * direction, '+.2f')
-                vega_s   = _fmt_greek(greeks['vega'],              '.2f')
+                # Display: theta sign flipped for short (collecting decay = positive)
+                display_dir = -1 if is_short else 1
+                delta_s = _fmt_greek(greeks['delta'],                  '.2f')
+                gamma_s = _fmt_greek(greeks['gamma'],                  '.4f')
+                theta_s = _fmt_greek(greeks['theta'] * display_dir,   '+.2f')
+                vega_s  = _fmt_greek(greeks['vega'],                   '.2f')
                 add(f'  Δ {delta_s}  Γ {gamma_s}  θ {theta_s}/day  ν {vega_s}')
+                # Store for portfolio aggregation
+                _port_opts.append({
+                    'ticker':  ticker,
+                    'net_qty': net_qty,
+                    'delta':   greeks['delta'],
+                    'theta':   greeks['theta'],
+                    'gamma':   greeks['gamma'],
+                    'vega':    greeks['vega'],
+                    'S':       S,
+                    'beta':    beta_raw,
+                })
             elif not has_live:
                 add('  (enable live data for Greeks)')
 
@@ -274,7 +325,7 @@ def build_position_snapshot(
         pf_denom  = abs(losers.sum())
         prof_fac  = f'{winners.sum() / pf_denom:.2f}' if pf_denom > 0 else '∞'
 
-        avg_cap   = (
+        avg_cap = (
             f'{credit_cdf["Capture %"].mean():.0f}%'
             if 'Capture %' in credit_cdf.columns and not credit_cdf.empty else '—'
         )
@@ -289,5 +340,96 @@ def build_position_snapshot(
     else:
         add('No closed trade history available.')
     add('')
+
+    # ── 5. Portfolio Greeks Summary ───────────────────────────────────────────
+    add('## 5. Portfolio Greeks Summary')
+    add('(Options only for Greeks; equity positions included in delta and BWD.)')
+    add('')
+
+    # Option Greeks aggregation
+    # net_delta_shares = Σ(delta × net_qty × 100)   — delta × net_qty gives position sign
+    # net_theta        = Σ(theta × net_qty)          — theta is negative/buyer; × neg qty = positive for short
+    # net_gamma        = Σ(gamma × net_qty × 100)    — negative for net short gamma book
+    # net_vega         = Σ(vega  × net_qty)          — already per-contract (×100 inside bs_greeks)
+    net_delta_opt = sum(p['delta'] * p['net_qty'] * 100 for p in _port_opts)
+    net_theta     = sum(p['theta'] * p['net_qty']       for p in _port_opts)
+    net_gamma     = sum(p['gamma'] * p['net_qty'] * 100 for p in _port_opts)
+    net_vega      = sum(p['vega']  * p['net_qty']       for p in _port_opts)
+
+    # Equity delta (each share = 1 delta)
+    net_delta_eq = 0.0
+    _eq_items = []   # {ticker, shares, S, beta}
+
+    # Wheel campaign shares
+    for ticker, c in open_camps:
+        if c.total_shares > 0:
+            live_tk = live_prices.get(ticker, {}) if has_live else {}
+            S_eq    = live_tk.get('last', 0.0) or 0.0
+            b_eq    = live_tk.get('beta', None)
+            net_delta_eq += c.total_shares
+            _eq_items.append({'ticker': ticker, 'shares': c.total_shares, 'S': S_eq, 'beta': b_eq})
+
+    # Standalone equity
+    if not _equity_rows.empty:
+        for _, row in _equity_rows.iterrows():
+            tkr    = str(row.get('Ticker', '?'))
+            shares = float(row.get('Net_Qty', 0.0) or 0.0)
+            live_tk = live_prices.get(tkr, {}) if has_live else {}
+            S_eq    = live_tk.get('last', 0.0) or 0.0
+            b_eq    = live_tk.get('beta', None)
+            net_delta_eq += shares
+            _eq_items.append({'ticker': tkr, 'shares': shares, 'S': S_eq, 'beta': b_eq})
+
+    net_delta_total = net_delta_opt + net_delta_eq
+
+    add(f'Net Δ (options):   {net_delta_opt:+.1f} share-equivalents')
+    add(f'Net Δ (equity):    {net_delta_eq:+.1f} shares')
+    add(f'Net Δ (total):     {net_delta_total:+.1f} share-equivalents')
+    add(f'Net θ/day:         {net_theta:+.2f}  ({"positive = net theta collector" if net_theta >= 0 else "negative = net theta payer"})')
+    add(f'Net Γ:             {net_gamma:+.4f}  ({"negative = short gamma book" if net_gamma < 0 else "positive = long gamma book"})')
+    add(f'Net ν (per 1% IV): {net_vega:+.2f}  ({"negative = short vega — IV rise hurts" if net_vega < 0 else "positive = long vega — IV rise helps"})')
+    add('')
+
+    # Beta-weighted delta to SPY
+    spy_price = live_prices.get('SPY', {}).get('last', 0.0) if has_live else 0.0
+    if spy_price:
+        bwd_opts = sum(
+            p['delta'] * p['net_qty'] * 100 * p['S'] * (p['beta'] or 1.0) / spy_price
+            for p in _port_opts if p['S']
+        )
+        bwd_eq   = sum(
+            e['shares'] * e['S'] * (e['beta'] or 1.0) / spy_price
+            for e in _eq_items if e['S']
+        )
+        bwd_total = bwd_opts + bwd_eq
+
+        # Gather betas for display
+        beta_notes = []
+        seen_tickers = set()
+        for p in _port_opts:
+            if p['ticker'] not in seen_tickers and p['beta'] is not None:
+                beta_notes.append(f"{p['ticker']} β{p['beta']:.2f}")
+                seen_tickers.add(p['ticker'])
+        for e in _eq_items:
+            if e['ticker'] not in seen_tickers and e['beta'] is not None:
+                beta_notes.append(f"{e['ticker']} β{e['beta']:.2f}")
+                seen_tickers.add(e['ticker'])
+        # tickers where beta defaulted to 1.0
+        missing_beta = [
+            p['ticker'] for p in _port_opts + _eq_items
+            if p.get('beta') is None and p['ticker'] not in seen_tickers
+        ]
+
+        bwd_note = ''
+        if missing_beta:
+            bwd_note = f"  (β defaulted to 1.0 for: {', '.join(sorted(set(missing_beta)))})"
+        beta_str = '  |  '.join(beta_notes) if beta_notes else '(all defaulted to 1.0)'
+
+        add(f'Beta-weighted Δ to SPY (${spy_price:.2f}): {bwd_total:+.1f} SPY-equivalent deltas{bwd_note}')
+        add(f'  Betas used: {beta_str}')
+    else:
+        add('Beta-weighted Δ to SPY: — (SPY price not available; ensure Live toggle is on)')
+    add('')
+    add('⚠ Buying power usage requires the TastyTrade API (account margin structure not calculable from CSV data).')
 
     return '\n'.join(lines)

@@ -95,7 +95,12 @@ def fetch_live_prices(tickers: frozenset, option_specs: frozenset) -> dict:
                 except Exception:
                     pass  # Expiry not available in yfinance — skip silently
 
-            result[ticker] = {'last': last, 'prev_close': prev, 'options': opts}
+            try:
+                beta = float(yf_t.info.get('beta') or 0.0) or None
+            except Exception:
+                beta = None
+
+            result[ticker] = {'last': last, 'prev_close': prev, 'options': opts, 'beta': beta}
         except Exception:
             pass  # Ticker lookup failed — skip silently
 
