@@ -95,7 +95,7 @@ def build_position_snapshot(
     has_live = bool(live_prices)
 
     add('# TastyMechanics — Open Position Snapshot')
-    add(f'As of: {as_of.strftime("%d %b %Y")}  ({"live prices; ~15 min delay" if has_live else "no live prices — upload CSV and enable live data"})')
+    add(f'As of: {as_of.strftime("%d %b %Y")}  ({"live prices; ~15 min delay" if has_live else "no live prices — enable the Live toggle in the Open Positions tab"})')
     add('')
     add('⚠️  IVR and portfolio-level Greeks require TastyTrade API access.')
     add('   NLV, buying power, and beta-weighted delta are not shown here.')
@@ -211,8 +211,14 @@ def build_position_snapshot(
 
             stock_str = f'${S:.2f}' if S else '—'
             if S and strike:
-                otm_pct = (S / strike - 1) * 100 if cp == 'CALL' else (strike / S - 1) * 100
-                otm_str = f'{otm_pct:+.1f}% OTM' if otm_pct >= 0 else f'{abs(otm_pct):.1f}% ITM'
+                # pct = how far stock is above the strike (positive = stock above strike)
+                pct = (S - strike) / strike * 100
+                if cp == 'CALL':
+                    # Call OTM when stock < strike (pct < 0)
+                    otm_str = f'{abs(pct):.1f}% OTM' if pct < 0 else f'{pct:.1f}% ITM'
+                else:
+                    # Put OTM when stock > strike (pct > 0)
+                    otm_str = f'{pct:.1f}% OTM' if pct > 0 else f'{abs(pct):.1f}% ITM'
             else:
                 otm_str = '—'
 
