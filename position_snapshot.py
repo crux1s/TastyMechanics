@@ -116,10 +116,13 @@ def build_position_snapshot(
         for c in camps
         if c.status == 'open'
     ]
+    add('Note: "Gross Unreal" is vs entry price (no premium offset). '
+        '"Net Unreal" is vs effective basis (entry minus premiums collected).')
+    add('')
     if open_camps:
-        add(f'{"Ticker":<7} {"Shares":>6}  {"Entry":>7}  {"Eff Basis":>9}  {"Last":>7}  '
-            f'{"Unreal $":>9}  {"Unreal %":>8}  {"Premiums":>9}  {"Days":>5}')
-        add('-' * 80)
+        add(f'{"Ticker":<7} {"Shares":>6}  {"Entry":>7}  {"Premiums":>9}  {"Eff Basis":>9}  '
+            f'{"Last":>7}  {"Gross Unreal":>12}  {"Net Unreal":>10}  {"Days":>5}')
+        add('-' * 95)
         for ticker, c in open_camps:
             effb = effective_basis(c, use_lifetime)
             days = (as_of - pd.Timestamp(c.start_date)).days
@@ -128,18 +131,19 @@ def build_position_snapshot(
             last     = live_tk.get('last', None)
 
             if last and c.total_shares > 0:
-                unreal   = (last - effb) * c.total_shares
-                unreal_p = _pct(unreal, effb * c.total_shares)
-                last_str = f'${last:>6.2f}'
+                gross_unreal = (last - c.blended_basis) * c.total_shares
+                net_unreal   = (last - effb) * c.total_shares
+                last_str     = f'${last:>6.2f}'
             else:
-                unreal   = None
-                unreal_p = '—'
-                last_str = '—'
+                gross_unreal = None
+                net_unreal   = None
+                last_str     = '—'
 
-            unreal_str = fmt_dollar(unreal) if unreal is not None else '—'
-            add(f'{ticker:<7} {int(c.total_shares):>6}  ${c.blended_basis:>6.2f}  ${effb:>8.2f}  '
-                f'{last_str:>7}  {unreal_str:>9}  {unreal_p:>8}  '
-                f'{fmt_dollar(c.premiums):>9}  {days:>4}d')
+            gross_str = fmt_dollar(gross_unreal) if gross_unreal is not None else '—'
+            net_str   = fmt_dollar(net_unreal)   if net_unreal   is not None else '—'
+            add(f'{ticker:<7} {int(c.total_shares):>6}  ${c.blended_basis:>6.2f}  '
+                f'{fmt_dollar(c.premiums):>9}  ${effb:>8.2f}  '
+                f'{last_str:>7}  {gross_str:>12}  {net_str:>10}  {days:>4}d')
     else:
         add('No open wheel campaigns.')
     add('')
