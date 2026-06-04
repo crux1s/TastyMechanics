@@ -34,7 +34,12 @@ def fetch_live_prices(tickers: frozenset, option_specs: frozenset) -> dict:
     -------
     dict  {ticker: {'last': float,
                     'prev_close': float,
-                    'options': {(expiry_ymd, strike, cp): {'bid', 'ask', 'mark'}}}}
+                    'beta': float | None,
+                    'options': {(expiry_ymd, strike, cp): {'bid', 'ask', 'mark', 'iv'}}}}
+
+    Betas are computed from 90-day rolling returns vs SPY (more reliable than
+    yfinance .info which is frequently rate-limited). SPY should be included in
+    tickers for beta computation; if absent all betas will be None.
 
     Failed lookups are silently omitted so a bad ticker never crashes the UI.
     """
@@ -95,14 +100,42 @@ def fetch_live_prices(tickers: frozenset, option_specs: frozenset) -> dict:
                 except Exception:
                     pass  # Expiry not available in yfinance — skip silently
 
-            try:
-                beta = float(yf_t.info.get('beta') or 0.0) or None
-            except Exception:
-                beta = None
-
-            result[ticker] = {'last': last, 'prev_close': prev, 'options': opts, 'beta': beta}
+            result[ticker] = {'last': last, 'prev_close': prev, 'options': opts, 'beta': None}
         except Exception:
             pass  # Ticker lookup failed — skip silently
+
+    # ── Beta computation from 90-day rolling returns vs SPY ──────────────────
+    # yfinance .info is frequently rate-limited; yf.download() is more reliable.
+    # SPY must be in the tickers set (added by tab0) for beta to be computed.
+    if result and _YF_AVAILABLE:
+        try:
+            _beta_tickers = sorted(result.keys())
+            if 'SPY' not in _beta_tickers:
+                _beta_tickers.append('SPY')
+            hist = yf.download(
+                _beta_tickers, period='3mo', interval='1d',
+                progress=False, auto_adjust=True,
+            )
+            if not hist.empty:
+                # MultiIndex when multiple tickers, flat when single
+                if isinstance(hist.columns, pd.MultiIndex):
+                    closes = hist['Close']
+                else:
+                    closes = hist[['Close']].rename(columns={'Close': _beta_tickers[0]})
+                if 'SPY' in closes.columns:
+                    spy_ret = closes['SPY'].pct_change().dropna()
+                    for ticker in list(result.keys()):
+                        if ticker == 'SPY' or ticker not in closes.columns:
+                            continue
+                        tkr_ret = closes[ticker].pct_change().dropna()
+                        aligned = pd.concat([tkr_ret, spy_ret], axis=1).dropna()
+                        if len(aligned) > 15:
+                            cov = float(aligned.iloc[:, 0].cov(aligned.iloc[:, 1]))
+                            var = float(aligned.iloc[:, 1].var())
+                            if var > 0:
+                                result[ticker]['beta'] = round(cov / var, 2)
+        except Exception:
+            pass  # Beta computation failed — betas remain None (snapshot defaults to 1.0)
 
     return result
 

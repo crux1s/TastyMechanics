@@ -292,12 +292,15 @@ def build_position_snapshot(
             if iv_raw and iv_raw > 0 and dte_val and dte_val > 0 and S > 0:
                 T        = dte_val / 365.0
                 greeks   = bs_greeks(S, strike, T, _RISK_FREE_RATE, iv_raw, cp)
-                # Display: theta sign flipped for short (collecting decay = positive)
+                # All Greeks shown as position-adjusted (direction × raw):
+                #   short put  → Δ positive, Γ negative, θ positive, ν negative
+                #   short call → Δ negative, Γ negative, θ positive, ν negative
+                #   long put   → Δ negative, Γ positive, θ negative, ν positive
                 display_dir = -1 if is_short else 1
-                delta_s = _fmt_greek(greeks['delta'],                  '.2f')
-                gamma_s = _fmt_greek(greeks['gamma'],                  '.4f')
-                theta_s = _fmt_greek(greeks['theta'] * display_dir,   '+.2f')
-                vega_s  = _fmt_greek(greeks['vega'],                   '.2f')
+                delta_s = _fmt_greek(greeks['delta'] * display_dir, '+.2f')
+                gamma_s = _fmt_greek(greeks['gamma'] * display_dir, '+.4f')
+                theta_s = _fmt_greek(greeks['theta'] * display_dir, '+.2f')
+                vega_s  = _fmt_greek(greeks['vega']  * display_dir, '+.2f')
                 add(f'  Δ {delta_s}  Γ {gamma_s}  θ {theta_s}/day  ν {vega_s}')
                 # Store for portfolio aggregation
                 _port_opts.append({
