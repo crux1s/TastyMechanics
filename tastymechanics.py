@@ -65,7 +65,7 @@ import json as _json
 import os as _os
 import hashlib as _hashlib
 
-from report_prompt import build_review_prompt
+from position_snapshot import build_position_snapshot
 
 # ==========================================
 # TastyMechanics v26.9
@@ -1010,41 +1010,37 @@ def main():
         else:
             st.caption('Upload data to enable report export.')
 
-        # ── AI Review Prompt ──────────────────────────────────────────────────
+        # ── Position Snapshot ─────────────────────────────────────────────────
         st.markdown('---')
-        st.markdown('#### 🤖 AI Review Prompt')
+        st.markdown('#### 📊 Position Snapshot')
         if has_data:
-            if st.button('📋 Generate AI Review Prompt',
+            if st.button('Generate Position Snapshot',
                          use_container_width=True,
-                         help='Builds a prompt with your trading metrics ready to paste into Claude, ChatGPT, or any LLM.'):
-                st.session_state['_ai_prompt'] = build_review_prompt(
+                         help='Fetches live prices and builds a current-positions review prompt ready to paste into any LLM.'):
+                _snap_tickers, _snap_specs = _build_live_specs(df_open)
+                with st.spinner('Fetching live prices…'):
+                    _snap_live = fetch_live_prices(_snap_tickers, _snap_specs)
+                st.session_state['_position_snapshot'] = build_position_snapshot(
+                    df_open=df_open,
+                    all_campaigns=all_campaigns,
                     all_cdf=all_cdf,
                     credit_cdf=credit_cdf,
-                    all_campaigns=all_campaigns,
-                    df_window=df_window,
+                    live_prices=_snap_live,
                     latest_date=latest_date,
-                    start_date=start_date,
-                    selected_period=selected_period,
-                    window_realized_pnl=window_realized_pnl,
                     total_realized_pnl=total_realized_pnl,
-                    div_income=div_income,
-                    int_net=int_net,
-                    total_deposited=total_deposited,
-                    net_deposited=net_deposited,
-                    realized_ror=realized_ror,
-                    use_lifetime=use_lifetime,
                     capital_deployed=capital_deployed,
-                    closed_camp_pnl=closed_camp_pnl,
+                    open_premiums_banked=open_premiums_banked,
+                    use_lifetime=use_lifetime,
                 )
-            if st.session_state.get('_ai_prompt'):
+            if st.session_state.get('_position_snapshot'):
                 st.caption('Copy and paste into any LLM — use the icon in the top-right corner of the box below.')
-                st.code(st.session_state['_ai_prompt'], language=None, wrap_lines=True)
+                st.code(st.session_state['_position_snapshot'], language=None, wrap_lines=True)
                 st.caption(
-                    '⚠️ This prompt contains aggregate metrics, not raw transactions. '
+                    '⚠️ This snapshot contains position data and live prices, not raw transactions. '
                     'Pasting it into an external LLM sends that data outside this app.'
                 )
         else:
-            st.caption('Upload data to generate a review prompt.')
+            st.caption('Upload data to generate a position snapshot.')
 
     # ── TABS ───────────────────────────────────────────────────────────────────────
     # Keep all in-tab selectors visually in sync. Must happen before widgets are

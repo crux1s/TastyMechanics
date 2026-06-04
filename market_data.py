@@ -9,6 +9,7 @@ Tickers are the only data sent externally — no transaction amounts or account
 details leave the app.
 """
 
+import math
 import pandas as pd
 import streamlit as st
 
@@ -84,10 +85,12 @@ def fetch_live_prices(tickers: frozenset, option_specs: frozenset) -> dict:
                     for _, row in all_legs.iterrows():
                         bid  = float(row.get('bid', 0.0) or 0.0)
                         ask  = float(row.get('ask', 0.0) or 0.0)
+                        iv   = row.get('impliedVolatility', None)
+                        iv   = float(iv) if iv is not None and iv == iv else None  # nan-safe
                         # Key by the original expiry string so the remapping in
                         # tab0 can match it back to the CSV value.
                         opts[(expiry, float(row['strike']), str(row['cp']))] = {
-                            'bid': bid, 'ask': ask, 'mark': (bid + ask) / 2,
+                            'bid': bid, 'ask': ask, 'mark': (bid + ask) / 2, 'iv': iv,
                         }
                 except Exception:
                     pass  # Expiry not available in yfinance — skip silently
@@ -97,3 +100,64 @@ def fetch_live_prices(tickers: frozenset, option_specs: frozenset) -> dict:
             pass  # Ticker lookup failed — skip silently
 
     return result
+
+
+# ── Black-Scholes Greeks ───────────────────────────────────────────────────────
+
+def bs_greeks(S: float, K: float, T: float, r: float, sigma: float, cp: str) -> dict:
+    """Compute Black-Scholes Greeks for a European option.
+
+    Parameters
+    ----------
+    S     : current stock price
+    K     : strike price
+    T     : time to expiry in years  (DTE / 365)
+    r     : risk-free rate as a decimal  (e.g. 0.045)
+    sigma : implied volatility as a decimal  (e.g. 0.35 for 35 %%)
+    cp    : 'CALL' or 'PUT'
+
+    Returns
+    -------
+    dict with keys: delta, gamma, theta, vega
+      delta — per-share directional exposure  (−1 to +1)
+      gamma — per-share rate of delta change
+      theta — $/day per contract  (×100 shares; negative = time value decays against holder)
+      vega  — $ per 1 %% move in IV per contract  (×100 shares)
+    """
+    if T <= 0 or sigma is None or sigma <= 0 or S <= 0 or K <= 0:
+        return {'delta': 0.0, 'gamma': 0.0, 'theta': 0.0, 'vega': 0.0}
+    try:
+        sqrt_T = math.sqrt(T)
+        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt_T)
+        d2 = d1 - sigma * sqrt_T
+
+        def _N(x):
+            return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+        def _n(x):
+            return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+        gamma_ps = _n(d1) / (S * sigma * sqrt_T)          # per share
+        vega_ps  = S * _n(d1) * sqrt_T * 0.01             # per share, per 1%% IV move
+
+        if cp.upper() == 'CALL':
+            delta = _N(d1)
+            theta_ps = (
+                -(S * _n(d1) * sigma) / (2.0 * sqrt_T)
+                - r * K * math.exp(-r * T) * _N(d2)
+            ) / 365.0
+        else:
+            delta = _N(d1) - 1.0
+            theta_ps = (
+                -(S * _n(d1) * sigma) / (2.0 * sqrt_T)
+                + r * K * math.exp(-r * T) * _N(-d2)
+            ) / 365.0
+
+        return {
+            'delta': delta,
+            'gamma': gamma_ps,
+            'theta': theta_ps * 100.0,   # per contract
+            'vega':  vega_ps  * 100.0,   # per contract
+        }
+    except Exception:
+        return {'delta': 0.0, 'gamma': 0.0, 'theta': 0.0, 'vega': 0.0}
