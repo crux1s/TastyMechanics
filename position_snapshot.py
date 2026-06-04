@@ -248,25 +248,4 @@ def build_position_snapshot(
         add('No closed trade history available.')
     add('')
 
-    # ── Review Request ────────────────────────────────────────────────────────
-    add('---')
-    add('')
-    add('## Review Request')
-    add(
-        'I trade theta strategies on TastyTrade — short puts, covered calls, strangles, '
-        'iron condors, and the full wheel cycle (take assignment on short puts, sell covered '
-        'calls against the shares until called away). The data above shows my current open '
-        'positions with live marks, IV, and computed Black-Scholes Greeks.'
-    )
-    add('')
-    add('Please review my current book and:')
-    add('')
-    add('1. Flag any positions approaching assignment risk or requiring management (based on DTE, delta, and mark vs cost basis).')
-    add('2. Identify concentration risk — am I over-exposed to any single ticker or sector?')
-    add('3. Comment on the theta decay profile — am I collecting enough daily theta relative to the capital deployed?')
-    add('4. Note any positions where the IV looks elevated or depressed vs typical, suggesting a roll or close.')
-    add('5. Suggest one or two specific position adjustments I could make this week.')
-    add('')
-    add('Be specific and reference the actual positions and numbers. Skip general options education — I know the mechanics.')
-
     return '\n'.join(lines)
