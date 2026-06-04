@@ -178,8 +178,8 @@ def build_position_snapshot(
 
     if not _equity_rows.empty:
         add('## 2b. Other Long Stock Positions')
-        add(f'{"Ticker":<7} {"Shares":>6}  {"Cost Basis":>10}  {"Last":>7}  {"Unreal $":>9}  {"Δ equity":>9}')
-        add('-' * 60)
+        add(f'{"Ticker":<7} {"Shares":>8}  {"Cost Basis":>10}  {"Last":>7}  {"Unreal $":>9}  {"Δ equity":>9}')
+        add('-' * 62)
         for _, row in _equity_rows.iterrows():
             tkr      = str(row.get('Ticker', '?'))
             shares   = float(row.get('Net_Qty', 0.0) or 0.0)
@@ -188,7 +188,9 @@ def build_position_snapshot(
             last     = live_tk.get('last', None)
             unreal_s = fmt_dollar((last - cost_b / shares) * shares) if (last and shares) else '—'
             last_s   = f'${last:.2f}' if last else '—'
-            add(f'{tkr:<7} {int(shares):>6}  {fmt_dollar(cost_b):>10}  {last_s:>7}  {unreal_s:>9}  {shares:>+9.0f}')
+            # Show fractional shares with 2 dp when < 1, whole number otherwise
+            shares_s = f'{shares:.2f}' if shares < 1 else f'{shares:.0f}'
+            add(f'{tkr:<7} {shares_s:>8}  {fmt_dollar(cost_b):>10}  {last_s:>7}  {unreal_s:>9}  {shares:>+9.2f}')
         add('')
 
     # ── 3. Open Option Positions ──────────────────────────────────────────────
