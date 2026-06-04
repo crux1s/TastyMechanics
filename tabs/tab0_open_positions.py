@@ -133,6 +133,7 @@ def render_tab0(
                     'last': data['last'],
                     'prev_close': data['prev_close'],
                     'options': opts_remapped,
+                    'beta': data.get('beta'),   # pass through for BWD calculation
                 }
             st.caption(
                 '📡 Prices: Yahoo Finance — equity near real-time, options ~15 min delayed. '
