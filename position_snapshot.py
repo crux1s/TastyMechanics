@@ -222,21 +222,36 @@ def build_position_snapshot(
             else:
                 otm_str = '—'
 
+            n_contracts = abs(int(round(net_qty))) or 1
+            is_short    = net_qty < 0
+
+            # cost_b sign convention: negative = credit received (short), positive = debit paid (long)
+            if is_short:
+                basis_label = f'Prem rcvd {fmt_dollar(abs(cost_b))}'
+            else:
+                basis_label = f'Cost paid {fmt_dollar(cost_b)}'
+
             if opt_key:
-                mark_val = opt_key.get('mark', 0.0) or 0.0
-                open_pnl = (cost_b + mark_val * 100) if net_qty < 0 else (mark_val * 100 - cost_b)
+                mark_val  = opt_key.get('mark', 0.0) or 0.0
+                mark_total = mark_val * 100 * n_contracts
+                if is_short:
+                    # short: P/L = premium received - current cost to close
+                    open_pnl = abs(cost_b) - mark_total
+                else:
+                    # long: P/L = current value - cost paid
+                    open_pnl = mark_total - cost_b
                 open_pnl_str = fmt_dollar(open_pnl)
             else:
                 open_pnl_str = '—'
 
             add(f'  Stock {stock_str} ({otm_str})  |  Mark {mark_str}  |  Bid {bid_str}  Ask {ask_str}')
-            add(f'  IV {iv_str}  |  DTE {dte_str}  |  Cost basis {fmt_dollar(cost_b)}  |  Open P/L {open_pnl_str}')
+            add(f'  IV {iv_str}  |  DTE {dte_str}  |  {basis_label}  |  Open P/L {open_pnl_str}')
 
             # Greeks — theta sign flipped for short positions (seller collects decay)
             if iv_raw and iv_raw > 0 and dte_val and dte_val > 0 and S > 0:
                 T        = dte_val / 365.0
                 greeks   = bs_greeks(S, strike, T, _RISK_FREE_RATE, iv_raw, cp)
-                direction = -1 if net_qty < 0 else 1   # short = collect theta (positive)
+                direction = -1 if is_short else 1   # short = collect theta (positive)
                 delta_s  = _fmt_greek(greeks['delta'],            '.2f')
                 gamma_s  = _fmt_greek(greeks['gamma'],            '.4f')
                 theta_s  = _fmt_greek(greeks['theta'] * direction, '+.2f')
