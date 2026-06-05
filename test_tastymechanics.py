@@ -47,7 +47,7 @@ print(f"Script folder: {_HERE}\n")
 # ── Import real app modules ────────────────────────────────────────────────────
 # All math functions now live in pure-Python modules — no Streamlit stub needed.
 from ingestion import parse_csv, equity_mask, option_mask
-from config    import OPT_TYPES, TRADE_TYPES, INCOME_SUB_TYPES
+from config    import OPT_TYPES, TRADE_TYPES, INCOME_SUB_TYPES, KNOWN_INDEXES
 from mechanics import (
     _iter_fifo_sells,
     build_campaigns,
@@ -57,6 +57,7 @@ from mechanics import (
     compute_app_data,
     build_option_chains,
     build_closed_trades,
+    _calculate_capital_risk,
     calc_dte,
     _uf_find,
     _uf_union,
@@ -1323,6 +1324,139 @@ check_int('ds: 2:2 put spread not misidentified as ratio',
           _make_row('Equity Option', 'PUT', -2, 21.0),
           _make_row('Equity Option', 'PUT',  2, 21.5),
       )), 'Put Debit Spread')
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 25. REGRESSION — Same-timestamp campaign close + covered-call cap-at-risk
+# ══════════════════════════════════════════════════════════════════════════════
+# Two bugs fixed in v26.11, pinned here so a future refactor can't reintroduce
+# them silently:
+#
+#   (a) Same-timestamp stock-exit + BTC: when an equity row and an option close
+#       share the exact order timestamp, the sort places Sort_Inst=0 before
+#       Sort_Inst=1.  Before the fix, build_campaigns processed the stock close
+#       first, sealed current → None, and dropped the BTC from the event log.
+#       The BTC then leaked into pure_options_pnl via the outside-window bucket.
+#       Fix: just_closed reference catches same-timestamp closing legs;
+#       pure_options_pnl now uses an inclusive end boundary (<= c.end_date).
+#
+#   (b) Covered-call capital-at-risk: _calculate_capital_risk fell through to
+#       the naked-short formula (max_strike × 100) for a short call held inside
+#       a wheel window, which massively overstated risk.  Fix: when inside a
+#       campaign window and no long-call leg, return abs(open_credit).
+#
+# Scenario modelled here is the real SOXS trade from the CSV that surfaced both
+# bugs: BTO 100 shares + STO call at the same timestamp, then SELL shares + BTC
+# at the same closing timestamp one day later.
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 25. Regression: same-timestamp close + covered-call cap-risk ──────────')
+
+def _make_soxs_df():
+    """Build a minimal DataFrame mirroring the SOXS wheel trade from the CSV.
+
+    Two timestamps, four rows: open (stock + call) and close (stock + call).
+    Both legs at each timestamp share the same Order # so the closed-trade
+    grouper treats the short call as one trade.  Quantities and totals match
+    the real CSV exactly so realized_pnl and pure_options_pnl assertions are
+    numerically meaningful.
+    """
+    rows = [
+        # Open — BTO 100 shares + STO 1 call at 19:43:20
+        dict(Date=pd.Timestamp('2026-06-04 19:43:20'), Type='Trade',
+             Action='BUY_TO_OPEN', Symbol='SOXS', Ticker='SOXS',
+             InstrumentType='Equity', Description='Bought 100 SOXS @ 5.12',
+             SubType='Buy to Open', Net_Qty_Row=100.0, Quantity=100.0,
+             Value=-512.0, Total=-512.08, Order_No=473211219,
+             CallOrPut=None, StrikePrice=None, ExpirationDate=None),
+        dict(Date=pd.Timestamp('2026-06-04 19:43:20'), Type='Trade',
+             Action='SELL_TO_OPEN', Symbol='SOXS  260717C00007000', Ticker='SOXS',
+             InstrumentType='Equity Option',
+             Description='Sold 1 SOXS 07/17/26 Call 7.00 @ 0.69',
+             SubType='Sell to Open', Net_Qty_Row=-1.0, Quantity=1.0,
+             Value=69.0, Total=67.87, Order_No=473211219,
+             CallOrPut='CALL', StrikePrice=7.0,
+             ExpirationDate=pd.Timestamp('2026-07-17')),
+        # Close — SELL 100 shares + BTC 1 call at 19:32:27 next day
+        dict(Date=pd.Timestamp('2026-06-05 19:32:27'), Type='Trade',
+             Action='SELL_TO_CLOSE', Symbol='SOXS', Ticker='SOXS',
+             InstrumentType='Equity', Description='Sold 100 SOXS @ 6.66',
+             SubType='Sell to Close', Net_Qty_Row=-100.0, Quantity=100.0,
+             Value=666.0, Total=665.88, Order_No=473670549,
+             CallOrPut=None, StrikePrice=None, ExpirationDate=None),
+        dict(Date=pd.Timestamp('2026-06-05 19:32:27'), Type='Trade',
+             Action='BUY_TO_CLOSE', Symbol='SOXS  260717C00007000', Ticker='SOXS',
+             InstrumentType='Equity Option',
+             Description='Bought 1 SOXS 07/17/26 Call 7.00 @ 1.47',
+             SubType='Buy to Close', Net_Qty_Row=1.0, Quantity=1.0,
+             Value=-147.0, Total=-147.12, Order_No=473670549,
+             CallOrPut='CALL', StrikePrice=7.0,
+             ExpirationDate=pd.Timestamp('2026-07-17')),
+    ]
+    out = pd.DataFrame(rows)
+    out = out.rename(columns={
+        'InstrumentType': 'Instrument Type',
+        'SubType':        'Sub Type',
+        'Order_No':       'Order #',
+        'CallOrPut':      'Call or Put',
+        'StrikePrice':    'Strike Price',
+        'ExpirationDate': 'Expiration Date',
+    })
+    return out
+
+_soxs_df = _make_soxs_df()
+
+# ── (a) Same-timestamp close: BTC must end up inside the campaign ──────────────
+_soxs_camps = build_campaigns(_soxs_df, 'SOXS', use_lifetime=False)
+check_int('SOXS regression: one closed campaign', len(_soxs_camps), 1)
+
+_camp = _soxs_camps[0]
+# premiums = STO credit + BTC debit = +67.87 − 147.12 = −79.25
+check('SOXS regression: campaign.premiums incl. BTC', _camp.premiums,      -79.25)
+check('SOXS regression: campaign.exit_proceeds',      _camp.exit_proceeds,  665.88)
+check('SOXS regression: campaign.total_cost',         _camp.total_cost,     512.08)
+# realized_pnl = exit_proceeds + premiums − total_cost = 665.88 − 79.25 − 512.08
+check('SOXS regression: realized_pnl matches hand-calc',
+      realized_pnl(_camp), 74.55)
+
+# BTC must appear in the campaign event log (4 events: Entry, STO, Exit, BTC)
+_event_types = [e['type'] for e in _camp.events]
+check_int('SOXS regression: campaign has 4 events', len(_camp.events), 4)
+check_int('SOXS regression: BTC event recorded in campaign',
+          sum(1 for t in _event_types if 'to close' in t.lower()), 1)
+
+# ── pure_options_pnl: BTC must NOT be double-counted in outside-window bucket ──
+# With the inclusive end boundary, the BTC (same timestamp as end_date) is
+# inside the campaign window, so the outside-window options total is exactly 0.
+check('SOXS regression: pure_options_pnl excludes campaign BTC',
+      pure_options_pnl(_soxs_df, 'SOXS', _soxs_camps), 0.00)
+
+# ── (b) Covered-call capital-at-risk uses premium, not max_strike × 100 ────────
+# build_closed_trades with campaign_windows passed: short call inside the
+# campaign window must classify as Covered Call and use abs(open_credit) as
+# capital at risk.  Without campaign_windows it falls through to the naked-
+# short path and uses strike × 100 — that's the regression guard for the
+# alternate code path.
+_camp_windows = {'SOXS': [(_camp.start_date, _camp.end_date)]}
+_soxs_ct = build_closed_trades(_soxs_df, campaign_windows=_camp_windows)
+
+check_int('SOXS regression: one closed trade row', len(_soxs_ct), 1)
+_row = _soxs_ct.iloc[0]
+check_int('SOXS regression: classified as Covered Call',
+          _row['Trade Type'] == 'Covered Call', True)
+check('SOXS regression: covered-call cap-at-risk = premium',
+      _row['Capital at Risk'], 67.87)
+# Net P/L is the raw cash flow on the option legs only (build_closed_trades
+# doesn't see the stock side): STO 67.87 + BTC −147.12 = −79.25.
+check('SOXS regression: closed-trade Net P/L', _row['Net P/L'], -79.25)
+
+# ── Regression guard: same trade with NO campaign window falls through to ─────
+# ── the naked-short formula (max_strike × mult).  Confirms we didn't break ────
+# ── the naked path while adding the covered-call short-circuit. ───────────────
+_naked_ct = build_closed_trades(_soxs_df, campaign_windows={})
+check('SOXS regression: no-campaign-window → naked-short cap-at-risk = strike×100',
+      _naked_ct.iloc[0]['Capital at Risk'], 700.0)
+check_int('SOXS regression: no-campaign-window → label not Covered',
+          _naked_ct.iloc[0]['Trade Type'] != 'Covered Call', True)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # GRAND TOTAL

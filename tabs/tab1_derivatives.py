@@ -16,7 +16,7 @@ from config import (
     INCOME_SUB_TYPES, DEPOSIT_SUB_TYPES,
     PAT_CLOSE, PAT_EXPIR, PAT_ASSIGN, PAT_EXERCISE, PAT_CLOSING,
     WHEEL_MIN_SHARES, LEAPS_DTE_THRESHOLD, ROLL_CHAIN_GAP_DAYS,
-    ANN_RETURN_CAP, COLOURS,
+    COLOURS,
     WIN_RATE_GREEN, WIN_RATE_ORANGE,
     DAILY_THETA_GREEN, DAILY_THETA_ORANGE,
 )
@@ -25,7 +25,7 @@ from ui_components import (
     identify_pos_type, translate_readable, format_cost_basis, detect_strategy,
     fmt_dollar, color_win_rate, color_pnl_cell,
     _pnl_chip, _cmp_block, _dte_chip,
-    _fmt_ann_ret, _style_ann_ret, _style_chain_row, _style_risk_row,
+    _style_chain_row, _style_risk_row,
     _color_cash_row, _color_cash_total,
     chart_layout, _badge_inline_style, render_position_card,
     color_daily_theta,
@@ -71,7 +71,7 @@ def render_tab1(
                          if total_credit_rcvd != 0 else 0.0)
 
         st.markdown(f'<span style="{_SECTION_LABEL}">Trade Quality</span>', unsafe_allow_html=True)
-        dm1, dm2, dm3, dm4, dm5, dm6, dm7, dm8 = st.columns(8)
+        dm1, dm2, dm3, dm4, dm5, dm6, dm7 = st.columns(7)
         dm1.metric('Win Rate',           '%.1f%%' % (credit_cdf['Won'].mean() * 100),
             help='% of credit trades closed at a profit, regardless of size.')
         dm2.metric('Median Capture %',   '%.1f%%' % credit_cdf['Capture %'].median(),
@@ -87,18 +87,17 @@ def render_tab1(
             ))
         dm4.metric('Median Days in Trade', '%.0f' % credit_cdf['Days Held'].median(),
             help='Typical number of days a position was held. Median is used rather than mean to reduce the effect of outliers.')
-        dm5.metric('Median Ann. Return', '%.0f%%' % credit_cdf['Ann Return %'].median(),
-            help='Typical annualised return on capital at risk, capped at ±%d%% to stop 0DTE trades producing astronomical figures. Treat with caution on small samples.' % ANN_RETURN_CAP)
-        dm6.metric('Med Premium/Day',    fmt_dollar(credit_cdf['Prem/Day'].median()),
+        dm5.metric('Med Premium/Day',    fmt_dollar(credit_cdf['Prem/Day'].median()),
             help='Median credit collected per day held, across individual trades. Measures theta efficiency per position.')
-        dm7.metric('Kept $/Day', fmt_dollar(total_net_pnl_closed / window_days),
+        dm6.metric('Kept $/Day', fmt_dollar(total_net_pnl_closed / window_days),
             delta='vs $%.2f gross/day' % (total_credit_rcvd / window_days), delta_color='normal',
             help='Net realized P/L divided by the number of calendar days in this window — what you actually kept per day after all buybacks and losses. Delta shows gross premium collected per day for comparison.')
         _med_daily_theta = credit_cdf['Daily θ %'].median()
-        dm8.metric('Med Daily θ %',
+        dm7.metric('Med Daily θ %',
             '%.2f%%' % _med_daily_theta if pd.notna(_med_daily_theta) else '—',
-            help='Median daily credit yield per unit of max risk (Prem/Day ÷ Capital at Risk × 100). '
-                 'Trade entry quality score — was the trade worth putting on at the time? '
+            help='Median daily credit yield at entry: credit collected ÷ DTE at open ÷ capital at risk × 100. '
+                 'Setup-quality metric — what theoretical theta rate did this trade buy at the moment I put it on? '
+                 'Uses DTE-at-open (not days-held) so closing early doesn\'t inflate it. '
                  'Green ≥ %.2f%%, orange ≥ %.2f%%.' % (DAILY_THETA_GREEN, DAILY_THETA_ORANGE))
 
         _winners = all_cdf[all_cdf['Net P/L'] > 0]['Net P/L']
@@ -295,9 +294,9 @@ def render_tab1(
             '**Win %%** colour-coded: green ≥ %d%%, orange ≥ %d%%, red below. '
             '**Premium Capture** = median %% of opening credit kept at close — TastyTrade targets 50%%. '
             '**P/L per DIT** = total P/L ÷ avg days in trade — theta efficiency per ticker. '
-            '**Med Ann Ret %%** capped at ±%d%% — ⚠ = capped value. '
+            '**Daily θ %%** = median entry yield (credit ÷ DTE-at-open ÷ capital) — setup quality. '
             '**Dim rows** = fewer than 3 trades, small sample size.'
-        ) % (WIN_RATE_GREEN, WIN_RATE_ORANGE, ANN_RETURN_CAP))
+        ) % (WIN_RATE_GREEN, WIN_RATE_ORANGE))
 
         # ── Slice closed_trades_df to the locally selected window ─────────────
         if _ticker_period == 'All Time':
@@ -345,7 +344,6 @@ def render_tab1(
             if _ticker_has_credit:
                 credit_by_ticker = _ticker_credit_cdf.groupby('Ticker').agg(
                     Med_Capture=('Capture %', 'median'),
-                    Med_Ann=('Ann Return %', 'median'),
                     Med_Daily_Theta=('Daily θ %', 'median'),
                     Total_Prem=('Net Premium', 'sum'),
                 ).round(2)
@@ -353,19 +351,18 @@ def render_tab1(
             else:
                 ticker_df = all_by_ticker.reset_index()
                 ticker_df['Med_Capture']     = None
-                ticker_df['Med_Ann']         = None
                 ticker_df['Med_Daily_Theta'] = None
                 ticker_df['Total_Prem']      = None
 
             ticker_df = ticker_df.sort_values('Total_PNL', ascending=False)
             ticker_df = ticker_df[[
                 'Ticker', 'W/L', 'Win_Rate', 'Total_PNL', 'Avg_Days',
-                'PnL_per_DTE', 'Med_Capture', 'Med_Ann', 'Med_Daily_Theta', 'Total_Prem'
+                'PnL_per_DTE', 'Med_Capture', 'Med_Daily_Theta', 'Total_Prem'
             ]]
             ticker_df.columns = [
                 'Ticker', 'W/L', 'Win %', 'P/L',
                 'Avg Days in Trade', 'P/L per DIT',
-                'Premium Capture', 'Ann Ret %', 'Daily θ %', 'Total Net Prem'
+                'Premium Capture', 'Daily θ %', 'Total Net Prem'
             ]
 
             def _style_ticker_row(row):
@@ -376,12 +373,6 @@ def render_tab1(
                     return ['color: rgba(200,200,200,0.35); font-style:italic'] * len(row)
                 return [''] * len(row)
 
-            def _style_ticker_ann_ret(col):
-                return [
-                    'color: #ffa500' if pd.notna(v) and abs(v) >= ANN_RETURN_CAP else ''
-                    for v in col
-                ]
-
             def _color_capture(val):
                 try:
                     v = float(val)
@@ -391,13 +382,6 @@ def render_tab1(
                 if v >= 25: return f'color: {COLOURS["orange"]}'
                 return f'color: {COLOURS["red"]}'
 
-            def _fmt_ann_ret_capped(v):
-                if not pd.notna(v):
-                    return '—'
-                if abs(v) >= ANN_RETURN_CAP:
-                    return '⚠ {:.0f}%'.format(v)
-                return '{:.0f}%'.format(v)
-
             st.dataframe(
                 ticker_df.style.format({
                     'Win %':            lambda x: '{:.1f}%'.format(x),
@@ -405,11 +389,9 @@ def render_tab1(
                     'Avg Days in Trade': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                     'P/L per DIT':      lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—',
                     'Premium Capture':  lambda v: '{:.1f}%'.format(v) if pd.notna(v) else '—',
-                    'Ann Ret %':        _fmt_ann_ret_capped,
                     'Daily θ %':        lambda v: '{:.2f}%'.format(v) if pd.notna(v) else '—',
                     'Total Net Prem':   lambda v: '${:.2f}'.format(v) if pd.notna(v) else '—',
                 }).bar(subset=['Win %'], color='rgba(88,166,255,0.18)', vmin=0, vmax=100)
-                 .apply(_style_ticker_ann_ret, subset=['Ann Ret %'])
                  .apply(_style_ticker_row, axis=1)
                  .map(color_win_rate, subset=['Win %'])
                  .map(color_pnl_cell, subset=['P/L'])

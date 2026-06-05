@@ -4,11 +4,11 @@
 
 # 📟 TastyMechanics
 
-A Streamlit dashboard for **theta and wheel strategy traders** on TastyTrade. Built around premium selling — short puts, covered calls, strangles, and the wheel — with metrics that matter for multi-day holds: capture %, annualised return, banked $/day, effective basis, and campaign tracking.
+A Streamlit dashboard for **theta and wheel strategy traders** on TastyTrade. Built around premium selling — short puts, covered calls, strangles, and the wheel — with metrics that matter for multi-day holds: capture %, daily theta yield, banked $/day, effective basis, and campaign tracking.
 
 Upload your CSV export and get a full breakdown of realized P/L, wheel campaigns, trade analytics, and portfolio health — all running locally or on Streamlit Community Cloud. Your data is never sent anywhere.
 
-> **Heads up for 0DTE traders:** the app works but some metrics (Ann Return %, Med Premium/Day, Wheel Campaigns) are less meaningful for same-day trades. 0DTE-specific analytics are on the roadmap.
+> **Heads up for 0DTE traders:** the app works but some metrics (Med Premium/Day, Wheel Campaigns) are less meaningful for same-day trades. 0DTE-specific analytics are on the roadmap.
 
 
 > **Personal project.** TastyMechanics is built around how I trade — wheel strategies, theta harvesting, and premium selling on TastyTrade. It works well for my account and my style. It may not fit yours out of the box, and that is intentional. If you trade differently — 0DTE, futures, spreads-heavy, non-US — the numbers may not tell the full story. You are welcome to fork the repo and customise it to match your trading style. The codebase is modular by design: analytics live in `mechanics.py`, display in `tabs/`, constants in `config.py`. Changing a metric or adding a new one is usually a small, contained change.
@@ -55,7 +55,7 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 - Period comparison card — current vs prior equivalent window with deltas
 
 **Derivatives Performance tab**
-- Premium selling scorecard: win rate, median capture %, median days held, annualised return, banked $/day, **Med Daily θ %** (entry quality score)
+- Premium selling scorecard: win rate, median capture %, median days held, median premium/day, banked $/day, **Med Daily θ %** (entry quality score — credit ÷ DTE-at-open ÷ capital)
 - Avg winner / loser, win/loss ratio, total fees and fees as % of P/L
 - Call vs Put performance table
 - Defined vs Undefined Risk breakdown by strategy
@@ -212,6 +212,13 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 ---
 
 ## Changelog
+
+**v26.11 — Scorecard cleanup: drop Median Ann Return, fix Daily θ %, covered call accounting** (2026-06-06)
+- **Dropped Median Ann. Return from the scorecard** — with a mixed weekly/swing book, more than half of credit trades were pegged at the ±500% cap, making the median equal to the cap and conveying no information. The per-trade Ann Ret % column remains on closed-trade tables for sortable inspection; only the aggregates (scorecard tile, per-ticker summary, HTML report) were removed.
+- **Daily θ % now uses DTE-at-open instead of days-held** — converts the metric from "what did I earn per day I held it" (which inflated when closing winners fast) into a setup-quality score: "at the moment I opened the trade, what theoretical theta yield was I buying per unit of capital?" Independent of close timing. Median Daily θ % is now the headline trade-quality number alongside Capture %.
+- **Covered call capital-at-risk** — `_calculate_capital_risk` now detects shorts opened inside a wheel campaign window and uses the option premium as the capital base, not `max_strike × 100`. The naked-call formula was misrepresenting covered calls as $700–$5,000 of standalone risk.
+- **Wheel campaign same-timestamp close** — a stock exit and option BTC sharing the exact order timestamp (sort order placed equity row before option row) caused the BTC to be dropped from the campaign event log and routed to the outside-window options bucket. A `just_closed` reference now captures it on the campaign side, and `pure_options_pnl` uses an inclusive end boundary to avoid double-counting. Visible bug: SOXS covered-call campaign was reporting +$221.67 instead of the correct +$74.55.
+- Test suite at **347 tests** (14 new synthetic-data regression checks pinning the same-timestamp close and covered-call cap-at-risk behaviour).
 
 **v26.10 — TastyTrade-style Date Range Picker** (2026-06-05)
 - Time Window selector in tabs 1, 2, 4, 5 replaced with a `st.popover` date-range picker matching TastyTrade's UI. Button shows the live date range (📅 01/06 → 06/06); clicking opens a panel with 10 presets (Today, Yesterday, 7/14/30/60/120 Days, Year to Date, All Time) on the left and a calendar on the right for **Custom** date ranges. Active preset highlighted. Custom mode introduces a user-chosen `end_date` respected throughout the window slice, equity P/L, prior-period comparison, and chart renders.

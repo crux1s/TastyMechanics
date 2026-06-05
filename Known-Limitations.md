@@ -33,7 +33,7 @@ All **Calendar Spread** variants (long/short, call/put) are labelled 'Calendar S
 Detected as a Jade Lizard but capital risk may be understated — max loss is on the call side, not the put side. Verify if you trade this structure.
 
 ### 0DTE trades
-P&L is correct. Ann Return %, Med Premium/Day, and Wheel Campaigns are less meaningful for same-day holds.
+P&L is correct. Med Premium/Day and Wheel Campaigns are less meaningful for same-day holds. The per-trade Ann Ret % column on the trade tables is also distorted (the `365 / days_held` extrapolation degenerates on short holds); it is no longer aggregated anywhere in the scorecard for that reason. Median Daily θ % remains valid because it now uses DTE-at-open as the divisor (entry-yield, independent of hold time).
 
 ---
 

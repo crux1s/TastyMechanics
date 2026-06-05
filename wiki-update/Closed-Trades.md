@@ -28,9 +28,9 @@ Each group is then matched:
 | Premium Rcvd | Total credit received (negative for debit trades) |
 | Net P/L | Premium received minus buyback cost |
 | Capture % | Net P&L ÷ Premium Received × 100 (blank for debit trades) |
-| Ann Return % | Net P&L ÷ Capital Risk × 365 ÷ Days Held × 100 (capped at ±500%) |
+| Ann Return % | Net P&L ÷ Capital Risk × 365 ÷ Days Held × 100 (capped at ±500%). Per-trade only — not aggregated anywhere, since the median degenerates on mixed weekly/swing books. |
 | Prem/Day | Premium Received ÷ Days Held (credit trades only) |
-| Daily θ % | Prem/Day ÷ Capital Risk × 100 — entry quality score: daily credit yield per unit of max risk (capped at 5%, credit trades only) |
+| Daily θ % | Premium Received ÷ DTE-at-open ÷ Capital Risk × 100 — entry-quality score: theoretical daily theta yield at the moment of opening, independent of close timing (capped at 5%, credit trades only) |
 | Capital Risk | Maximum potential loss (see below) |
 | Close Type | How the position was closed |
 | Won | True if Net P&L > 0 |
@@ -45,7 +45,7 @@ Capital Risk is used to compute Ann Return % and Daily θ %, and gives context f
 | Strategy | Capital Risk |
 |---|---|
 | Short Put | Strike × 100 |
-| Short Call (covered) | Share cost basis |
+| Short Call (covered, inside wheel window) | Premium received (stock already accounted for in the campaign) |
 | Spread (defined risk) | Width of spread × 100 − credit received |
 | Index options (SPX, XSP, NDX etc.) | Premium received (cash-secured not applicable) |
 | Iron Condor | Width of wider spread × 100 |
