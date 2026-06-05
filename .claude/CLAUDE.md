@@ -63,16 +63,18 @@ CSV bytes
 Strict one-way dependency chain — no module imports from above it:
 
 ```
-config.py           Constants, COLOURS palette, thresholds, known indexes
-models.py           Dataclasses — Campaign, AppData, ParsedData
-ingestion.py        CSV parsing — no Streamlit dependency
-mechanics.py        FIFO engine, campaign logic, trade classification
-ui_components.py    Formatters, colour functions, chart helpers
-market_data.py      Live price fetcher — yfinance wrapper, 5-min cache, opt-in only
-report.py           HTML report export — no Streamlit dependency
-tabs/landing.py     Landing page renderer (shown before CSV upload)
-tabs/tab0–tab5      One renderer per tab, imported by tastymechanics.py
-tastymechanics.py   Streamlit wiring — sidebar, cache, tab orchestration
+config.py              Constants, COLOURS palette, thresholds, known indexes
+models.py              Dataclasses — Campaign, AppData, ParsedData
+ingestion.py           CSV parsing — no Streamlit dependency
+mechanics.py           FIFO engine, campaign logic, trade classification
+ui_components.py       Formatters, colour functions, chart helpers
+market_data.py         Live price fetcher — yfinance wrapper, 5-min cache, opt-in only
+                       Also exposes bs_greeks() and returns iv/beta per ticker
+report.py              HTML report export — fintech dark theme, no Streamlit dependency
+position_snapshot.py   Plain-text position snapshot for AI review — no Streamlit dependency
+tabs/landing.py        Landing page renderer (shown before CSV upload)
+tabs/tab0–tab5         One renderer per tab, imported by tastymechanics.py
+tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 ```
 
 ---
@@ -101,6 +103,14 @@ tastymechanics.py   Streamlit wiring — sidebar, cache, tab orchestration
 
 **Strategy classifier labels** — `_classify_trade_type()` returns direction-aware butterfly labels: `'Long Call/Put Butterfly'` (buy wings, sell body) and `'Short Call/Put Butterfly'` (sell wings, buy body ×2). Iron Condor variants: `'Iron Butterfly'` (short legs share same ATM strike), `'Reverse Iron Butterfly'` (long legs share same ATM strike), `'Iron Condor'` (credit, short legs at different strikes), `'Reverse Iron Condor'` (debit). Both `_classify_trade_type()` and `_calculate_capital_risk()` use matching `is_butterfly` / `is_short_butterfly` flags — keep them in sync if either is changed.
 
+**Time window** — `TIME_OPTIONS` is a module-level constant in `tastymechanics.py` (10 presets). `_render_date_picker()` is a module-level helper using `st.popover` (requires Streamlit ≥ 1.31). In `main()`, `end_date` equals `latest_date` for all presets except Custom — all window slices, `calculate_windowed_equity_pnl()`, `_daily_pnl`, and tab render calls use `end_date` as the upper bound, not `latest_date`. The old `tw_tab1/2/4/5` session state keys and the pre-sync loop no longer exist.
+
+**market_data.py** — `fetch_live_prices()` returns `'iv'` (implied volatility) and `'beta'` per ticker alongside `last`/`prev_close`/`options`. Beta is computed from `yf.download()` 90-day rolling returns vs SPY — **do not use `yf.Ticker().info`** for beta, it is rate-limited and returns None silently. `bs_greeks(S,K,T,r,sigma,cp)` returns `{delta, gamma, theta, vega}` per-contract using pure `math` stdlib.
+
+**live_prices remap strips keys** — the remap loop in `tab0_open_positions.py` rebuilds the dict field-by-field. Any new key added to `fetch_live_prices()` output must be explicitly passed through or it is silently dropped. Current keys: `last`, `prev_close`, `options`, `beta`.
+
+**position_snapshot.py** — `build_position_snapshot()` takes `df_open`, `all_campaigns`, `all_cdf`, `credit_cdf`, `live_prices`, `latest_date`, and scalar P/L fields. Called from `tab0_open_positions.py` with the `live_prices` already fetched by the Live toggle (SPY always included via `| {'SPY'}` in `tickers_frozen`). Greeks are shown position-adjusted (short put → +Δ, −Γ, +θ, −ν) to match TastyTrade's convention.
+
 ---
 
 ## Important Files
@@ -120,6 +130,8 @@ tastymechanics.py   Streamlit wiring — sidebar, cache, tab orchestration
 - Don't embed trade classification in `build_closed_trades()` — use the pure helpers
 - Don't use `qty != 0` — use `abs(qty) > FIFO_EPSILON`
 - Don't add bullet point lists to prose responses — project owner prefers clean prose
+- Don't use `yf.Ticker().info` for beta — it is rate-limited; use `yf.download()` rolling returns
+- Don't add new keys to `fetch_live_prices()` return dict without also passing them through the remap loop in `tab0_open_positions.py`
 - Don't add `.iloc[0]` without an empty guard
 - Don't implement external file formats by guessing — ask for a real sample first (column names, ordering, and value formats can differ from what seems obvious)
 
@@ -134,6 +146,8 @@ tastymechanics.py   Streamlit wiring — sidebar, cache, tab orchestration
 **Features (parked):**
 - 0DTE support — quick wins, new metrics, strategy mode selector
 - Scroll-to on Wheel Campaign table — not achievable in Streamlit
+- Beta-weighted delta accuracy — yfinance rolling beta is a reasonable approximation; TastyTrade API would give exact real-time betas and account-level NLV/BP
+- IVR (IV Rank) — requires 52-week IV history; not available from yfinance; TastyTrade API only
 
 ---
 
