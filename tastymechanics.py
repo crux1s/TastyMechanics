@@ -222,7 +222,7 @@ import hashlib as _hashlib
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.9"
+APP_VERSION = "v26.10"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 
@@ -265,6 +265,62 @@ def _remap_live_prices(raw_prices: dict, df_open: pd.DataFrame) -> dict:
         result[ticker] = {'last': data['last'], 'prev_close': data['prev_close'],
                           'options': opts_remapped}
     return result
+
+
+# ── Time-window constants & popover picker ───────────────────────────────────
+
+TIME_OPTIONS = [
+    'Today', 'Yesterday',
+    '7 Days', '14 Days', '30 Days', '60 Days', '120 Days',
+    'Year to Date', 'All Time',
+    'Custom',
+]
+
+
+def _render_date_picker(tab_key: str, win_start_str: str, win_end_str: str,
+                        min_date, max_date) -> None:
+    """Popover date-range picker — replaces the old st.selectbox in each tab header.
+
+    Renders a button showing the active range (e.g. '📅 01/06/2026 → 06/06/2026').
+    Clicking it opens a popup with preset options on the left and a calendar on
+    the right (only visible when Custom is selected).
+    """
+    with st.popover(f'📅 {win_start_str} → {win_end_str}', use_container_width=True):
+        col_l, col_r = st.columns([1, 1])
+        with col_l:
+            st.caption('Period')
+            for opt in TIME_OPTIONS:
+                is_active = st.session_state.get('tw_val') == opt
+                st.button(
+                    opt,
+                    key=f'_tw_btn_{opt}_{tab_key}',
+                    type='primary' if is_active else 'secondary',
+                    use_container_width=True,
+                    on_click=lambda o=opt: st.session_state.update({'tw_val': o}),
+                )
+        with col_r:
+            if st.session_state.get('tw_val') == 'Custom':
+                st.caption('Custom range')
+                _cstart = st.session_state.get('tw_custom_start', min_date)
+                _cend   = st.session_state.get('tw_custom_end',   max_date)
+                # date_input wants Python date objects
+                if hasattr(_cstart, 'date'):
+                    _cstart = _cstart.date()
+                if hasattr(_cend, 'date'):
+                    _cend = _cend.date()
+                dates = st.date_input(
+                    'range',
+                    value=(_cstart, _cend),
+                    min_value=min_date,
+                    max_value=max_date,
+                    label_visibility='collapsed',
+                    key=f'_tw_custom_dates_{tab_key}',
+                )
+                if isinstance(dates, (list, tuple)) and len(dates) == 2:
+                    st.session_state['tw_custom_start'] = pd.Timestamp(dates[0])
+                    st.session_state['tw_custom_end']   = pd.Timestamp(dates[1])
+            else:
+                st.caption('Select **Custom**\nfor a specific\ndate range.')
 
 
 def main():
@@ -658,44 +714,63 @@ def main():
                 })
 
     # ── Window-dependent slices (re-run on every window change, fast) ─────────────
-    # ── Time window selector — top right ──────────────────────────────────────────
-    time_options = ['YTD', 'Last 7 Days', 'Last Month', 'Last 3 Months', 'Half Year', '1 Year', 'All Time']
+    # ── Time window session state ─────────────────────────────────────────────────
     if 'tw_val' not in st.session_state:
         st.session_state['tw_val'] = 'All Time'
+    if 'tw_custom_start' not in st.session_state:
+        st.session_state['tw_custom_start'] = latest_date - timedelta(days=30)
+    if 'tw_custom_end' not in st.session_state:
+        st.session_state['tw_custom_end'] = latest_date
     selected_period = st.session_state['tw_val']
 
     # Map each period label to the corresponding start_date.
     # lambdas are evaluated lazily so latest_date and df are captured at call time.
     _WINDOW_START = {
-        'All Time':       lambda: df['Date'].min(),
-        'YTD':            lambda: pd.Timestamp(latest_date.year, 1, 1),
-        'Last 7 Days':    lambda: latest_date - timedelta(days=7),
-        'Last Month':     lambda: latest_date - timedelta(days=30),
-        'Last 3 Months':  lambda: latest_date - timedelta(days=90),
-        'Half Year':      lambda: latest_date - timedelta(days=182),
-        '1 Year':         lambda: latest_date - timedelta(days=365),
+        'Today':         lambda: latest_date,
+        'Yesterday':     lambda: latest_date - timedelta(days=1),
+        '7 Days':        lambda: latest_date - timedelta(days=7),
+        '14 Days':       lambda: latest_date - timedelta(days=14),
+        '30 Days':       lambda: latest_date - timedelta(days=30),
+        '60 Days':       lambda: latest_date - timedelta(days=60),
+        '120 Days':      lambda: latest_date - timedelta(days=120),
+        'Year to Date':  lambda: pd.Timestamp(latest_date.year, 1, 1),
+        'All Time':      lambda: df['Date'].min(),
+        'Custom':        lambda: pd.Timestamp(st.session_state['tw_custom_start']),
     }
+    assert set(_WINDOW_START.keys()) == set(TIME_OPTIONS), (
+        'TIME_OPTIONS and _WINDOW_START are out of sync — '
+        f'missing: {set(TIME_OPTIONS) - set(_WINDOW_START.keys())}'
+    )
     start_date = _WINDOW_START.get(selected_period, lambda: df['Date'].min())()
-
     start_date = max(start_date, df['Date'].min())
 
-    df_window = df[df['Date'] >= start_date].copy()
+    # Custom mode has a user-chosen end date; all other modes end at latest_date.
+    if selected_period == 'Custom':
+        end_date = pd.Timestamp(st.session_state.get('tw_custom_end', latest_date))
+        end_date = min(end_date, latest_date)   # can't exceed the CSV's last date
+    else:
+        end_date = latest_date
+
+    df_window = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)].copy()
     window_label = '🗓 Window: %s → %s (%s)' % (
-        start_date.strftime('%d/%m/%Y'), latest_date.strftime('%d/%m/%Y'), selected_period)
+        start_date.strftime('%d/%m/%Y'), end_date.strftime('%d/%m/%Y'), selected_period)
 
     st.caption('📡 %s UTC  ·  📅 %s → %s  (%s)' % (
         latest_date.strftime('%d/%m/%Y %H:%M'),
         start_date.strftime('%d/%m/%Y'),
-        latest_date.strftime('%d/%m/%Y'),
+        end_date.strftime('%d/%m/%Y'),
         selected_period))
 
-    window_trades_df = closed_trades_df[closed_trades_df['Close Date'] >= start_date].copy() \
-        if not closed_trades_df.empty else pd.DataFrame()
+    window_trades_df = closed_trades_df[
+        (closed_trades_df['Close Date'] >= start_date) &
+        (closed_trades_df['Close Date'] <= end_date)
+    ].copy() if not closed_trades_df.empty else pd.DataFrame()
 
     # Slice the cached all-time daily P/L series to the current window
     _daily_pnl_all = get_daily_pnl(df, _file_hash)
     _daily_pnl     = _daily_pnl_all[
-        _daily_pnl_all['Date'] >= start_date
+        (_daily_pnl_all['Date'] >= start_date) &
+        (_daily_pnl_all['Date'] <= end_date)
     ].copy()
 
     # ── Windowed P/L (respects time window selector) ──────────────────────────────
@@ -707,13 +782,13 @@ def main():
     _w_opts = df_window[df_window['Instrument Type'].isin(OPT_TYPES) &
                         (df_window['Type'].isin(TRADE_TYPES))]
 
-    _eq_pnl       = calculate_windowed_equity_pnl(df, start_date)
+    _eq_pnl       = calculate_windowed_equity_pnl(df, start_date, end_date=end_date)
     _w_div_int    = df_window[df_window['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
 
     window_realized_pnl = _w_opts['Total'].sum() + _eq_pnl + _w_div_int
 
     # ── Prior period P/L (for WoW / MoM comparison card) ─────────────────────────
-    _window_span  = latest_date - start_date
+    _window_span  = end_date - start_date
     _prior_end    = start_date
     _prior_start  = _prior_end - _window_span
     _df_prior     = df[(df['Date'] >= _prior_start) & (df['Date'] < _prior_end)].copy()
@@ -731,7 +806,8 @@ def main():
     current_period_trades = 0
     if not closed_trades_df.empty:
         current_period_trades = closed_trades_df[
-            closed_trades_df['Close Date'] >= start_date
+            (closed_trades_df['Close Date'] >= start_date) &
+            (closed_trades_df['Close Date'] <= end_date)
         ].shape[0]
 
     # Income
@@ -750,9 +826,9 @@ def main():
 
     # ── Window label helper — used in section titles throughout ───────────────────
     _win_start_str = start_date.strftime('%d/%m/%Y')
-    _win_end_str   = latest_date.strftime('%d/%m/%Y')
-    _win_days_str  = (f', {(latest_date - start_date).days + 1}d'
-                      if selected_period == 'YTD' else '')
+    _win_end_str   = end_date.strftime('%d/%m/%Y')
+    _win_days_str  = (f', {(end_date - start_date).days + 1}d'
+                      if selected_period == 'Year to Date' else '')
     _win_label     = (f'<span style="font-size:0.75rem;font-weight:400;color:' + COLOURS['blue'] + ';'
                       f'letter-spacing:0.02em;margin-left:8px;">'
                       f'{_win_start_str} → {_win_end_str} ({selected_period}{_win_days_str})</span>')
@@ -793,7 +869,7 @@ def main():
 
     st.markdown(f'### 📊 Portfolio Overview {_win_label}', unsafe_allow_html=True)
     _is_all_time    = selected_period == 'All Time'
-    _is_short_window = selected_period in ['Last 7 Days', 'Last Month', 'Last 3 Months']
+    _is_short_window = selected_period in ['Today', 'Yesterday', '7 Days', '14 Days', '30 Days']
     _pnl_display    = total_realized_pnl if _is_all_time else window_realized_pnl
     if net_deposited > 0:
         _ror_display = _pnl_display / net_deposited * 100
@@ -1010,11 +1086,6 @@ def main():
             st.caption('Upload data to enable report export.')
 
     # ── TABS ───────────────────────────────────────────────────────────────────────
-    # Keep all in-tab selectors visually in sync. Must happen before widgets are
-    # rendered — Streamlit ignores `index=` once a key exists in session state.
-    for _tw_k in ('tw_tab1', 'tw_tab2', 'tw_tab4', 'tw_tab5'):
-        st.session_state[_tw_k] = st.session_state['tw_val']
-
     tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
         '📡 Open Positions',
         '📈 Derivatives Performance',
@@ -1032,33 +1103,32 @@ def main():
         capital_deployed=capital_deployed,
         open_premiums_banked=open_premiums_banked,
     )
+    _df_min_date = df['Date'].min().date()
+    _latest_date = latest_date.date()
     with tab1:
         with st.columns([4, 1])[1]:
-            st.selectbox('Time Window', time_options,
-                         key='tw_tab1', label_visibility='visible',
-                         on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab1']}))
+            _render_date_picker('tab1', _win_start_str, _win_end_str, _df_min_date, _latest_date)
         render_tab1(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
-                    df_window, start_date, latest_date, window_label,
+                    df_window, start_date, end_date, window_label,
                     _win_label, _win_suffix)
     with tab2:
         with st.columns([4, 1])[1]:
-            st.selectbox('Time Window', time_options,
-                         key='tw_tab2', label_visibility='visible',
-                         on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab2']}))
+            _render_date_picker('tab2', _win_start_str, _win_end_str, _df_min_date, _latest_date)
         render_tab2(closed_trades_df, all_cdf, credit_cdf, has_credit, has_data,
                     df_window, _win_label, _win_suffix, _win_start_str, _win_end_str)
     with tab3: render_tab3(_d_camp.all_campaigns, df, latest_date, start_date, use_lifetime, _d.capital_deployed)
     with tab4:
         with st.columns([4, 1])[1]:
-            st.selectbox('Time Window', time_options,
-                         key='tw_tab4', label_visibility='visible',
-                         on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab4']}))
-        if selected_period != 'All Time' and not _df_prior.empty:
+            _render_date_picker('tab4', _win_start_str, _win_end_str, _df_min_date, _latest_date)
+        if selected_period != 'All Time' and _window_span.days > 0 and not _df_prior.empty:
             _pnl_delta  = _pnl_display - prior_period_pnl
-            _period_lbl = selected_period.replace('Last ', '').replace('YTD', 'Year-to-date')
+            _period_lbl = selected_period.replace('Year to Date', 'year-to-date').lower()
             _curr_wr, _prev_wr = 0.0, 0.0
             if not closed_trades_df.empty:
-                _cw = closed_trades_df[closed_trades_df['Close Date'] >= start_date]
+                _cw = closed_trades_df[
+                    (closed_trades_df['Close Date'] >= start_date) &
+                    (closed_trades_df['Close Date'] <= end_date)
+                ]
                 _pw = closed_trades_df[(closed_trades_df['Close Date'] >= _prior_start) &
                                        (closed_trades_df['Close Date'] < _prior_end)]
                 _curr_wr = _cw['Won'].mean() * 100 if not _cw.empty else 0.0
@@ -1083,14 +1153,12 @@ def main():
             )
         render_tab4(all_campaigns, df, _daily_pnl, _daily_pnl_all,
                     pure_options_tickers, pure_opts_per_ticker,
-                    capital_deployed, start_date, latest_date,
+                    capital_deployed, start_date, end_date,
                     _is_all_time, selected_period, _win_label, _win_suffix,
                     use_lifetime)
     with tab5:
         with st.columns([4, 1])[1]:
-            st.selectbox('Time Window', time_options,
-                         key='tw_tab5', label_visibility='visible',
-                         on_change=lambda: st.session_state.update({'tw_val': st.session_state['tw_tab5']}))
+            _render_date_picker('tab5', _win_start_str, _win_end_str, _df_min_date, _latest_date)
         render_tab5(df_window, total_deposited, total_withdrawn,
                     div_income, int_net, _win_label)
 

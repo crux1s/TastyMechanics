@@ -12,8 +12,6 @@ Nothing active right now.
 
 ## UX Improvements
 
-- **Duplicate date range selector** — add a compact time window dropdown inline near the top of each tab (or at minimum tabs 1, 2, 4) so users don't have to scroll all the way to the top to change the window. The sidebar selector remains the source of truth — the inline one just mirrors/syncs it via `st.session_state`. Medium priority.
-
 ---
 
 ## 0DTE Support

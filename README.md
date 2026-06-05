@@ -19,7 +19,7 @@ Upload your CSV export and get a full breakdown of realized P/L, wheel campaigns
 
 ![Welcome Screen](https://github.com/crux1s/TastyMechanics/blob/main/docs/SS.png?raw=true)
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Streamlit](https://img.shields.io/badge/streamlit-1.30%2B-red) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Streamlit](https://img.shields.io/badge/streamlit-1.31%2B-red) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 <a href="https://www.buymeacoffee.com/Cruxis" target="_blank">
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="45">
@@ -46,7 +46,7 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 - Strategy detection covers Iron Condor, Reverse Iron Condor, Iron Butterfly, Reverse Iron Butterfly, Jade Lizard, Big Lizard, Short Strangle, Risk Reversal, vertical spreads, butterflies, calendars, covered structures
 - Expiry alert strip — all options expiring within 21 days, colour-coded by urgency
 - Wheel Campaign basis strip — cost-basis summary per active campaign
-- CSV export button for the full open positions list
+- **Position Snapshot** download button — generates a plain-text snapshot with live marks, IV, Black-Scholes Greeks (Δ, Γ, θ, ν), OTM/ITM distance, open P/L, and portfolio-level metrics (net Δ/Γ/θ/ν, beta-weighted delta to SPY) ready to paste into any LLM for a position review
 
 **Portfolio Overview**
 - Realized P/L, Return on Capital, Capital Efficiency Score (annualised)
@@ -89,10 +89,9 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 - Full income and cash movement log with colour-coded row types
 
 **HTML Report Export**
-- Download button in sidebar generates a self-contained dark-theme HTML file
-- Includes: Portfolio Overview scorecard, Options Trading scorecard (credit trades only), equity curve, weekly/monthly candle charts, performance by ticker table
-- Reflects the currently selected time window
-- No external dependencies — Plotly charts embedded via CDN
+- Download button in sidebar generates a self-contained fintech dark-theme HTML file (`#111827` bg, teal brand, Inter font)
+- Includes: Portfolio Overview (9 KPI cards including Capital Deployed and Closed Wheel P/L), Options scorecard with Med Daily θ %, equity curve, candle charts, Closed Wheel Campaigns table, Performance by Ticker table
+- Reflects the currently selected time window; no external dependencies
 
 ---
 
@@ -102,7 +101,7 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 
 ```
 python >= 3.10
-streamlit >= 1.30
+streamlit >= 1.31
 pandas >= 2.0
 plotly >= 5.0
 yfinance >= 0.2   # optional — only required for live market prices
@@ -213,6 +212,17 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 ---
 
 ## Changelog
+
+**v26.10 — TastyTrade-style Date Range Picker** (2026-06-05)
+- Time Window selector in tabs 1, 2, 4, 5 replaced with a `st.popover` date-range picker matching TastyTrade's UI. Button shows the live date range (📅 01/06 → 06/06); clicking opens a panel with 10 presets (Today, Yesterday, 7/14/30/60/120 Days, Year to Date, All Time) on the left and a calendar on the right for **Custom** date ranges. Active preset highlighted. Custom mode introduces a user-chosen `end_date` respected throughout the window slice, equity P/L, prior-period comparison, and chart renders.
+
+**v26.9 — Position Snapshot, Fintech Report Theme & Closed Campaign Tests** (2026-06-03)
+- **Position Snapshot** — replaces the AI Review Prompt. ⬇️ Snapshot button in the Open Positions tab downloads a plain-text file with live marks, IV, Black-Scholes Greeks (position-adjusted Δ/Γ/θ/ν), OTM/ITM distance, open P/L, gross vs net unrealised on wheel campaigns (showing premium offset explicitly), standalone equity positions, condensed historical scorecard, and portfolio-level Greeks summary including beta-weighted delta to SPY (computed from 90-day rolling returns via `yf.download()`).
+- **HTML report fintech theme** — complete visual overhaul: `#111827` background, `#1F2937` cards, teal brand mark, Inter font (Google CDN), pill badges, teal row hover. New sections: Closed Wheel Campaigns table, Capital Deployed + Closed Wheel P/L in Portfolio Overview (9 cards), Med Daily θ % in scorecard.
+- **Closed wheel campaign verification** — first real-data test of a fully closed campaign (ACHR: assigned Dec 2025, sold May 2026, net −$78.90 over full cycle).
+- **Account Interest row** in Per-Ticker P/L table — debit/credit interest not tied to a specific ticker now appears as an `Account / 💳 Interest` row so the table total matches the Portfolio Overview.
+- **Capital Deployed toggle fix** — House Money toggle no longer changes the Capital Deployed figure in the Wheel Campaigns tab.
+- Test suite at **333 tests**.
 
 **v26.8 — Daily θ %, Open Positions Enhancements & Fixes** (2026-05-12)
 - **Daily θ % metric** — new trade entry quality score: `Prem/Day ÷ Capital at Risk × 100`. Answers "was this trade worth putting on?" at the time of entry, regardless of how it ended. Appears in the Premium Selling Scorecard (Tab 1, 8th card), Performance by Ticker table, and Full Closed Trade Log. Coloured green (≥ 0.10%/day), orange (≥ 0.05%/day), red below — capped at 5%/day to suppress 0DTE distortion.
