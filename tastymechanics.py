@@ -311,8 +311,8 @@ def _render_date_picker(tab_key: str, win_start_str: str, win_end_str: str,
                 dates = st.date_input(
                     'range',
                     value=(_cstart, _cend),
-                    min_value=min_date if isinstance(min_date, type(_cstart)) else min_date,
-                    max_value=max_date if isinstance(max_date, type(_cend))   else max_date,
+                    min_value=min_date,
+                    max_value=max_date,
                     label_visibility='collapsed',
                     key=f'_tw_custom_dates_{tab_key}',
                 )
@@ -735,8 +735,12 @@ def main():
         '120 Days':      lambda: latest_date - timedelta(days=120),
         'Year to Date':  lambda: pd.Timestamp(latest_date.year, 1, 1),
         'All Time':      lambda: df['Date'].min(),
-        'Custom':        lambda: pd.Timestamp(st.session_state.get('tw_custom_start', df['Date'].min())),
+        'Custom':        lambda: pd.Timestamp(st.session_state['tw_custom_start']),
     }
+    assert set(_WINDOW_START.keys()) == set(TIME_OPTIONS), (
+        'TIME_OPTIONS and _WINDOW_START are out of sync — '
+        f'missing: {set(TIME_OPTIONS) - set(_WINDOW_START.keys())}'
+    )
     start_date = _WINDOW_START.get(selected_period, lambda: df['Date'].min())()
     start_date = max(start_date, df['Date'].min())
 
@@ -1116,7 +1120,7 @@ def main():
     with tab4:
         with st.columns([4, 1])[1]:
             _render_date_picker('tab4', _win_start_str, _win_end_str, _df_min_date, _latest_date)
-        if selected_period != 'All Time' and not _df_prior.empty:
+        if selected_period != 'All Time' and _window_span.days > 0 and not _df_prior.empty:
             _pnl_delta  = _pnl_display - prior_period_pnl
             _period_lbl = selected_period.replace('Year to Date', 'year-to-date').lower()
             _curr_wr, _prev_wr = 0.0, 0.0
