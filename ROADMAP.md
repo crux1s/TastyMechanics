@@ -17,7 +17,7 @@ Nothing active right now.
 ## 0DTE Support
 
 ### Quick wins (existing tabs)
-- Suppress `Ann Return %` when median days held < 2 — replace metric card with a note explaining why
+- ~~Suppress `Ann Return %` when median days held < 2~~ — done v26.11: Median Ann. Return removed entirely (was degenerate on mixed weekly/swing books, not just 0DTE; per-trade column kept)
 - Suppress `Med Premium/Day` when median hold < 1 day — same reasoning
 - Add a callout banner when >50% of closed trades are 0DTE
 

@@ -330,9 +330,10 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
         .to_dict()
     )
 
-    campaigns: list               = []
-    current:   Optional[Campaign] = None
-    running_shares                = 0.0
+    campaigns:    list               = []
+    current:      Optional[Campaign] = None
+    just_closed:  Optional[Campaign] = None  # last campaign sealed this iteration
+    running_shares                   = 0.0
 
     for row in t.itertuples(index=False):
         inst     = str(row.Instrument_Type)
@@ -381,6 +382,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
         if is_share_row(inst) and qty >= WHEEL_MIN_SHARES:
             pps = abs(total) / qty
             if running_shares < FIFO_EPSILON:
+                just_closed = None  # new entry invalidates prior just_closed reference
                 # New campaign entry — check if arrival was via put assignment
                 assignment_premium, assignment_events = _find_assignment_premium(t, row)
                 entry_label = 'Bought %.0f @ $%.2f/sh%s' % (
@@ -430,6 +432,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                     current.end_date = row.Date
                     current.status   = 'closed'
                     campaigns.append(current)
+                    just_closed    = campaigns[-1]
                     current        = None
                     running_shares = 0.0
                 else:
@@ -437,18 +440,30 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                     current.blended_basis = current.total_cost / running_shares
 
         # ── Option premium ─────────────────────────────────────────────────
-        elif is_option_row(inst) and current is not None:
-            if row.Date >= current.start_date:
-                current.premiums += total
-                current.events.append({'date': row.Date, 'type': sub_type,
+        elif is_option_row(inst):
+            # When a stock exit and option close share the same order/timestamp,
+            # Sort_Inst=0 (equity) processes before Sort_Inst=1 (option), sealing
+            # current → None before the BTC is reached.  Route those same-timestamp
+            # closes into just_closed so the campaign P/L stays complete.
+            _is_close = 'to open' not in sub_type.lower()
+            target = current if current is not None else (
+                just_closed
+                if (just_closed is not None
+                    and _is_close
+                    and row.Date == just_closed.end_date)
+                else None
+            )
+            if target is not None and row.Date >= target.start_date:
+                target.premiums += total
+                target.events.append({'date': row.Date, 'type': sub_type,
                     'detail': str(row.Description)[:60], 'cash': total})
                 # Detect orphaned close: a non-open leg whose STO predates the
                 # campaign start. The opening credit sits in pure_options_pnl;
                 # only the closing debit lands here, creating a hidden drag.
-                if 'to open' not in sub_type.lower():
+                if _is_close:
                     _sto = _sto_dates.get(str(row.Symbol))
-                    if _sto is not None and _sto < current.start_date:
-                        current.pre_campaign_close_net += total
+                    if _sto is not None and _sto < target.start_date:
+                        target.pre_campaign_close_net += total
 
         # ── Dividend ───────────────────────────────────────────────────────
         elif sub_type == SUB_DIVIDEND and current is not None:
@@ -558,10 +573,12 @@ def pure_options_pnl(df: pd.DataFrame, ticker: str, campaigns: list[Campaign]) -
     End depends on whether the campaign is closed or still open:
 
       Closed campaign (c.end_date is set):
-        End is *exclusive* (< end_date).  The end_date is the share-sale date.
-        An option that closes on that exact date is after the campaign has ended
-        and must not be counted as campaign premium — it belongs in the
-        outside-window bucket.  Using <= would double-count it.
+        End is *inclusive* (<= end_date).  Options that close on the same
+        timestamp as the stock sale belong to the campaign (same-order BTC
+        plus stock close share the exact end_date timestamp).  build_campaigns()
+        now routes those same-timestamp closes into campaign.premiums via the
+        just_closed reference, so using <= here keeps the two sides in sync
+        and avoids double-counting the BTC in both campaign and pure_options.
 
       Open campaign (c.end_date is None):
         No upper bound is applied.  Options from start_date onwards are inside
@@ -574,8 +591,8 @@ def pure_options_pnl(df: pd.DataFrame, ticker: str, campaigns: list[Campaign]) -
     for c in campaigns:
         s = c.start_date
         if c.end_date is not None:
-            # Closed campaign — exclusive end: option on sale date is outside
-            in_any_window |= (dates >= s) & (dates < c.end_date)
+            # Closed campaign — inclusive end: option on sale date is inside
+            in_any_window |= (dates >= s) & (dates <= c.end_date)
         else:
             # Open campaign — no upper bound: all options from start are inside
             in_any_window |= (dates >= s)
@@ -749,6 +766,8 @@ def _calculate_capital_risk(
     is_credit: bool,
     ticker: str,
     known_indexes: set,
+    campaign_windows: Optional[dict] = None,
+    open_date: Optional[pd.Timestamp] = None,
 ) -> float:
     """
     Pure function — computes Capital at Risk for a closed trade group.
@@ -832,6 +851,17 @@ def _calculate_capital_risk(
         else:
             return max(w_put - abs(open_credit), 1) if is_credit else max(abs(open_credit), 1)
 
+    # ── Covered by wheel stock ─────────────────────────────────────────────────
+    # A short call (no long call leg) opened while holding shares in a wheel
+    # campaign carries no additional capital beyond the stock position already
+    # tracked in the campaign.  Use the premium as the capital proxy so that
+    # Capture% and Ann Return reflect option-level risk, not naked-call strike.
+    if campaign_windows is not None and open_date is not None and is_credit:
+        _windows = campaign_windows.get(ticker, [])
+        if any(s <= open_date <= e for s, e in _windows):
+            if has_sc and not has_lc:
+                return max(abs(open_credit), 1)
+
     # ── Naked short ────────────────────────────────────────────────────────────
     ticker_upper = ticker.upper().split()[0]
     if ticker_upper in known_indexes:
@@ -897,6 +927,7 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
         )
         capital_risk = _calculate_capital_risk(
             grp, opens, is_credit, ticker, KNOWN_INDEXES,
+            campaign_windows=campaign_windows, open_date=open_date,
         )
 
         try:
@@ -944,8 +975,14 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
             'Ann Return %': max(min(net_pnl / capital_risk * 365 / days_held * 100, ANN_RETURN_CAP), -ANN_RETURN_CAP)
                 if capital_risk > 0 else None,
             'Prem/Day': open_credit / days_held if is_credit else None,  # credit trades only
-            'Daily θ %': min(open_credit / days_held / capital_risk * 100, DAILY_THETA_CAP)
-                if (is_credit and capital_risk > 0) else None,
+            # Daily θ %: entry-quality metric — credit collected per DAY OF INTENDED RISK,
+            # divided by capital at risk.  Uses DTE at open rather than days_held so that
+            # closing winners fast doesn't artificially inflate it.  Answers "at the
+            # moment I opened this, what was the theoretical theta yield I was buying?"
+            # Independent of close timing — a 45-DTE put paying 0.3%/day stays 0.3%/day
+            # whether held 1 day or 30.
+            'Daily θ %': min(open_credit / max(dte_open, 1) / capital_risk * 100, DAILY_THETA_CAP)
+                if (is_credit and capital_risk > 0 and dte_open is not None) else None,
             'Won': net_pnl > 0, 'DTE at Open': dte_open, 'Close Reason': close_type,
             '50% Target': round(open_credit * 0.50, 2) if is_credit else None,
             'Expiration': expiry_date,

@@ -28,7 +28,7 @@ Always run after any change:
 PYTHONIOENCODING=utf-8 python3 test_tastymechanics.py
 ```
 
-Expected: `333 tests | 333 passed | 0 failed` (24 sections)
+Expected: `347 tests | 347 passed | 0 failed` (25 sections)
 
 The `PYTHONIOENCODING=utf-8` prefix is required on Windows — omitting it causes a `charmap` codec error on the Unicode characters in test output.
 
@@ -103,6 +103,12 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 **Strategy classifier labels** — `_classify_trade_type()` returns direction-aware butterfly labels: `'Long Call/Put Butterfly'` (buy wings, sell body) and `'Short Call/Put Butterfly'` (sell wings, buy body ×2). Iron Condor variants: `'Iron Butterfly'` (short legs share same ATM strike), `'Reverse Iron Butterfly'` (long legs share same ATM strike), `'Iron Condor'` (credit, short legs at different strikes), `'Reverse Iron Condor'` (debit). Both `_classify_trade_type()` and `_calculate_capital_risk()` use matching `is_butterfly` / `is_short_butterfly` flags — keep them in sync if either is changed.
 
+**Covered call capital at risk** — `_calculate_capital_risk()` takes optional `campaign_windows` and `open_date`. When a short call (no long call leg) opens inside an active wheel window, capital at risk = `abs(open_credit)` not `max_strike × 100` — the stock already sits in the campaign and isn't standalone risk. Pass both args through from `build_closed_trades()`; the call site already does.
+
+**Daily θ % uses DTE-at-open, not days-held** — formula is `open_credit / max(dte_open, 1) / capital_risk * 100`, capped at `DAILY_THETA_CAP`. This is a setup-quality / entry-yield metric. Using `days_held` would make closing winners fast inflate the number, which was the original bug. `Ann Return %` (which still uses days-held) is kept on the per-trade row but is no longer aggregated anywhere — its medians are mathematically degenerate on mixed-duration books.
+
+**Campaign same-timestamp close** — when a stock exit and option BTC share the exact order timestamp, `Sort_Inst=0` processes the equity row first and seals `current → None`, so naively the BTC won't see a campaign. `build_campaigns()` keeps a `just_closed` reference and routes same-timestamp closing legs into it. `pure_options_pnl()` uses an **inclusive** end boundary (`<= c.end_date`) so the same row isn't double-counted in the outside-window bucket. If you change either side, change both.
+
 **Time window** — `TIME_OPTIONS` is a module-level constant in `tastymechanics.py` (10 presets). `_render_date_picker()` is a module-level helper using `st.popover` (requires Streamlit ≥ 1.31). In `main()`, `end_date` equals `latest_date` for all presets except Custom — all window slices, `calculate_windowed_equity_pnl()`, `_daily_pnl`, and tab render calls use `end_date` as the upper bound, not `latest_date`. The old `tw_tab1/2/4/5` session state keys and the pre-sync loop no longer exist.
 
 **market_data.py** — `fetch_live_prices()` returns `'iv'` (implied volatility) and `'beta'` per ticker alongside `last`/`prev_close`/`options`. Beta is computed from `yf.download()` 90-day rolling returns vs SPY — **do not use `yf.Ticker().info`** for beta, it is rate-limited and returns None silently. `bs_greeks(S,K,T,r,sigma,cp)` returns `{delta, gamma, theta, vega}` per-contract using pure `math` stdlib.
@@ -117,7 +123,7 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 - `ROADMAP.md` — pending work, prioritised
 - `Known-Limitations.md` — what doesn't work or is untested
-- `test_tastymechanics.py` — 333 tests, 24 sections
+- `test_tastymechanics.py` — 347 tests, 25 sections
 - `config.py` — `KNOWN_INDEXES`, `COLOURS`, `DTE_*`, `WIN_RATE_*`, `FIFO_EPSILON`
 
 ---
@@ -134,6 +140,8 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 - Don't add new keys to `fetch_live_prices()` return dict without also passing them through the remap loop in `tab0_open_positions.py`
 - Don't add `.iloc[0]` without an empty guard
 - Don't implement external file formats by guessing — ask for a real sample first (column names, ordering, and value formats can differ from what seems obvious)
+- Don't reintroduce a `Median Ann. Return` aggregate — its formula extrapolates `365/days_held` and the median pegs at the cap on any mixed weekly/swing book. Per-trade column only.
+- Don't compute `Daily θ %` using `days_held` — use `dte_open`. Closing winners fast must not inflate the entry-quality score.
 
 ---
 

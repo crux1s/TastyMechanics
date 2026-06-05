@@ -17,7 +17,7 @@ No Streamlit dependency — importable and testable standalone.
 import pandas as pd
 import plotly.graph_objects as go
 
-from config import COLOURS, WIN_RATE_GREEN, WIN_RATE_ORANGE, ANN_RETURN_CAP
+from config import COLOURS, WIN_RATE_GREEN, WIN_RATE_ORANGE
 from mechanics import realized_pnl
 from ui_components import fmt_dollar, chart_layout, xe
 
@@ -177,7 +177,6 @@ def build_html_report(
             ('Median Capture %',   '%.1f%%' % credit_cdf['Capture %'].median(), T['text2']),
             ('Net Prem Kept %',    '%.1f%%' % _net_keep_pct,                    _pnl_color(_net_keep_pct)),
             ('Med Days in Trade',  '%.0fd'  % credit_cdf['Days Held'].median(), T['text2']),
-            ('Med Ann. Return',    '%.0f%%' % credit_cdf['Ann Return %'].median(), T['text2']),
             ('Med Prem/Day',       fmt_dollar(credit_cdf['Prem/Day'].median()),  T['text2']),
             ('Kept $/Day',         fmt_dollar(total_net_pnl_closed / window_days), _pnl_color(total_net_pnl_closed)),
             ('Med Daily θ %',
@@ -460,14 +459,12 @@ def build_html_report(
         if has_credit:
             credit_by_ticker = credit_cdf.groupby('Ticker').agg(
                 Med_Capture=('Capture %', 'median'),
-                Med_Ann=('Ann Return %', 'median'),
                 Total_Prem=('Net Premium', 'sum'),
             ).round(1)
             tdf = all_by_ticker.join(credit_by_ticker, how='left').reset_index()
         else:
             tdf = all_by_ticker.reset_index()
             tdf['Med_Capture'] = None
-            tdf['Med_Ann']     = None
             tdf['Total_Prem']  = None
         tdf = tdf.sort_values('Total_PNL', ascending=False)
 
@@ -475,11 +472,6 @@ def build_html_report(
             cap_str  = '%.1f%%' % row.Med_Capture if pd.notna(row.Med_Capture) else '—'
             prem_str = fmt_dollar(row.Total_Prem)   if pd.notna(row.Total_Prem)  else '—'
             dit_str  = '$%.2f'  % row.PnL_per_DTE  if pd.notna(row.PnL_per_DTE) else '—'
-            if pd.notna(row.Med_Ann):
-                ann_str = ('⚠ %.0f%%' if abs(row.Med_Ann) >= ANN_RETURN_CAP else '%.0f%%') % row.Med_Ann
-                ann_col = T['warn'] if abs(row.Med_Ann) >= ANN_RETURN_CAP else T['text2']
-            else:
-                ann_str, ann_col = '—', T['text2']
             dim = 'opacity:0.4;font-style:italic;' if (int(row.Wins) + int(row.Losses)) < 3 else ''
             ticker_rows.append(
                 '<tr style="background:%s;%s">' % (
@@ -492,7 +484,6 @@ def build_html_report(
                 + _td('%.0fd' % row.Avg_Days)
                 + _td(dit_str, mono=True)
                 + _td(cap_str)
-                + _td(ann_str, color=ann_col)
                 + _td(prem_str, mono=True)
                 + '</tr>'
             )
@@ -686,13 +677,12 @@ def build_html_report(
     # Section 8 — Ticker table
     if ticker_rows:
         tbl_html = _tbl(
-            ['Ticker', 'W/L', 'Win %', 'P/L', 'Avg Days', 'P/L/DIT', 'Capture %', 'Ann Ret %', 'Net Prem'],
+            ['Ticker', 'W/L', 'Win %', 'P/L', 'Avg Days', 'P/L/DIT', 'Capture %', 'Net Prem'],
             ticker_rows,
         )
         ticker_body = (
             '<div class="section-note">'
             'W/L = wins / losses. P/L/DIT = total P/L ÷ avg days in trade. '
-            'Ann Ret % capped at ±' + str(ANN_RETURN_CAP) + '% — ⚠ = capped. '
             'Dim = fewer than 3 trades.</div>'
             '<div class="tbl-wrap">' + tbl_html + '</div>'
         )

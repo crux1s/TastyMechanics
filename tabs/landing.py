@@ -131,7 +131,7 @@ def render_landing(app_version: str) -> None:
     <li><b style="color:{_ht};">Complex multi-leg structures</b> — PMCC, diagonals, and calendars may not be labelled correctly. Ratio spreads now have dedicated labels (Call/Put Ratio Spread, Ratio Lizard) but are unverified against real CSV data. P/L totals are correct; trade type labels may not be.</li>
     <li><b style="color:{_ht};">Rolled calendars</b> — front-month expiry rolls may appear as separate closed trades rather than one continuous position. Needs real data to verify.</li>
     <li><b style="color:{_ht};">Reverse Jade Lizard</b> — detected as a Jade Lizard but capital risk may be understated (max loss is on the call side). Verify if you trade this structure.</li>
-    <li><b style="color:{_ht};">0DTE trades</b> — P/L is correct, but Ann Return %, Med Premium/Day, and Wheel Campaigns are less meaningful for same-day holds.</li>
+    <li><b style="color:{_ht};">0DTE trades</b> — P/L is correct, but Med Premium/Day and Wheel Campaigns are less meaningful for same-day holds. (Median Ann. Return was dropped from the scorecard for this reason — the per-trade Ann Ret % column remains for sortable inspection only.)</li>
     <li><b style="color:{_ht};">Non-US accounts</b> — built and tested on a US TastyTrade account. Currency, tax treatment, and CSV format differences for other regions are unknown.</li>
     </ul>
     </div>
