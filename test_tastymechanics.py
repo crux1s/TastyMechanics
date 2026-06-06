@@ -1695,6 +1695,113 @@ check_int('LegInfo: covered strangle is_calendar = False',
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 27. REGRESSION — v26.13 defensive: detect_unknown_actions
+# ══════════════════════════════════════════════════════════════════════════════
+# Surfaces Trade / Receive Deliver rows where Net_Qty_Row was silently zeroed
+# because get_signed_qty() didn't recognise the Action / Description, but
+# Quantity was non-zero.  Split removals (legitimately zero by design) must
+# NOT trigger the warning.
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 27. Regression: detect_unknown_actions defensive scan ────────────────')
+
+from ingestion import detect_unknown_actions
+
+
+def _make_unknown_action_df():
+    """Three rows: one normal BUY (recognised), one mystery 'TRANSFER_IN' (qty=50,
+    not recognised → Net_Qty_Row=0 → should be flagged), and one legitimate
+    split-removal (qty=100, Net_Qty_Row=0 → must NOT be flagged because the
+    Description matches SPLIT_DSC_PATTERNS).
+    """
+    rows = [
+        # Normal recognised buy
+        dict(Date=pd.Timestamp('2026-01-15 14:30:00'), Type='Trade',
+             Action='BUY_TO_OPEN', Symbol='NVDA', Ticker='NVDA',
+             InstrumentType='Equity',
+             Description='Bought 100 NVDA @ 500.00',
+             SubType='Buy to Open',
+             Quantity=100.0, Net_Qty_Row=100.0,
+             Total=-50000.0),
+        # Mystery action — qty present, but Net_Qty_Row zeroed.
+        # This is the failure mode the defensive scan catches.
+        dict(Date=pd.Timestamp('2026-02-01 09:00:00'), Type='Trade',
+             Action='TRANSFER_IN', Symbol='NVDA', Ticker='NVDA',
+             InstrumentType='Equity',
+             Description='ACATS inbound transfer of 50 shares',
+             SubType='Transfer',
+             Quantity=50.0, Net_Qty_Row=0.0,
+             Total=0.0),
+        # Split removal — Net_Qty_Row=0 is correct (apply_split_adjustments
+        # handles the share-count change separately).  Must NOT be flagged.
+        dict(Date=pd.Timestamp('2026-03-01 16:00:00'), Type='Receive Deliver',
+             Action=None, Symbol='NVDA', Ticker='NVDA',
+             InstrumentType='Equity',
+             Description='REMOVAL OF 100 SHARES DUE TO STOCK SPLIT',
+             SubType='Symbol Change',
+             Quantity=100.0, Net_Qty_Row=0.0,
+             Total=0.0),
+    ]
+    out = pd.DataFrame(rows).rename(columns={
+        'InstrumentType': 'Instrument Type',
+        'SubType':        'Sub Type',
+    })
+    return out
+
+
+_ua_df = _make_unknown_action_df()
+_ua_unknown = detect_unknown_actions(_ua_df)
+
+# Exactly one row is flagged: the mystery TRANSFER_IN, not the BUY and not the split.
+check_int('detect_unknown_actions: exactly one suspicious row', len(_ua_unknown), 1)
+check_int('detect_unknown_actions: TRANSFER_IN is the flagged ticker',
+          _ua_unknown[0]['ticker'] == 'NVDA', True)
+check_int('detect_unknown_actions: action = TRANSFER_IN',
+          _ua_unknown[0]['action'] == 'TRANSFER_IN', True)
+check_int('detect_unknown_actions: quantity preserved',
+          int(_ua_unknown[0]['quantity']) == 50, True)
+check_int('detect_unknown_actions: split removal NOT flagged',
+          all('SPLIT' not in r['description'].upper() for r in _ua_unknown), True)
+
+# Empty DataFrame guard
+_empty = pd.DataFrame(columns=[
+    'Type', 'Action', 'Symbol', 'Ticker', 'Description', 'Sub Type',
+    'Quantity', 'Net_Qty_Row',
+])
+check_int('detect_unknown_actions: empty df returns []',
+          detect_unknown_actions(_empty) == [], True)
+
+# Cash-settled SPX / index option rows: Quantity records the contract count
+# but no shares move, so they're allow-listed via the 'Cash Settled' Sub Type
+# fragment.  These must NOT be flagged.  The canonical CSV has two such SPX
+# rows (Cash Settled Exercise + Cash Settled Assignment on 2025-09-11) — they
+# were the false positives that prompted the allow-list in the first place.
+_cs_row = {
+    'Date': pd.Timestamp('2025-09-11 21:00:00'), 'Type': 'Receive Deliver',
+    'Action': None, 'Symbol': 'SPXW 250911C06585000', 'Ticker': 'SPX',
+    'Instrument Type': 'Equity Option',
+    'Description': 'Cash settlement of SPXW 250911C06585000',
+    'Sub Type': 'Cash Settled Exercise',
+    'Quantity': 1.0, 'Net_Qty_Row': 0.0, 'Total': 0.0,
+}
+_cs_df = pd.DataFrame([_cs_row])
+check_int('detect_unknown_actions: cash-settled SPX is allow-listed',
+          len(detect_unknown_actions(_cs_df)), 0)
+# Symbol Change rows (corporate restructures) — also allow-listed.
+_sc_row = dict(_cs_row)
+_sc_row['Sub Type'] = 'Symbol Change'
+_sc_row['Description'] = 'Symbol change FOO → BAR'
+check_int('detect_unknown_actions: symbol change is allow-listed',
+          len(detect_unknown_actions(pd.DataFrame([_sc_row]))), 0)
+
+# Real-CSV ground truth: the canonical test fixture must NOT produce any
+# false positives after the allow-list is applied.  If this fails after a
+# parser change, the new logic is misclassifying legitimate rows.
+_ground_truth_unknown = detect_unknown_actions(df)
+check_int('detect_unknown_actions: canonical test CSV produces zero unknowns',
+          len(_ground_truth_unknown), 0)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # GRAND TOTAL
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"═"*60}')

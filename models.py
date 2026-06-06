@@ -15,14 +15,15 @@ Classes
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, NamedTuple
+from typing import Optional
 
 import pandas as pd
 
 
 # ── Ingestion output ──────────────────────────────────────────────────────────
 
-class ParsedData(NamedTuple):
+@dataclass
+class ParsedData:
     """
     Output of ingestion.parse_csv() — bundles the cleaned DataFrame with
     the corporate action lists so callers don't need to re-scan.
@@ -35,10 +36,21 @@ class ParsedData(NamedTuple):
     zero_cost_rows [{ticker, date, qty, description}]
                    Share deliveries with $0 cost basis (spin-offs, ACATS, etc.)
                    that will overstate P/L on eventual sale.
+    unknown_action_rows  [{ticker, date, action, sub_type, description, quantity}]
+                   Trade / Receive Deliver rows whose Action and Description
+                   didn't match any of the BUY/SELL/REMOVAL patterns in
+                   get_signed_qty(), so Net_Qty_Row was silently set to 0
+                   despite Quantity being non-zero.  Almost always empty;
+                   non-empty means the upstream CSV format may have drifted
+                   (a new TastyTrade Action enum, a localised export, etc.)
+                   and the trade is invisible to FIFO/campaign tracking.
+                   Surfaced as a UI warning so the user can investigate
+                   before trusting the resulting P/L.
     """
-    df:             pd.DataFrame
-    split_events:   list
-    zero_cost_rows: list
+    df:                  pd.DataFrame
+    split_events:        list
+    zero_cost_rows:      list
+    unknown_action_rows: list = field(default_factory=list)
 
 
 # ── Campaign model ────────────────────────────────────────────────────────────

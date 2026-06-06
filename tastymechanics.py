@@ -222,7 +222,7 @@ import hashlib as _hashlib
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.12"
+APP_VERSION = "v26.13"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 
@@ -561,6 +561,7 @@ def main():
     pure_opts_per_ticker   = _d.pure_opts_per_ticker
     corp_split_events      = _d.split_events
     corp_zero_cost_rows    = _d.zero_cost_rows
+    unknown_action_rows    = _parsed.unknown_action_rows
 
     total_realized_pnl = closed_camp_pnl + open_premiums_banked + pure_opts_pnl
     capital_deployed  += extra_capital_deployed
@@ -655,6 +656,31 @@ def main():
         realized_ror = None          # undefined — no net deposits
     else:
         realized_ror = None          # negative net deposits — house money, ROR is infinite
+
+    # ── Parser drift warning ──────────────────────────────────────────────────────
+    # Rows whose Action/Description fell through get_signed_qty() despite having
+    # a non-zero Quantity. Almost always empty — non-empty indicates the
+    # TastyTrade CSV format may have changed and a real trade was silently
+    # zeroed. Surfaced as its own banner (above corporate-action notices)
+    # because it's a parser-level concern, not a business event.
+    if unknown_action_rows:
+        _ua_lines = [
+            f"**{xe(r['ticker'])}** — `{xe(r['action'])}` / `{xe(r['sub_type'])}` "
+            f"on {r['date'].strftime('%d/%m/%Y')} "
+            f"(qty {r['quantity']:.0f}): _{xe(r['description'])}_"
+            for r in unknown_action_rows
+        ]
+        st.error(
+            f"⚠️ **{len(unknown_action_rows)} row{'s' if len(unknown_action_rows) != 1 else ''} not recognised by the parser** — "
+            "the Action and Description on these rows didn't match any known "
+            "buy/sell/removal pattern, so `Net_Qty_Row` was silently set to 0 "
+            "even though `Quantity` was non-zero. These trades are **invisible** "
+            "to FIFO cost-basis and campaign tracking — your P/L may be incomplete. "
+            "Usually means the TastyTrade CSV format has drifted (new Action enum, "
+            "localised export, or manual edit). Please open an issue with a "
+            "redacted sample and the affected ticker.\n\n"
+            + "\n\n".join(_ua_lines)
+        )
 
     # ── Corporate action warnings ──────────────────────────────────────────────────────────────────────────
     # Shown once at load time; both lists are empty for the vast majority of users.

@@ -213,6 +213,12 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 
 ## Changelog
 
+**v26.13 — Defensive: detect silently-zeroed trade rows** (2026-06-06)
+- **Parser-drift early warning** — `parse_csv` now runs `detect_unknown_actions(df)` after `Net_Qty_Row` is computed and surfaces any `Trade` / `Receive Deliver` row whose `Quantity > 0` but `Net_Qty_Row == 0` (i.e. `get_signed_qty()` didn't recognise the Action / Description and silently zeroed the row). Almost always returns `[]` — a non-empty result means TastyTrade may have introduced a new Action enum, a localised export, or the CSV was manually edited. A red banner in the UI flags affected rows so the user can investigate before trusting the resulting P/L.
+- **Allow-list for legitimate zero-share rows** — split removals, cash-settled SPX exercises / assignments, and corporate symbol changes are filtered out of the detector (Sub Type fragment match against `_LEGITIMATE_ZERO_SUB_TYPE_FRAGMENTS`). The canonical test CSV has two SPX cash-settled rows that prompted this list.
+- **`ParsedData` converted from `NamedTuple` to `@dataclass`** so the new `unknown_action_rows` field can use `field(default_factory=list)` without the shared-mutable-default trap. All existing callers use named-attribute access; no positional unpacking, no breaking change.
+- Test suite at **374 tests** (9 new in section 27 covering the detector, the allow-list, the empty-df guard, and a canonical-CSV ground-truth zero check).
+
 **v26.12 — Code-review follow-ups: covered strangle cap-risk, calendar DTE ordering, `_LegInfo` extraction, hot-path speedup** (2026-06-06)
 - **Covered strangle / straddle capital-at-risk** — the v26.11 covered-call short-circuit only checked `has_sc and not has_lc`, so a covered strangle (short call + short put inside a wheel) was returning premium-as-risk and ignoring the unhedged put leg. Real exposure is `put_strike × mult − credit`. The branch now splits explicitly: pure covered call uses premium-as-risk; covered strangle/straddle uses put-strike-as-risk less credit. Caught in the v26.11 PR `/code-review` pass.
 - **Calendar spread `nearest_exp` ordering** — `build_closed_trades` was picking `exp_dates.iloc[0]` (first row in transaction-Date order), so a calendar spread where the far-month leg opened first reported the wrong expiration. For a far-then-near calendar this overstated `DTE at Open` by ~5× (e.g. 152 days instead of 30) and silently halved Daily θ %. Fixed to `exp_dates.min()`.

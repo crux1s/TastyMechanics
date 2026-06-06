@@ -28,7 +28,7 @@ Always run after any change:
 PYTHONIOENCODING=utf-8 python3 test_tastymechanics.py
 ```
 
-Expected: `365 tests | 365 passed | 0 failed` (26 sections)
+Expected: `374 tests | 374 passed | 0 failed` (27 sections)
 
 The `PYTHONIOENCODING=utf-8` prefix is required on Windows — omitting it causes a `charmap` codec error on the Unicode characters in test output.
 
@@ -105,6 +105,8 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 **Covered call capital at risk** — `_calculate_capital_risk()` takes optional `campaign_windows` and `open_date`. Inside an active wheel window: a pure covered call (`has_sc and not has_lc and not has_sp`) uses `abs(open_credit)`; a covered strangle / straddle (`has_sc and has_sp` with no longs) uses `put_strike × mult − abs(open_credit)` since the stock only hedges the call side. Pass both args through from `build_closed_trades()`; the call site already does.
 
+**`unknown_action_rows` defensive scan** — `parse_csv` runs `detect_unknown_actions(df)` after `Net_Qty_Row` is computed and surfaces any `Trade` / `Receive Deliver` row that has non-zero `Quantity` but `Net_Qty_Row == 0`. Split removals and cash-settled / symbol-change Sub Types are allow-listed (`_LEGITIMATE_ZERO_SUB_TYPE_FRAGMENTS` in `ingestion.py`). The list is exposed on `ParsedData.unknown_action_rows` (defaults to `[]`) and shown as a red banner in `tastymechanics.py main()` ahead of the corporate-action expander. If a new TastyTrade format adds a legitimate zero-share Sub Type that isn't a split or cash-settled, append the fragment to that allow-list — don't widen the detector.
+
 **Daily θ % uses DTE-at-open, not days-held** — formula is `open_credit / max(dte_open, 1) / capital_risk * 100`, capped at `DAILY_THETA_CAP`. This is a setup-quality / entry-yield metric. Using `days_held` would make closing winners fast inflate the number, which was the original bug. `Ann Return %` (which still uses days-held) is kept on the per-trade row but is no longer aggregated anywhere — its medians are mathematically degenerate on mixed-duration books.
 
 **Campaign same-timestamp close** — when a stock exit and option BTC share the exact order timestamp, `Sort_Inst=0` processes the equity row first and seals `current → None`, so naively the BTC won't see a campaign. `build_campaigns()` keeps a `just_closed` reference and routes same-timestamp closing legs into it. `pure_options_pnl()` uses an **inclusive** end boundary (`<= c.end_date`) so the same row isn't double-counted in the outside-window bucket. If you change either side, change both.
@@ -123,7 +125,7 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 - `ROADMAP.md` — pending work, prioritised
 - `Known-Limitations.md` — what doesn't work or is untested
-- `test_tastymechanics.py` — 365 tests, 26 sections
+- `test_tastymechanics.py` — 374 tests, 27 sections
 - `config.py` — `KNOWN_INDEXES`, `COLOURS`, `DTE_*`, `WIN_RATE_*`, `FIFO_EPSILON`
 
 ---
@@ -142,6 +144,7 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 - Don't implement external file formats by guessing — ask for a real sample first (column names, ordering, and value formats can differ from what seems obvious)
 - Don't reintroduce a `Median Ann. Return` aggregate — its formula extrapolates `365/days_held` and the median pegs at the cap on any mixed weekly/swing book. Per-trade column only.
 - Don't compute `Daily θ %` using `days_held` — use `dte_open`. Closing winners fast must not inflate the entry-quality score.
+- Don't open PRs or run `gh pr create` unless the user explicitly asks. After finishing work, stop at "ready to PR" and wait for the user to invoke `/create-pr` or say "open a PR". This applies even when the work is clearly PR-shaped (full feature, all tests passing, changelog updated). Same rule for `gh pr merge` — never merge without explicit instruction.
 
 ---
 
