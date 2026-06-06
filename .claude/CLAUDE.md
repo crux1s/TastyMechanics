@@ -28,7 +28,7 @@ Always run after any change:
 PYTHONIOENCODING=utf-8 python3 test_tastymechanics.py
 ```
 
-Expected: `347 tests | 347 passed | 0 failed` (25 sections)
+Expected: `365 tests | 365 passed | 0 failed` (26 sections)
 
 The `PYTHONIOENCODING=utf-8` prefix is required on Windows — omitting it causes a `charmap` codec error on the Unicode characters in test output.
 
@@ -101,9 +101,9 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 **Campaign event types** — `c.events` is a list of dicts `{date, type, detail, cash}`. Known types: `'Entry'`, `'Add'`, `'Exit'`, `'Assignment Put (STO)'` (entry via put assignment — put credit excluded from cost basis, triggers amber card banner in tab3), `'Mid-campaign Assignment'` (shares added mid-campaign via put assignment — premium IS already in basis, triggers blue card banner). The Share & Dividend Events table filters out any event type containing 'assign' (case-insensitive), so assignment events are card-only. Detection in `build_campaigns()`: `_find_assignment_premium(t, row)` is called on both the entry branch and the add-to-existing branch.
 
-**Strategy classifier labels** — `_classify_trade_type()` returns direction-aware butterfly labels: `'Long Call/Put Butterfly'` (buy wings, sell body) and `'Short Call/Put Butterfly'` (sell wings, buy body ×2). Iron Condor variants: `'Iron Butterfly'` (short legs share same ATM strike), `'Reverse Iron Butterfly'` (long legs share same ATM strike), `'Iron Condor'` (credit, short legs at different strikes), `'Reverse Iron Condor'` (debit). Both `_classify_trade_type()` and `_calculate_capital_risk()` use matching `is_butterfly` / `is_short_butterfly` flags — keep them in sync if either is changed.
+**Strategy classifier labels** — `_classify_trade_type()` returns direction-aware butterfly labels: `'Long Call/Put Butterfly'` (buy wings, sell body) and `'Short Call/Put Butterfly'` (sell wings, buy body ×2). Iron Condor variants: `'Iron Butterfly'` (short legs share same ATM strike), `'Reverse Iron Butterfly'` (long legs share same ATM strike), `'Iron Condor'` (credit, short legs at different strikes), `'Reverse Iron Condor'` (debit). Both `_classify_trade_type()` and `_calculate_capital_risk()` now consume the same `_LegInfo` dataclass built by `_derive_leg_info(grp, opens)` — any structure-detection change (butterfly flags, jade/ratio lizard conditions, leg-quantity aggregates) must happen in `_derive_leg_info` only. Never re-derive `has_sc`/`has_sp`/`is_butterfly` inline in either consumer.
 
-**Covered call capital at risk** — `_calculate_capital_risk()` takes optional `campaign_windows` and `open_date`. When a short call (no long call leg) opens inside an active wheel window, capital at risk = `abs(open_credit)` not `max_strike × 100` — the stock already sits in the campaign and isn't standalone risk. Pass both args through from `build_closed_trades()`; the call site already does.
+**Covered call capital at risk** — `_calculate_capital_risk()` takes optional `campaign_windows` and `open_date`. Inside an active wheel window: a pure covered call (`has_sc and not has_lc and not has_sp`) uses `abs(open_credit)`; a covered strangle / straddle (`has_sc and has_sp` with no longs) uses `put_strike × mult − abs(open_credit)` since the stock only hedges the call side. Pass both args through from `build_closed_trades()`; the call site already does.
 
 **Daily θ % uses DTE-at-open, not days-held** — formula is `open_credit / max(dte_open, 1) / capital_risk * 100`, capped at `DAILY_THETA_CAP`. This is a setup-quality / entry-yield metric. Using `days_held` would make closing winners fast inflate the number, which was the original bug. `Ann Return %` (which still uses days-held) is kept on the per-trade row but is no longer aggregated anywhere — its medians are mathematically degenerate on mixed-duration books.
 
@@ -123,7 +123,7 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 - `ROADMAP.md` — pending work, prioritised
 - `Known-Limitations.md` — what doesn't work or is untested
-- `test_tastymechanics.py` — 347 tests, 25 sections
+- `test_tastymechanics.py` — 365 tests, 26 sections
 - `config.py` — `KNOWN_INDEXES`, `COLOURS`, `DTE_*`, `WIN_RATE_*`, `FIFO_EPSILON`
 
 ---
