@@ -1459,6 +1459,242 @@ check_int('SOXS regression: no-campaign-window → label not Covered',
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 26. REGRESSION — v26.12 code-review fixes
+# ══════════════════════════════════════════════════════════════════════════════
+# Three issues caught by /code-review on the v26.11 PR and fixed in v26.12:
+#
+#   (a) Covered strangle / straddle inside a wheel campaign was hitting the
+#       covered-call short-circuit (which checked only `has_sc and not has_lc`)
+#       and returning premium-as-risk, ignoring the unhedged short-put leg.
+#       Real exposure: put_strike × mult − credit.  The short-circuit was
+#       split into two branches (pure covered call vs covered strangle/straddle)
+#       in _calculate_capital_risk.
+#
+#   (b) `nearest_exp = exp_dates.iloc[0]` in build_closed_trades picked the
+#       first row in transaction-Date order, NOT the earliest calendar
+#       expiration.  For a calendar spread where the far-month leg opens
+#       first, this overstated dte_open (e.g. 60 instead of 30), silently
+#       halving Daily θ % and showing the wrong Expiration column.
+#       Fixed to `exp_dates.min()`.
+#
+#   (c) _LegInfo dataclass + _derive_leg_info helper extracted to fold the
+#       duplicated is_butterfly / is_short_butterfly / has_sc/sp/lc/lp /
+#       short_call_qty / long_call_qty prelude (~16 lines × 2 functions) into
+#       a single source of truth.  The hazard: prior to v26.12, _classify_trade_type
+#       and _calculate_capital_risk had identical conditions side-by-side, so a
+#       one-sided edit would silently desync classification from cap-risk.
+#       This regression check pins the assertion that both functions consume
+#       the SAME LegInfo for the same trade group.
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 26. Regression: v26.12 code-review fixes ─────────────────────────────')
+
+from mechanics import _derive_leg_info
+
+
+def _make_covered_strangle_df(ticker='ACHR'):
+    """Wheel campaign on ACHR (own 100 shares from $20 entry).  Then on Mar 1
+    sell a covered strangle: STO $25 call + STO $15 put, both 30 DTE, same
+    Order # so they group as one trade.  Both legs close worthless on Mar 31
+    via Expiration sub-type.  The stock side is irrelevant to build_closed_trades
+    (which only looks at option rows), so we model just the four option rows
+    plus a tiny stock open to anchor the wheel campaign window.
+    """
+    rows = [
+        # Stock buy that opens the wheel campaign — needed only so a campaign
+        # window exists.  Date: Feb 1.
+        dict(Date=pd.Timestamp('2026-02-01 14:30:00'), Type='Trade',
+             Action='BUY_TO_OPEN', Symbol=ticker, Ticker=ticker,
+             InstrumentType='Equity', Description='Bought 100 shares',
+             SubType='Buy to Open', Net_Qty_Row=100.0, Quantity=100.0,
+             Value=-2000.0, Total=-2001.0, Order_No=100,
+             CallOrPut=None, StrikePrice=None, ExpirationDate=None),
+        # Covered strangle opens: STO call @ 25, STO put @ 15, same order
+        dict(Date=pd.Timestamp('2026-03-01 14:30:00'), Type='Trade',
+             Action='SELL_TO_OPEN',
+             Symbol=f'{ticker}  260331C00025000', Ticker=ticker,
+             InstrumentType='Equity Option',
+             Description=f'Sold 1 {ticker} 03/31/26 Call 25.00 @ 1.00',
+             SubType='Sell to Open', Net_Qty_Row=-1.0, Quantity=1.0,
+             Value=100.0, Total=99.0, Order_No=200,
+             CallOrPut='CALL', StrikePrice=25.0,
+             ExpirationDate=pd.Timestamp('2026-03-31')),
+        dict(Date=pd.Timestamp('2026-03-01 14:30:00'), Type='Trade',
+             Action='SELL_TO_OPEN',
+             Symbol=f'{ticker}  260331P00015000', Ticker=ticker,
+             InstrumentType='Equity Option',
+             Description=f'Sold 1 {ticker} 03/31/26 Put 15.00 @ 1.00',
+             SubType='Sell to Open', Net_Qty_Row=-1.0, Quantity=1.0,
+             Value=100.0, Total=99.0, Order_No=200,
+             CallOrPut='PUT', StrikePrice=15.0,
+             ExpirationDate=pd.Timestamp('2026-03-31')),
+        # Both legs expire worthless on Mar 31
+        dict(Date=pd.Timestamp('2026-03-31 16:00:00'), Type='Receive Deliver',
+             Action=None,
+             Symbol=f'{ticker}  260331C00025000', Ticker=ticker,
+             InstrumentType='Equity Option',
+             Description='Removal of option due to expiration',
+             SubType='Expiration', Net_Qty_Row=1.0, Quantity=1.0,
+             Value=0.0, Total=0.0, Order_No=None,
+             CallOrPut='CALL', StrikePrice=25.0,
+             ExpirationDate=pd.Timestamp('2026-03-31')),
+        dict(Date=pd.Timestamp('2026-03-31 16:00:00'), Type='Receive Deliver',
+             Action=None,
+             Symbol=f'{ticker}  260331P00015000', Ticker=ticker,
+             InstrumentType='Equity Option',
+             Description='Removal of option due to expiration',
+             SubType='Expiration', Net_Qty_Row=1.0, Quantity=1.0,
+             Value=0.0, Total=0.0, Order_No=None,
+             CallOrPut='PUT', StrikePrice=15.0,
+             ExpirationDate=pd.Timestamp('2026-03-31')),
+    ]
+    out = pd.DataFrame(rows).rename(columns={
+        'InstrumentType': 'Instrument Type',
+        'SubType':        'Sub Type',
+        'Order_No':       'Order #',
+        'CallOrPut':      'Call or Put',
+        'StrikePrice':    'Strike Price',
+        'ExpirationDate': 'Expiration Date',
+    })
+    return out
+
+
+# ── (a) Covered strangle inside campaign window ─────────────────────────────
+_cs_df = _make_covered_strangle_df()
+# Campaign window: Feb 1 → end of test window (campaign still open at Mar 1)
+_cs_windows = {'ACHR': [(pd.Timestamp('2026-02-01 14:30:00'),
+                        pd.Timestamp('2026-12-31 00:00:00'))]}
+_cs_ct = build_closed_trades(_cs_df, campaign_windows=_cs_windows)
+
+check_int('Covered strangle regression: one closed trade row', len(_cs_ct), 1)
+_cs_row = _cs_ct.iloc[0]
+check_int('Covered strangle regression: classified as Covered Strangle',
+          _cs_row['Trade Type'] == 'Covered Strangle', True)
+# Correct cap-at-risk = put_strike × 100 − credit = 15 × 100 − 198 = 1302.
+# Pre-v26.12 this returned $198 (premium only, ignoring the unhedged put leg) —
+# 6.6× understated.
+check('Covered strangle regression: cap-at-risk = put_strike × 100 − credit',
+      _cs_row['Capital at Risk'], 1302.0)
+
+# Regression guard: same trade with NO campaign window falls through to the
+# naked-short path and returns max_strike × mult = 25 × 100 = $2500.
+_cs_naked = build_closed_trades(_cs_df, campaign_windows={})
+_cs_naked_row = _cs_naked.iloc[0]
+check_int('Covered strangle regression: no-campaign → naked Short Strangle',
+          _cs_naked_row['Trade Type'] == 'Short Strangle', True)
+check('Covered strangle regression: no-campaign → cap-at-risk = max_strike × 100',
+      _cs_naked_row['Capital at Risk'], 2500.0)
+
+
+# ── (b) Calendar spread nearest_exp ordering ────────────────────────────────
+def _make_calendar_far_first_df(ticker='SPY'):
+    """Calendar spread opened far-month first (the failure case).
+
+    Mon Mar 9: STO Aug-expiry $400 call (60 DTE)
+    Tue Mar 10: BTO Apr-expiry $400 call (30 DTE) — opened second, same Order #
+    Both legs close together on Mar 12.
+    The 'nearest' calendar expiration is Apr (not Aug), so dte_open should be
+    closer to 30 than 60.  Pre-v26.12 the bug used iloc[0] which is the first
+    transaction-Date row = Aug → dte_open ≈ 60.
+    """
+    rows = [
+        # Mon: STO far-month (Aug, 60 DTE)
+        dict(Date=pd.Timestamp('2026-03-09 14:30:00'), Type='Trade',
+             Action='SELL_TO_OPEN',
+             Symbol=f'{ticker}  260808C00400000', Ticker=ticker,
+             InstrumentType='Equity Option',
+             Description=f'Sold 1 {ticker} 08/08/26 Call 400.00 @ 5.00',
+             SubType='Sell to Open', Net_Qty_Row=-1.0, Quantity=1.0,
+             Value=500.0, Total=500.0, Order_No=300,
+             CallOrPut='CALL', StrikePrice=400.0,
+             ExpirationDate=pd.Timestamp('2026-08-08')),
+        # Tue: BTO near-month (Apr, 30 DTE)
+        dict(Date=pd.Timestamp('2026-03-10 14:30:00'), Type='Trade',
+             Action='BUY_TO_OPEN',
+             Symbol=f'{ticker}  260408C00400000', Ticker=ticker,
+             InstrumentType='Equity Option',
+             Description=f'Bought 1 {ticker} 04/08/26 Call 400.00 @ 3.00',
+             SubType='Buy to Open', Net_Qty_Row=1.0, Quantity=1.0,
+             Value=-300.0, Total=-300.0, Order_No=300,
+             CallOrPut='CALL', StrikePrice=400.0,
+             ExpirationDate=pd.Timestamp('2026-04-08')),
+        # Close both on Mar 12
+        dict(Date=pd.Timestamp('2026-03-12 14:30:00'), Type='Trade',
+             Action='BUY_TO_CLOSE',
+             Symbol=f'{ticker}  260808C00400000', Ticker=ticker,
+             InstrumentType='Equity Option',
+             Description=f'Bought 1 {ticker} 08/08/26 Call 400.00 @ 4.00',
+             SubType='Buy to Close', Net_Qty_Row=1.0, Quantity=1.0,
+             Value=-400.0, Total=-400.0, Order_No=301,
+             CallOrPut='CALL', StrikePrice=400.0,
+             ExpirationDate=pd.Timestamp('2026-08-08')),
+        dict(Date=pd.Timestamp('2026-03-12 14:30:00'), Type='Trade',
+             Action='SELL_TO_CLOSE',
+             Symbol=f'{ticker}  260408C00400000', Ticker=ticker,
+             InstrumentType='Equity Option',
+             Description=f'Sold 1 {ticker} 04/08/26 Call 400.00 @ 2.00',
+             SubType='Sell to Close', Net_Qty_Row=-1.0, Quantity=1.0,
+             Value=200.0, Total=200.0, Order_No=301,
+             CallOrPut='CALL', StrikePrice=400.0,
+             ExpirationDate=pd.Timestamp('2026-04-08')),
+    ]
+    out = pd.DataFrame(rows).rename(columns={
+        'InstrumentType': 'Instrument Type',
+        'SubType':        'Sub Type',
+        'Order_No':       'Order #',
+        'CallOrPut':      'Call or Put',
+        'StrikePrice':    'Strike Price',
+        'ExpirationDate': 'Expiration Date',
+    })
+    return out
+
+
+_cal_df = _make_calendar_far_first_df()
+_cal_ct = build_closed_trades(_cal_df, campaign_windows={})
+check_int('Calendar regression: one closed trade row', len(_cal_ct), 1)
+_cal_row = _cal_ct.iloc[0]
+# open_date is Mon Mar 9 (first STO).  Nearest expiration is Apr 8 (30d), NOT
+# the first-by-DataFrame-order Aug 8 (152d).
+check_int('Calendar regression: nearest expiration = Apr (earliest by date)',
+          str(_cal_row['Expiration']) == '2026-04-08', True)
+# DTE at open: Apr 8 (midnight) − Mar 9 14:30 = 29 full days (the half-day
+# from Mar 9's afternoon doesn't round up).  What matters for the regression
+# is that this is in the ~30-day ballpark, NOT the 152-day far-month value
+# the old `iloc[0]` bug would have produced.
+check_int('Calendar regression: dte_open uses earliest expiry (~30d)',
+          int(_cal_row['DTE at Open']), 29)
+# Sanity guard: opening the LATER expiry first must not silently change DTE.
+# Pre-fix this would have been 152, an order-of-magnitude error feeding Daily θ %.
+check_int('Calendar regression: dte_open is NOT the far-month',
+          int(_cal_row['DTE at Open']) != 152, True)
+
+
+# ── (c) _LegInfo single-source-of-truth check ────────────────────────────────
+# Pin the assertion that both the classifier and the cap-risk calculator can
+# now only diverge if _derive_leg_info itself changes — not via independent
+# duplicate edits.  Spot-check that the derived flags match what a covered
+# strangle's opens row produce.
+_cs_opens = _cs_df[
+    _cs_df['Sub Type'].str.lower().str.contains('to open', na=False) &
+    _cs_df['Instrument Type'].isin(['Equity Option'])
+]
+_cs_grp = _cs_df[_cs_df['Instrument Type'].isin(['Equity Option'])]
+_info = _derive_leg_info(_cs_grp, _cs_opens)
+
+check_int('LegInfo: covered strangle has_sc',  _info.has_sc, True)
+check_int('LegInfo: covered strangle has_sp',  _info.has_sp, True)
+check_int('LegInfo: covered strangle has_lc',  _info.has_lc, False)
+check_int('LegInfo: covered strangle has_lp',  _info.has_lp, False)
+check_int('LegInfo: covered strangle n_short_legs', _info.n_short_legs, 2)
+check_int('LegInfo: covered strangle n_long_legs',  _info.n_long_legs,  0)
+check_int('LegInfo: covered strangle is_butterfly = False',
+          _info.is_butterfly, False)
+check_int('LegInfo: covered strangle is_short_butterfly = False',
+          _info.is_short_butterfly, False)
+check_int('LegInfo: covered strangle is_calendar = False',
+          _info.is_calendar, False)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # GRAND TOTAL
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"═"*60}')

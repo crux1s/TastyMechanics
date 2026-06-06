@@ -642,6 +642,125 @@ def _group_symbols_by_order(sym_open_orders: dict) -> dict:
 
 # ── TRADE CLASSIFICATION HELPERS ──────────────────────────────────────────────
 
+@dataclass
+class _LegInfo:
+    """
+    Derived leg partitions and structure flags for a closed trade group.
+
+    Computed once by ``_derive_leg_info(grp, opens)`` and consumed by both
+    ``_classify_trade_type`` and ``_calculate_capital_risk``.  Previously each
+    of those functions independently re-derived ~16 lines of identical prelude
+    (CLAUDE.md flagged the ``is_butterfly`` / ``is_short_butterfly`` flags as
+    a known sync-or-drift hazard).  Folding them through one builder means a
+    single source of truth — change a flag here, both consumers update.
+    """
+    # Leg partitions (kept as DataFrames so consumers can re-filter by strike
+    # for downstream specifics like ratio-spread max-short-strike lookups).
+    short_opens:     pd.DataFrame
+    long_opens:      pd.DataFrame
+    n_short_legs:    int
+    n_long_legs:     int
+    short_qty_total: float
+    long_qty_total:  float
+    # Strike series (sorted ascending, NaN dropped).
+    call_strikes:    pd.Series
+    put_strikes:     pd.Series
+    strikes_all:     Any   # np.ndarray of unique strikes
+    expirations:     Any   # np.ndarray of unique expiry dates
+    # Direction-tagged contract quantities.
+    short_call_qty:  float
+    long_call_qty:   float
+    short_put_qty:   float
+    long_put_qty:    float
+    # Presence flags.
+    has_sc:          bool
+    has_sp:          bool
+    has_lc:          bool
+    has_lp:          bool
+    # Composite-structure flags — single source of truth.
+    is_butterfly:        bool
+    is_short_butterfly:  bool
+    is_jade_lizard:      bool
+    is_ratio_lizard:     bool
+    is_call_ratio:       bool
+    is_put_ratio:        bool
+    is_calendar:         bool
+
+
+def _derive_leg_info(grp: pd.DataFrame, opens: pd.DataFrame) -> _LegInfo:
+    """
+    Pure builder for ``_LegInfo`` from a closed trade group.
+
+    Single source of truth for the ``is_butterfly`` / ``is_short_butterfly`` /
+    ``is_jade_lizard`` / etc. detection conditions — both consumers must read
+    them from the same object, so they cannot drift apart silently.
+    """
+    call_mask    = grp['Call or Put'].str.upper().str.contains('CALL', na=False)
+    put_mask     = grp['Call or Put'].str.upper().str.contains('PUT',  na=False)
+    call_strikes = grp.loc[call_mask, 'Strike Price'].dropna().sort_values()
+    put_strikes  = grp.loc[put_mask,  'Strike Price'].dropna().sort_values()
+
+    expirations  = grp['Expiration Date'].dropna().unique()
+    strikes_all  = grp['Strike Price'].dropna().unique()
+
+    short_opens     = opens[opens['Net_Qty_Row'] < 0]
+    long_opens      = opens[opens['Net_Qty_Row'] > 0]
+    n_short_legs    = len(short_opens)
+    n_long_legs     = len(long_opens)
+    short_qty_total = abs(short_opens['Net_Qty_Row'].sum())
+    long_qty_total  = long_opens['Net_Qty_Row'].sum()
+
+    sc_mask = short_opens['Call or Put'].str.upper().str.contains('CALL', na=False)
+    sp_mask = short_opens['Call or Put'].str.upper().str.contains('PUT',  na=False)
+    lc_mask = long_opens['Call or Put'].str.upper().str.contains('CALL', na=False)
+    lp_mask = long_opens['Call or Put'].str.upper().str.contains('PUT',  na=False)
+
+    short_call_qty = abs(short_opens.loc[sc_mask, 'Net_Qty_Row'].sum())
+    long_call_qty  =     long_opens.loc[lc_mask, 'Net_Qty_Row'].sum()
+    short_put_qty  = abs(short_opens.loc[sp_mask, 'Net_Qty_Row'].sum())
+    long_put_qty   =     long_opens.loc[lp_mask, 'Net_Qty_Row'].sum()
+
+    has_sc = short_call_qty > 0
+    has_sp = short_put_qty  > 0
+    has_lc = long_call_qty  > 0
+    has_lp = long_put_qty   > 0
+
+    is_butterfly = (n_long_legs == 2 and n_short_legs == 1 and
+                    short_qty_total == 2 and long_qty_total == 2 and
+                    len(strikes_all) == 3 and len(expirations) == 1)
+
+    is_short_butterfly = (n_long_legs == 1 and n_short_legs == 2 and
+                          long_qty_total == 2 and short_qty_total == 2 and
+                          len(strikes_all) == 3 and len(expirations) == 1)
+
+    has_short_put_only  = has_sp and not has_lp
+    has_call_spread_leg = has_sc and has_lc
+    is_jade_lizard  = (has_short_put_only and has_call_spread_leg
+                       and len(put_strikes) == 1 and short_call_qty == long_call_qty)
+    is_ratio_lizard = (has_short_put_only and has_call_spread_leg
+                       and len(put_strikes) == 1 and short_call_qty != long_call_qty)
+    is_call_ratio   = (has_sc and has_lc and not has_sp and not has_lp
+                       and short_call_qty != long_call_qty)
+    is_put_ratio    = (has_sp and has_lp and not has_sc and not has_lc
+                       and short_put_qty != long_put_qty)
+    is_calendar     = len(expirations) >= 2 and len(strikes_all) == 1
+
+    return _LegInfo(
+        short_opens=short_opens, long_opens=long_opens,
+        n_short_legs=n_short_legs, n_long_legs=n_long_legs,
+        short_qty_total=short_qty_total, long_qty_total=long_qty_total,
+        call_strikes=call_strikes, put_strikes=put_strikes,
+        strikes_all=strikes_all, expirations=expirations,
+        short_call_qty=short_call_qty, long_call_qty=long_call_qty,
+        short_put_qty=short_put_qty,   long_put_qty=long_put_qty,
+        has_sc=has_sc, has_sp=has_sp, has_lc=has_lc, has_lp=has_lp,
+        is_butterfly=is_butterfly, is_short_butterfly=is_short_butterfly,
+        is_jade_lizard=is_jade_lizard, is_ratio_lizard=is_ratio_lizard,
+        is_call_ratio=is_call_ratio,   is_put_ratio=is_put_ratio,
+        is_calendar=is_calendar,
+    )
+
+
 def _classify_trade_type(
     grp: pd.DataFrame,
     opens: pd.DataFrame,
@@ -656,79 +775,39 @@ def _classify_trade_type(
     Pure function — returns strategy label from a closed trade group.
     All arguments passed explicitly; no module-global reads except via caller.
     """
-    open_credit  = opens['Total'].sum()
-    n_long       = (opens['Net_Qty_Row'] > 0).sum()
-
-    call_strikes = grp[grp['Call or Put'].str.upper().str.contains('CALL', na=False)]['Strike Price'].dropna().sort_values()
-    put_strikes  = grp[grp['Call or Put'].str.upper().str.contains('PUT',  na=False)]['Strike Price'].dropna().sort_values()
-    w_call = (call_strikes.max() - call_strikes.min()) * 100 if len(call_strikes) >= 2 else 0
-    w_put  = (put_strikes.max()  - put_strikes.min())  * 100 if len(put_strikes)  >= 2 else 0
-
-    expirations = grp['Expiration Date'].dropna().unique()
-    strikes_all = grp['Strike Price'].dropna().unique()
-    is_calendar = len(expirations) >= 2 and len(strikes_all) == 1
-
-    short_opens_sp  = opens[opens['Net_Qty_Row'] < 0]
-    long_opens_sp   = opens[opens['Net_Qty_Row'] > 0]
-    n_short_legs    = len(short_opens_sp)
-    n_long_legs     = len(long_opens_sp)
-    short_qty_total = abs(short_opens_sp['Net_Qty_Row'].sum())
-    long_qty_total  = long_opens_sp['Net_Qty_Row'].sum()
-
-    short_cp = short_opens_sp['Call or Put'].dropna().str.upper().tolist()
-    long_cp  = long_opens_sp['Call or Put'].dropna().str.upper().tolist()
-    has_sc   = any('CALL' in c for c in short_cp)
-    has_sp   = any('PUT'  in c for c in short_cp)
-    has_lc   = any('CALL' in c for c in long_cp)
-    has_lp   = any('PUT'  in c for c in long_cp)
-
-    is_butterfly = (n_long_legs == 2 and n_short_legs == 1 and
-                    short_qty_total == 2 and long_qty_total == 2 and
-                    len(strikes_all) == 3 and len(expirations) == 1)
-
-    is_short_butterfly = (n_long_legs == 1 and n_short_legs == 2 and
-                          long_qty_total == 2 and short_qty_total == 2 and
-                          len(strikes_all) == 3 and len(expirations) == 1)
-
-    short_call_qty = abs(short_opens_sp.loc[short_opens_sp['Call or Put'].str.upper().str.contains('CALL', na=False), 'Net_Qty_Row'].sum())
-    long_call_qty  = long_opens_sp.loc[long_opens_sp['Call or Put'].str.upper().str.contains('CALL', na=False), 'Net_Qty_Row'].sum()
-    short_put_qty  = abs(short_opens_sp.loc[short_opens_sp['Call or Put'].str.upper().str.contains('PUT', na=False), 'Net_Qty_Row'].sum())
-    long_put_qty   = long_opens_sp.loc[long_opens_sp['Call or Put'].str.upper().str.contains('PUT', na=False), 'Net_Qty_Row'].sum()
-
-    has_short_put_only  = any('PUT'  in c for c in short_cp) and not any('PUT'  in c for c in long_cp)
-    has_call_spread_leg = any('CALL' in c for c in short_cp) and any('CALL' in c for c in long_cp)
-    is_jade_lizard  = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1 and short_call_qty == long_call_qty
-    is_ratio_lizard = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1 and short_call_qty != long_call_qty
-    is_call_ratio   = has_sc and has_lc and not has_sp and not has_lp and short_call_qty != long_call_qty
-    is_put_ratio    = has_sp and has_lp and not has_sc and not has_lc and short_put_qty != long_put_qty
+    info = _derive_leg_info(grp, opens)
+    n_long = (opens['Net_Qty_Row'] > 0).sum()
+    # Spread-width signals at multiplier 100 — only used as booleans here
+    # (>0 ⇒ exists), so the actual mult value doesn't matter for labelling.
+    w_call = ((info.call_strikes.max() - info.call_strikes.min()) * 100
+              if len(info.call_strikes) >= 2 else 0)
+    w_put  = ((info.put_strikes.max()  - info.put_strikes.min())  * 100
+              if len(info.put_strikes)  >= 2 else 0)
 
     # ── Multi-leg (has at least one long open leg) ─────────────────────────────
     if n_long > 0:
-        if n_short_legs == 0:
-            long_cp_types = long_opens_sp['Call or Put'].dropna().str.upper().unique().tolist()
-            lc = any('CALL' in c for c in long_cp_types)
-            lp = any('PUT'  in c for c in long_cp_types)
-            if lc and not lp:   return 'Long Call'
-            elif lp and not lc: return 'Long Put'
-            else:               return 'Long Strangle'
-        elif is_butterfly:
-            return 'Long Call Butterfly' if len(call_strikes.unique()) == 3 else 'Long Put Butterfly'
-        elif is_short_butterfly:
-            return 'Short Call Butterfly' if len(call_strikes.unique()) == 3 else 'Short Put Butterfly'
-        elif is_call_ratio:
+        if info.n_short_legs == 0:
+            if info.has_lc and not info.has_lp: return 'Long Call'
+            elif info.has_lp and not info.has_lc: return 'Long Put'
+            else:                                  return 'Long Strangle'
+        elif info.is_butterfly:
+            return 'Long Call Butterfly' if len(info.call_strikes.unique()) == 3 else 'Long Put Butterfly'
+        elif info.is_short_butterfly:
+            return 'Short Call Butterfly' if len(info.call_strikes.unique()) == 3 else 'Short Put Butterfly'
+        elif info.is_call_ratio:
             return 'Call Ratio Spread'
-        elif is_put_ratio:
+        elif info.is_put_ratio:
             return 'Put Ratio Spread'
-        elif is_jade_lizard:
+        elif info.is_jade_lizard:
             return 'Jade Lizard'
-        elif is_ratio_lizard:
+        elif info.is_ratio_lizard:
             return 'Ratio Lizard'
-        elif is_calendar:
+        elif info.is_calendar:
             return 'Calendar Spread'
         elif w_call > 0 and w_put > 0:
-            if short_opens_sp['Strike Price'].nunique() == 1:
+            if info.short_opens['Strike Price'].nunique() == 1:
                 return 'Iron Butterfly'
-            elif long_opens_sp['Strike Price'].nunique() == 1:
+            elif info.long_opens['Strike Price'].nunique() == 1:
                 return 'Reverse Iron Butterfly'
             elif is_credit:
                 return 'Iron Condor'
@@ -741,20 +820,19 @@ def _classify_trade_type(
 
     # ── Naked short (no long legs) ─────────────────────────────────────────────
     if not is_credit:
-        if has_lc and not has_lp: return 'Long Call'
-        elif has_lp and not has_lc: return 'Long Put'
+        if info.has_lc and not info.has_lp: return 'Long Call'
+        elif info.has_lp and not info.has_lc: return 'Long Put'
         else: return 'Long Strangle'
     else:
         windows = campaign_windows.get(ticker, [])
         in_campaign = any(s <= open_date <= e for s, e in windows)
-        if has_sc and has_sp:
-            all_strikes = grp['Strike Price'].dropna().unique()
-            base = 'Short Straddle' if len(all_strikes) == 1 else 'Short Strangle'
+        if info.has_sc and info.has_sp:
+            base = 'Short Straddle' if len(info.strikes_all) == 1 else 'Short Strangle'
             return ('Covered Straddle' if 'Straddle' in base else 'Covered Strangle') if in_campaign else base
-        elif has_sc:
+        elif info.has_sc:
             if in_campaign: return 'Covered Call'
             return 'Short Call' if n_contracts == 1 else 'Short Call (x%d)' % n_contracts
-        elif has_sp:
+        elif info.has_sp:
             return 'Short Put' if n_contracts == 1 else 'Short Put (x%d)' % n_contracts
         else:
             return 'Short (other)'
@@ -778,71 +856,31 @@ def _calculate_capital_risk(
     open_credit = opens['Total'].sum()
     n_long      = (opens['Net_Qty_Row'] > 0).sum()
 
-    call_strikes = grp[grp['Call or Put'].str.upper().str.contains('CALL', na=False)]['Strike Price'].dropna().sort_values()
-    put_strikes  = grp[grp['Call or Put'].str.upper().str.contains('PUT',  na=False)]['Strike Price'].dropna().sort_values()
-    w_call = (call_strikes.max() - call_strikes.min()) * mult if len(call_strikes) >= 2 else 0
-    w_put  = (put_strikes.max()  - put_strikes.min())  * mult if len(put_strikes)  >= 2 else 0
-
-    expirations = grp['Expiration Date'].dropna().unique()
-    strikes_all = grp['Strike Price'].dropna().unique()
-    is_calendar = len(expirations) >= 2 and len(strikes_all) == 1
-
-    short_opens_sp  = opens[opens['Net_Qty_Row'] < 0]
-    long_opens_sp   = opens[opens['Net_Qty_Row'] > 0]
-    n_short_legs    = len(short_opens_sp)
-    n_long_legs     = len(long_opens_sp)
-    short_qty_total = abs(short_opens_sp['Net_Qty_Row'].sum())
-    long_qty_total  = long_opens_sp['Net_Qty_Row'].sum()
-
-    short_cp = short_opens_sp['Call or Put'].dropna().str.upper().tolist()
-    long_cp  = long_opens_sp['Call or Put'].dropna().str.upper().tolist()
-
-    is_butterfly = (n_long_legs == 2 and n_short_legs == 1 and
-                    short_qty_total == 2 and long_qty_total == 2 and
-                    len(strikes_all) == 3 and len(expirations) == 1)
-
-    is_short_butterfly = (n_long_legs == 1 and n_short_legs == 2 and
-                          long_qty_total == 2 and short_qty_total == 2 and
-                          len(strikes_all) == 3 and len(expirations) == 1)
-
-    short_call_qty = abs(short_opens_sp.loc[short_opens_sp['Call or Put'].str.upper().str.contains('CALL', na=False), 'Net_Qty_Row'].sum())
-    long_call_qty  = long_opens_sp.loc[long_opens_sp['Call or Put'].str.upper().str.contains('CALL', na=False), 'Net_Qty_Row'].sum()
-    short_put_qty  = abs(short_opens_sp.loc[short_opens_sp['Call or Put'].str.upper().str.contains('PUT', na=False), 'Net_Qty_Row'].sum())
-    long_put_qty   = long_opens_sp.loc[long_opens_sp['Call or Put'].str.upper().str.contains('PUT', na=False), 'Net_Qty_Row'].sum()
-
-    has_sc = any('CALL' in c for c in short_cp)
-    has_sp = any('PUT'  in c for c in short_cp)
-    has_lc = any('CALL' in c for c in long_cp)
-    has_lp = any('PUT'  in c for c in long_cp)
-    has_short_put_only  = has_sp and not has_lp
-    has_call_spread_leg = has_sc and has_lc
-    is_jade_lizard  = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1 and short_call_qty == long_call_qty
-    is_ratio_lizard = has_short_put_only and has_call_spread_leg and len(put_strikes) == 1 and short_call_qty != long_call_qty
-    is_call_ratio   = has_sc and has_lc and not has_sp and not has_lp and short_call_qty != long_call_qty
-    is_put_ratio    = has_sp and has_lp and not has_sc and not has_lc and short_put_qty != long_put_qty
+    info   = _derive_leg_info(grp, opens)
+    w_call = ((info.call_strikes.max() - info.call_strikes.min()) * mult
+              if len(info.call_strikes) >= 2 else 0)
+    w_put  = ((info.put_strikes.max()  - info.put_strikes.min())  * mult
+              if len(info.put_strikes)  >= 2 else 0)
 
     # ── Multi-leg ──────────────────────────────────────────────────────────────
     if n_long > 0:
-        if n_short_legs == 0:
+        if info.n_short_legs == 0:
             return max(abs(open_credit), 1)
-        elif is_butterfly:
-            wing_width = (strikes_all.max() - strikes_all.min()) * mult / 2
+        elif info.is_butterfly:
+            wing_width = (info.strikes_all.max() - info.strikes_all.min()) * mult / 2
             return max(abs(open_credit), wing_width, 1)
-        elif is_short_butterfly:
-            wing_width = (strikes_all.max() - strikes_all.min()) * mult / 2
+        elif info.is_short_butterfly:
+            wing_width = (info.strikes_all.max() - info.strikes_all.min()) * mult / 2
             return max(wing_width - open_credit, 1)   # max loss = wing width minus credit received
-        elif is_call_ratio or is_put_ratio:
+        elif info.is_call_ratio or info.is_put_ratio:
             # Extra short leg is effectively naked — highest short strike is the risk proxy
-            short_strikes = short_opens_sp['Strike Price'].dropna()
+            short_strikes = info.short_opens['Strike Price'].dropna()
             max_short = float(short_strikes.max()) if not short_strikes.empty else 0.0
             return max(max_short * mult - abs(open_credit), 1)
-        elif is_jade_lizard:
-            _jl_put_strike = float(put_strikes.min()) if len(put_strikes) > 0 else 0.0
+        elif info.is_jade_lizard or info.is_ratio_lizard:
+            _jl_put_strike = float(info.put_strikes.min()) if len(info.put_strikes) > 0 else 0.0
             return max(_jl_put_strike * mult - abs(open_credit), 1)
-        elif is_ratio_lizard:
-            _jl_put_strike = float(put_strikes.min()) if len(put_strikes) > 0 else 0.0
-            return max(_jl_put_strike * mult - abs(open_credit), 1)
-        elif is_calendar:
+        elif info.is_calendar:
             return max(abs(open_credit), 1)
         elif w_call > 0 and w_put > 0:
             return max(max(w_call, w_put) - abs(open_credit), 1)
@@ -852,14 +890,29 @@ def _calculate_capital_risk(
             return max(w_put - abs(open_credit), 1) if is_credit else max(abs(open_credit), 1)
 
     # ── Covered by wheel stock ─────────────────────────────────────────────────
-    # A short call (no long call leg) opened while holding shares in a wheel
-    # campaign carries no additional capital beyond the stock position already
-    # tracked in the campaign.  Use the premium as the capital proxy so that
-    # Capture% and Ann Return reflect option-level risk, not naked-call strike.
+    # Short option(s) opened while holding shares in a live wheel campaign.
+    # The stock collateral hedges the call side fully; the put side (if any)
+    # is unhedged and contributes max_loss = put_strike × mult, less the
+    # premium collected.  This matches what `_classify_trade_type` labels
+    # 'Covered Call' / 'Covered Straddle' / 'Covered Strangle' — see the
+    # symmetric in_campaign check there.
     if campaign_windows is not None and open_date is not None and is_credit:
         _windows = campaign_windows.get(ticker, [])
         if any(s <= open_date <= e for s, e in _windows):
-            if has_sc and not has_lc:
+            # Covered strangle / straddle: short call + short put, no longs.
+            # Call side fully covered by stock, put side cash-secured to its
+            # strike.  Without this branch the function fell through to the
+            # naked-short path below and returned max_strike × mult (i.e. the
+            # call strike, ignoring the put liability entirely), which both
+            # overstated risk on the call side and understated it on the put.
+            if (info.has_sc and info.has_sp
+                    and not info.has_lc and not info.has_lp
+                    and len(info.put_strikes) > 0):
+                _put_strike = float(info.put_strikes.min())
+                return max(_put_strike * mult - abs(open_credit), 1)
+            # Pure covered call: stock fully covers, premium IS the marginal
+            # capital footprint.
+            if info.has_sc and not info.has_lc and not info.has_sp:
                 return max(abs(open_credit), 1)
 
     # ── Naked short ────────────────────────────────────────────────────────────
@@ -882,10 +935,16 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
 
     trade_groups = _group_symbols_by_order(sym_open_orders)
 
+    # Pre-compute net qty per symbol once (O(E)) so the all-closed check below
+    # is an O(T×S) dict lookup instead of O(T×S×E) repeated boolean indexing.
+    # On the 700-row test CSV this avoids ~21M comparisons; on a 5000-row file
+    # it scales to ~1.4B otherwise.
+    sym_net_qty = equity_opts.groupby('Symbol', dropna=False)['Net_Qty_Row'].sum().abs()
+
     closed_list = []
     for root, syms in trade_groups.items():
         grp = equity_opts[equity_opts['Symbol'].isin(syms)].sort_values('Date')
-        all_closed = all(abs(equity_opts[equity_opts['Symbol'] == s]['Net_Qty_Row'].sum()) < FIFO_EPSILON for s in syms)
+        all_closed = all(sym_net_qty.get(s, 0) < FIFO_EPSILON for s in syms)
         if not all_closed: continue
 
         opens = grp[grp['Sub Type'].str.lower().str.contains('to open', na=False)]
@@ -933,7 +992,12 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
         try:
             exp_dates = opens['Expiration Date'].dropna()
             if not exp_dates.empty:
-                nearest_exp = pd.to_datetime(exp_dates.iloc[0])
+                # earliest expiry by calendar date — NOT iloc[0], which would
+                # return the first-by-transaction-Date row (wrong for any
+                # calendar spread where the far-month leg is opened first).
+                # dte_open feeds Daily θ %, Expiration display, and DTE at
+                # Close, so the wrong choice silently distorts all three.
+                nearest_exp = pd.to_datetime(exp_dates.min())
                 dte_open    = max((nearest_exp - open_date).days, 0)
                 expiry_date = nearest_exp.date()
             else:
