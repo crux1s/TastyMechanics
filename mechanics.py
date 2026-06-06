@@ -1282,7 +1282,9 @@ def compute_app_data(parsed: ParsedData, use_lifetime: bool) -> AppData:
 
     Returns: AppData dataclass -- see AppData definition for field descriptions.
     """
-    df, split_events, zero_cost_rows = parsed
+    df              = parsed.df
+    split_events    = parsed.split_events
+    zero_cost_rows  = parsed.zero_cost_rows
     # ── Open positions ledger ──────────────────────────────────────────────
     trade_df = df[df['Type'].isin(TRADE_TYPES)].copy()
     groups   = trade_df.groupby(
