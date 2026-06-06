@@ -113,6 +113,48 @@ def _summary(label):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 0. END-TO-END SMOKE CHECK — compute_app_data
+# ══════════════════════════════════════════════════════════════════════════════
+# compute_app_data() is the Streamlit entry point that wires everything
+# together.  Individual sections below test the helper functions in isolation,
+# but only this call exercises the full pipeline including any positional /
+# attribute access on the ParsedData object, the campaign-window threading,
+# and the AppData construction.
+#
+# Why this section exists: v26.13 converted ParsedData from NamedTuple to
+# @dataclass to support a new field with field(default_factory=list).  That
+# change broke ONE consumer at mechanics.py:1285 — a bare-name positional
+# unpack `df, split_events, zero_cost_rows = parsed` — which dataclasses
+# don't support.  No per-helper test caught it because none of them go
+# through compute_app_data.  This section closes that gap.
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 0. End-to-end smoke check: compute_app_data ────────────────────────')
+
+_smoke_app    = compute_app_data(_parsed, use_lifetime=False)
+_smoke_app_lt = compute_app_data(_parsed, use_lifetime=True)
+
+# Confirm the returned AppData has the expected shape.  Exact numbers are
+# tested per-helper later; here we only verify the integration didn't crash
+# and the returned object is well-formed.
+check_int('Smoke: AppData has all_campaigns dict',
+          isinstance(_smoke_app.all_campaigns, dict), True)
+check_int('Smoke: AppData has closed_trades_df as DataFrame',
+          isinstance(_smoke_app.closed_trades_df, pd.DataFrame), True)
+check_int('Smoke: AppData has df_open as DataFrame',
+          isinstance(_smoke_app.df_open, pd.DataFrame), True)
+check_int('Smoke: closed_camp_pnl is a number',
+          isinstance(_smoke_app.closed_camp_pnl, (int, float)), True)
+check_int('Smoke: split_events passed through from ParsedData',
+          _smoke_app.split_events == _parsed.split_events, True)
+check_int('Smoke: zero_cost_rows passed through from ParsedData',
+          _smoke_app.zero_cost_rows == _parsed.zero_cost_rows, True)
+# Lifetime mode uses the same ParsedData-derived fields but a different
+# campaign-aggregation pass — confirm both branches construct cleanly.
+check_int('Smoke: lifetime mode AppData also constructs',
+          isinstance(_smoke_app_lt.all_campaigns, dict), True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # 1. DATA LOADING & PARSING
 # ══════════════════════════════════════════════════════════════════════════════
 print('\n── 1. Data loading & parsing ──────────────────────────────────────────')
