@@ -6,7 +6,7 @@ and testable without a running server.
 
 Public API
 ----------
-  parse_csv(file_bytes)         → ParsedData(df, split_events, zero_cost_rows)
+  parse_csv(file_bytes)         → ParsedData(df, split_events, zero_cost_rows, unknown_action_rows)
   validate_columns(file_bytes)  → set of missing column names (empty = OK)
 
 Internal helpers (also importable for use in analysis functions)
@@ -16,6 +16,7 @@ Internal helpers (also importable for use in analysis functions)
   option_mask(series)           → bool Series
   detect_corporate_actions(df)  → (split_events, zero_cost_rows)
   apply_split_adjustments(df)   → df
+  detect_unknown_actions(df)    → list of suspicious-zero rows
 """
 
 from __future__ import annotations
@@ -199,6 +200,76 @@ def detect_corporate_actions(df: pd.DataFrame) -> tuple[list, list]:
     return split_events, zero_cost_rows
 
 
+# Sub Type fragments where Net_Qty_Row=0 with non-zero Quantity is the
+# correct behaviour and the row should NOT be flagged as unknown:
+#
+#   'Cash Settled'  — SPX / index options settle in cash; no shares move
+#                     even though Quantity records the contract count.
+#                     Variants: 'Cash Settled Exercise', 'Cash Settled Assignment'.
+#   'Symbol Change' — corporate restructure / ticker rename; the share-count
+#                     movement is recorded on a paired row.
+#
+# Extend conservatively — adding a fragment here means trusting that a real
+# TastyTrade format change couldn't also produce that string.
+_LEGITIMATE_ZERO_SUB_TYPE_FRAGMENTS = ('cash settled', 'symbol change')
+
+
+def detect_unknown_actions(df: pd.DataFrame) -> list:
+    """
+    Scan for `Trade` / `Receive Deliver` rows where `Quantity > 0` but
+    `Net_Qty_Row == 0` — meaning `get_signed_qty()` did not recognise the
+    Action / Description and silently zeroed the share movement.
+
+    Almost always returns []. A non-empty result usually means the TastyTrade
+    CSV format has drifted (new Action enum, localised export, manual edit)
+    and a real trade is invisible to FIFO and campaign tracking.
+
+    Filtered out (legitimately zero-share rows):
+      - Split removals — Description matches SPLIT_DSC_PATTERNS; the share-
+        count change is handled by apply_split_adjustments.
+      - Cash-settled exercises / assignments — SPX-style index options that
+        deliver cash, not shares; Quantity records the contract count.
+      - Symbol changes — corporate restructures whose share movement is
+        recorded on a paired row.
+
+    Returns
+    -------
+    list of dicts: {ticker, date, action, sub_type, description, quantity}
+    Surfaced in the UI as a warning banner so the user can investigate
+    before trusting the resulting P/L.
+    """
+    if df.empty or 'Net_Qty_Row' not in df.columns:
+        return []
+
+    sub_lower = df['Sub Type'].fillna('').str.lower()
+    legit_zero_sub = sub_lower.str.contains(
+        '|'.join(_LEGITIMATE_ZERO_SUB_TYPE_FRAGMENTS), regex=True, na=False,
+    )
+
+    suspicious = df[
+        df['Type'].isin(['Trade', 'Receive Deliver']) &
+        (df['Quantity'].abs() > FIFO_EPSILON) &
+        (df['Net_Qty_Row'].abs() < FIFO_EPSILON) &
+        ~df['Description'].fillna('').str.upper()
+                          .str.contains('|'.join(SPLIT_DSC_PATTERNS), regex=True, na=False) &
+        ~legit_zero_sub
+    ]
+    if suspicious.empty:
+        return []
+
+    return [
+        {
+            'ticker':      r['Ticker'],
+            'date':        r['Date'],
+            'action':      str(r['Action']) if pd.notna(r['Action']) else '',
+            'sub_type':    str(r['Sub Type']) if pd.notna(r['Sub Type']) else '',
+            'description': str(r['Description'])[:120] if pd.notna(r['Description']) else '',
+            'quantity':    float(r['Quantity']),
+        }
+        for _, r in suspicious.iterrows()
+    ]
+
+
 def apply_split_adjustments(df: pd.DataFrame, split_events: list) -> pd.DataFrame:
     """
     Rescale pre-split equity lot quantities so the FIFO engine sees correct
@@ -336,10 +407,23 @@ def parse_csv(file_bytes: bytes) -> ParsedData:
     df['Net_Qty_Row'] = df.apply(get_signed_qty, axis=1)
     df = df.sort_values('Date').reset_index(drop=True)
 
+    # Defensive check — find Trade/Receive Deliver rows the parser zeroed out
+    # because it didn't recognise the Action/Description.  Done BEFORE split
+    # adjustment so legitimate split-removal zeros are still filtered out by
+    # the SPLIT_DSC_PATTERNS guard inside detect_unknown_actions.  Almost
+    # always returns []; non-empty means a TastyTrade format change leaked a
+    # real trade through as Net_Qty_Row=0.
+    unknown_action_rows = detect_unknown_actions(df)
+
     # Corporate action detection must run after Net_Qty_Row is set and the
     # DataFrame is date-sorted. split_events feeds into apply_split_adjustments;
     # both lists are returned in ParsedData for UI warning banners.
     split_events, zero_cost_rows = detect_corporate_actions(df)
     df = apply_split_adjustments(df, split_events)
 
-    return ParsedData(df=df, split_events=split_events, zero_cost_rows=zero_cost_rows)
+    return ParsedData(
+        df=df,
+        split_events=split_events,
+        zero_cost_rows=zero_cost_rows,
+        unknown_action_rows=unknown_action_rows,
+    )
