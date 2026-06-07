@@ -79,7 +79,12 @@ def render_tab3(
                 'Divs': c.dividends, 'Exit': c.exit_proceeds,
                 'P/L': rpnl, 'Days': dur.days,
                 'Entry': c.start_date.strftime('%d/%m/%y'),
-                'Time to B/E': '—',
+                # NOTE: 'Time to B/E' column removed — it was hardcoded to '—'
+                # here because the summary table renders before live_prices is
+                # fetched.  The per-campaign cards below (see _time_to_be
+                # computation around line 270) show the live B/E estimate when
+                # the Live toggle is on, so the data is still surfaced — just
+                # not in this table.
             })
         return rows
 
@@ -101,10 +106,31 @@ def render_tab3(
 
     def _render_summary(rows):
         df = pd.DataFrame(rows)
+        # In Lifetime mode the two basis columns swap meaning vs normal mode:
+        #   normal:    Avg Price = blended_basis (cash / shares)
+        #              Cost Basis = effective basis (cash − premiums − divs) / shares
+        #   lifetime:  Avg Price = (cash + premiums + divs) / shares  ← gross outlay
+        #              Cost Basis = blended_basis (cash / shares)
+        # Rename to make the lifetime interpretation explicit so the user
+        # doesn't read the same column label as meaning the same thing.
+        if use_lifetime:
+            df = df.rename(columns={
+                'Avg Price':  'Gross /sh',     # cost + credits added back, per share
+                'Cost Basis': 'Blended /sh',   # raw acquisition cost per share
+            })
+            _basis_cols = ['Gross /sh', 'Blended /sh']
+        else:
+            _basis_cols = ['Avg Price', 'Cost Basis']
+        # Exit proceeds are always 0.0 for open campaigns (no shares sold yet).
+        # Show '—' instead of '$0.00' so the open vs closed distinction reads
+        # clearly at a glance.
+        def _fmt_exit(row):
+            return '—' if 'Open' in str(row['Status']) else fmt_dollar(row['Exit'])
+        df['Exit'] = df.apply(_fmt_exit, axis=1)
         st.dataframe(df.style.format({
-            'Avg Price': fmt_dollar, 'Cost Basis': fmt_dollar,
+            _basis_cols[0]: fmt_dollar, _basis_cols[1]: fmt_dollar,
             'Premiums': fmt_dollar, 'Divs': fmt_dollar,
-            'Exit': fmt_dollar, 'P/L': fmt_dollar,
+            'P/L': fmt_dollar,
         }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
 
     # Pre-compute open rows once — reused by both the export button and the table.
@@ -171,7 +197,9 @@ def render_tab3(
         _cd1.metric(
             'Capital Deployed',
             fmt_dollar(capital_deployed),
-            help='Cash tied up in open wheel positions (shares × entry price). Options margin not included.',
+            help='Cash tied up in open wheel positions (shares × blended cost basis — '
+                 'reflects all adds and assignments, not just the original entry price). '
+                 'Options margin not included.',
         )
         _cd2.metric(
             'Wheel Cap Efficiency',

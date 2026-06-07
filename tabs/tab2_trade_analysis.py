@@ -202,7 +202,11 @@ def render_tab2(
         hovertemplate='%{x|%d/%m/%y}<br><b>$%{y:,.2f}</b><extra></extra>'
     ))
     fig_eq.add_hline(y=0, line_color='rgba(255,255,255,0.1)', line_width=1)
-    _eq_lay = chart_layout('Cumulative Realized P/L' + _win_suffix, height=300, margin_t=40)
+    # Title is qualified ("Options") to disambiguate from Tab 4's portfolio
+    # equity curve, which carries the unqualified "Cumulative Realized P/L"
+    # label and sums equity + options + income.  This chart sums only the
+    # Net P/L of closed option trades.
+    _eq_lay = chart_layout('Cumulative Options Realized P/L' + _win_suffix, height=300, margin_t=40)
     _eq_lay['yaxis']['tickprefix'] = '$'
     _eq_lay['yaxis']['tickformat'] = ',.0f'
     fig_eq.update_layout(**_eq_lay)

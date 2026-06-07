@@ -328,9 +328,11 @@ def parse_csv(file_bytes: bytes) -> ParsedData:
     7. Detect corporate actions (splits, zero-cost deliveries).
     8. Apply split quantity rescaling to pre-split lots.
 
-    Returns ParsedData — a NamedTuple of (df, split_events, zero_cost_rows).
-    The corporate action lists are bundled here so callers don't need to
-    re-scan the DataFrame.
+    Returns ParsedData — a dataclass with fields `df`, `split_events`,
+    `zero_cost_rows`, and `unknown_action_rows`.  The corporate-action and
+    unknown-action lists are bundled here so callers don't need to re-scan
+    the DataFrame.  See `detect_unknown_actions` and `detect_corporate_actions`
+    for what populates each list.
 
     Raises
     ------

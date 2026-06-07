@@ -50,7 +50,7 @@ def render_landing(app_version: str) -> None:
     <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
         <div style="font-size:1.4rem;margin-bottom:0.4rem;">🎯</div>
         <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Premium Selling Performance</div>
-        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Win rate, capture %, annualised return, and profit factor broken down by ticker and strategy.</div>
+        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Win rate, capture %, daily theta yield, and profit factor broken down by ticker and strategy.</div>
     </div>
 
     <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">

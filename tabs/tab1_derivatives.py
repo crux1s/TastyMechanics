@@ -172,25 +172,31 @@ def render_tab1(
                 )
 
             with _col_cvp:
-                # ── Call vs Put table ─────────────────────────────────────────
-                st.markdown(f'##### 📊 Call vs Put Performance {_win_label}', unsafe_allow_html=True)
+                # ── Short Calls vs Short Puts table ──────────────────────────
+                # Filtered to credit trades, so every row is net-short by
+                # definition.  Title makes the scope explicit so it doesn't
+                # read as "all calls vs all puts" — debit / long trades land
+                # in the Strategy Breakdown table below, not here.
+                st.markdown(f'##### 📊 Short Calls vs Short Puts {_win_label}', unsafe_allow_html=True)
                 type_df = credit_cdf.groupby('Type').agg(
                     Trades=('Won', 'count'),
                     Win_Rate=('Won', lambda x: x.mean() * 100),
                     Med_Capture=('Capture %', 'median'),
                     Total_PNL=('Net P/L', 'sum'),
-                    Avg_PremDay=('Prem/Day', 'mean'),
+                    # Use median (not mean) so the per-type rows and the Total
+                    # row below display the same statistic for the same column.
+                    Med_PremDay=('Prem/Day', 'median'),
                     Med_Days=('Days Held', 'median'),
                     Med_DTE=('DTE at Open', 'median'),
                 ).reset_index().round(1)
-                type_df.columns = ['Type', 'Trades', 'Win %', 'Capture %', 'P/L', 'Prem/Day', 'Med Days in Trade', 'DTE at Entry']
+                type_df.columns = ['Type', 'Trades', 'Win %', 'Capture %', 'P/L', 'Med Prem/Day', 'Med Days in Trade', 'DTE at Entry']
                 _total_row = pd.DataFrame([{
                     'Type': '— Total',
                     'Trades': int(type_df['Trades'].sum()),
                     'Win %': round(credit_cdf['Won'].mean() * 100, 1),
                     'Capture %': round(credit_cdf['Capture %'].median(), 1),
                     'P/L': type_df['P/L'].sum(),
-                    'Prem/Day': round(credit_cdf['Prem/Day'].median(), 1),
+                    'Med Prem/Day': round(credit_cdf['Prem/Day'].median(), 1),
                     'Med Days in Trade': round(credit_cdf['Days Held'].median(), 1),
                     'DTE at Entry': round(credit_cdf['DTE at Open'].median(), 1),
                 }])
@@ -199,7 +205,7 @@ def render_tab1(
                     'Win %':     lambda x: '{:.1f}%'.format(x),
                     'Capture %': lambda x: '{:.1f}%'.format(x),
                     'P/L':       fmt_dollar,
-                    'Prem/Day':  lambda x: '${:.2f}'.format(x),
+                    'Med Prem/Day':  lambda x: '${:.2f}'.format(x),
                     'Med Days in Trade': lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                     'DTE at Entry':       lambda v: '{:.0f}d'.format(v) if pd.notna(v) else '—',
                 }).map(color_win_rate, subset=['Win %'])

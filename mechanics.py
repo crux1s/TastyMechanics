@@ -1036,6 +1036,12 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
             # Ann Return %: enabled for ALL trades (credit and debit) — the formula is
             # the same: P/L / capital_at_risk * annualisation factor.
             # Previously gated to is_credit only, leaving debit trades always None.
+            # NOTE: this column is per-trade only.  Do NOT re-introduce a Median Ann
+            # Return aggregate — the 365/days_held extrapolation degenerates on a
+            # mixed weekly/swing book, pegging the median to the ±cap.  v26.11
+            # dropped the scorecard tile, per-ticker median, and HTML report column
+            # for exactly that reason; this row-level value is kept only for
+            # sortable inspection in the per-trade table.
             'Ann Return %': max(min(net_pnl / capital_risk * 365 / days_held * 100, ANN_RETURN_CAP), -ANN_RETURN_CAP)
                 if capital_risk > 0 else None,
             'Prem/Day': open_credit / days_held if is_credit else None,  # credit trades only

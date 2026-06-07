@@ -222,7 +222,7 @@ import hashlib as _hashlib
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.13"
+APP_VERSION = "v26.14"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 
@@ -913,7 +913,8 @@ def main():
 
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric('Realized P/L', fmt_dollar(_pnl_display),
-              help='Total realised P/L — options premiums, share sales, and dividends. ' +
+              help='Total realised P/L — options premiums, share sales, dividends, '
+                   'and net interest (credit earned minus margin debit). ' +
                    ('Full account history.' if _is_all_time else 'Filtered to selected window.') +
                    ' Unrealised share gains not included.')
     if _ror_display is None:
@@ -1098,6 +1099,11 @@ def main():
                 all_campaigns=all_campaigns,
                 capital_deployed=capital_deployed,
                 closed_camp_pnl=closed_camp_pnl,
+                # v26.14 additions for reconciliation + version stamp + benchmark
+                open_premiums_banked=open_premiums_banked,
+                pure_opts_pnl=pure_opts_pnl,
+                app_version=APP_VERSION,
+                csv_fingerprint=_file_hash[:6],
             )
             _report_fname = 'tastymechanics_report_%s.html' % _win_start_str.replace('/', '-')
             st.download_button(

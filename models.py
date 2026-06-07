@@ -1,9 +1,9 @@
 """
 TastyMechanics — Data Models
 ==============================
-Single source of truth for all dataclasses and named tuples used across
-the application. No Streamlit dependency — fully importable from any
-module including tests and ingestion.
+Single source of truth for all dataclasses used across the application.
+No Streamlit dependency — fully importable from any module including
+tests and ingestion.
 
 Classes
 -------
