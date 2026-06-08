@@ -832,7 +832,7 @@ def build_html_report(
         s_strategy = ''
 
     # Section 5 — Equity Curve
-    s_equity = _section('P/L', '📈 Cumulative Realized P/L', html_eq) if html_eq else ''
+    s_equity = _section('P/L', '📈 Portfolio Realized P/L', html_eq) if html_eq else ''
 
     # Section 6 — Weekly + Monthly charts
     if html_wk or html_mo:

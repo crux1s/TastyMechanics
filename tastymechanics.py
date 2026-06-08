@@ -1187,7 +1187,10 @@ def main():
                     pure_options_tickers, pure_opts_per_ticker,
                     capital_deployed, start_date, end_date,
                     _is_all_time, selected_period, _win_label, _win_suffix,
-                    use_lifetime)
+                    use_lifetime,
+                    # Same value the HTML report uses for its benchmark line,
+                    # so the two surfaces show identical growth curves.
+                    net_deposited=total_deposited)
     with tab5:
         with st.columns([4, 1])[1]:
             _render_date_picker('tab5', _win_start_str, _win_end_str, _df_min_date, _latest_date)

@@ -50,13 +50,16 @@ def render_tab4(
     _win_label: str,
     _win_suffix: str,
     use_lifetime: bool,
+    net_deposited: float = 0.0,
+    benchmark_annual_pct: float = 10.0,
 ) -> None:
     """Tab 4 — All Trades: equity curve, per-ticker table, period charts, volatility metrics."""
     st.markdown(f'### 🔍 Portfolio Realized P/L {_win_label}', unsafe_allow_html=True)
     st.markdown(
         '<div style="font-size:0.8rem;color:#6b7280;margin-bottom:8px;line-height:1.5;">'
         'Full-history cumulative realized P/L — options, equity sales, dividends and interest. '
-        'FIFO-correct. Shaded region = selected time window.</div>',
+        'FIFO-correct. Shaded region = selected time window. '
+        'Dotted line = 10%/yr S&amp;P proxy on your net deposited capital, for context.</div>',
         unsafe_allow_html=True
     )
 
@@ -86,6 +89,26 @@ def render_tab4(
             fill='tozeroy', fillcolor=_eq_fill, name='Cumulative P/L',
             hovertemplate='%{x|%d/%m/%y}<br><b>%{y:$,.2f}</b><extra></extra>'
         ))
+        # Benchmark overlay — constant-growth line representing what `net_deposited`
+        # would have produced at `benchmark_annual_pct`/yr (default 10%, long-run
+        # S&P proxy).  Mirrors the same trace in the HTML report so the two
+        # surfaces match visually.  Faint dotted line, doesn't compete with the
+        # realised curve.
+        if benchmark_annual_pct and net_deposited > 0:
+            _bench_days  = (_eq_curve['Date'] - _eq_curve['Date'].iloc[0]).dt.days.clip(lower=0)
+            _bench_daily = benchmark_annual_pct / 100.0 / 365.0
+            _bench_y     = net_deposited * ((1 + _bench_daily) ** _bench_days - 1)
+            _fig_eq2.add_trace(go.Scatter(
+                x=_eq_curve['Date'], y=_bench_y,
+                mode='lines',
+                line=dict(color=COLOURS['text_muted'], width=1.2, dash='dot'),
+                opacity=0.6,
+                hovertemplate='%{x|%d/%m/%y}<br>'
+                              + '<b>$%{y:,.0f}</b> (S&amp;P proxy, '
+                              + '%.0f%%/yr)' % benchmark_annual_pct
+                              + '<extra></extra>',
+                name='%.0f%%/yr on net deposited' % benchmark_annual_pct,
+            ))
         if not _is_all_time:
             _fig_eq2.add_vrect(
                 x0=start_date, x1=latest_date,
@@ -106,7 +129,15 @@ def render_tab4(
             'Portfolio Equity Curve — Cumulative Realized P/L', height=300, margin_t=36)
         _eq2_lay['yaxis']['tickprefix'] = '$'
         _eq2_lay['yaxis']['tickformat'] = ',.0f'
-        _eq2_lay['showlegend'] = False
+        # Legend only when the benchmark line is drawn — without it the chart
+        # has just the single P/L trace and a legend would be clutter.
+        _eq2_lay['showlegend'] = bool(benchmark_annual_pct and net_deposited > 0)
+        if _eq2_lay['showlegend']:
+            _eq2_lay['legend'] = dict(
+                orientation='h', yanchor='bottom', y=1.02,
+                xanchor='right', x=1, bgcolor='rgba(0,0,0,0)',
+                font=dict(size=10, color=COLOURS['text_muted']),
+            )
         _fig_eq2.update_layout(**_eq2_lay)
         st.plotly_chart(_fig_eq2, width='stretch', config={'displayModeBar': False})
         st.caption(
