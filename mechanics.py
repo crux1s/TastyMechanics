@@ -319,6 +319,9 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 premiums=premiums, dividends=dividends,
                 exit_proceeds=0.0, start_date=start_date, end_date=None,
                 status='open', events=events,
+                # Lifetime mode collapses history; use net held shares so
+                # total_cost / shares_acquired equals blended_basis.
+                shares_acquired=net_shares,
             )]
 
     # Pre-compute earliest STO date per option symbol so we can detect closes
@@ -370,6 +373,9 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 running_shares        = split_qty
                 current.total_shares  = split_qty
                 current.blended_basis = current.total_cost / split_qty
+                # Rescale cumulative acquisitions too so total_cost /
+                # shares_acquired stays the correct per-share basis post-split.
+                current.shares_acquired *= ratio
                 current.events.append({
                     'date':   row.Date,
                     'type':   'Stock Split',
@@ -395,6 +401,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                     events=assignment_events + [
                         {'date': row.Date, 'type': 'Entry', 'detail': entry_label, 'cash': total}
                     ],
+                    shares_acquired=qty,
                 )
                 running_shares = qty
             else:
@@ -405,6 +412,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 current.total_shares  = new_shares
                 current.total_cost    = new_cost
                 current.blended_basis = new_basis
+                current.shares_acquired += qty
                 running_shares        = new_shares
                 _, _mid_asgn = _find_assignment_premium(t, row)
                 if _mid_asgn:
@@ -846,10 +854,18 @@ def _calculate_capital_risk(
     known_indexes: set,
     campaign_windows: Optional[dict] = None,
     open_date: Optional[pd.Timestamp] = None,
+    campaign_basis: Optional[dict] = None,
 ) -> float:
     """
     Pure function — computes Capital at Risk for a closed trade group.
     Uses opens['Total'].sum() (not net) for index premium proxy.
+
+    campaign_basis: optional {ticker: [(start, end, basis_per_share)]} —
+    average acquisition cost per share for each campaign window.  When
+    available, a pure covered call uses basis_per_share × mult as its
+    capital base (the stock actually pinned by the position) instead of
+    the premium proxy.  Premium-as-capital made Daily θ % degenerate to
+    100/DTE and pegged Ann Return % at ±cap for every covered call.
     """
     inst_type   = grp['Instrument Type'].iloc[0] if not grp.empty else 'Equity Option'
     mult        = get_opt_multiplier(ticker, inst_type)
@@ -910,9 +926,19 @@ def _calculate_capital_risk(
                     and len(info.put_strikes) > 0):
                 _put_strike = float(info.put_strikes.min())
                 return max(_put_strike * mult - abs(open_credit), 1)
-            # Pure covered call: stock fully covers, premium IS the marginal
-            # capital footprint.
+            # Pure covered call: the stock bag is the capital actually pinned
+            # by the position — use the campaign's average acquisition cost
+            # per share × mult (100 shares per contract).  This keeps Daily θ %
+            # a genuine yield-on-collateral (comparable to a CSP's
+            # strike × mult) instead of degenerating to 100/DTE, and stops
+            # Ann Return % pegging at ±cap on every covered call.
             if info.has_sc and not info.has_lc and not info.has_sp:
+                if campaign_basis is not None:
+                    for _s, _e, _basis in campaign_basis.get(ticker, []):
+                        if _s <= open_date <= _e and _basis > 0:
+                            return max(_basis * mult, 1)
+                # Fallback when no basis is known (caller didn't supply it):
+                # premium proxy, the pre-v26.15 behaviour.
                 return max(abs(open_credit), 1)
 
     # ── Naked short ────────────────────────────────────────────────────────────
@@ -924,7 +950,11 @@ def _calculate_capital_risk(
     return max(max_strike * mult, 1)
 
 
-def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = None) -> pd.DataFrame:
+def build_closed_trades(
+    df: pd.DataFrame,
+    campaign_windows: Optional[dict] = None,
+    campaign_basis: Optional[dict] = None,
+) -> pd.DataFrame:
     if campaign_windows is None: campaign_windows = {}
     equity_opts = df[df['Instrument Type'].isin(OPT_TYPES)].copy()
     sym_open_orders = {}
@@ -987,6 +1017,7 @@ def build_closed_trades(df: pd.DataFrame, campaign_windows: Optional[dict] = Non
         capital_risk = _calculate_capital_risk(
             grp, opens, is_credit, ticker, KNOWN_INDEXES,
             campaign_windows=campaign_windows, open_date=open_date,
+            campaign_basis=campaign_basis,
         )
 
         try:
@@ -1346,7 +1377,20 @@ def compute_app_data(parsed: ParsedData, use_lifetime: bool) -> AppData:
         _t: [(_c.start_date, _c.end_date or latest_date) for _c in _camps]
         for _t, _camps in all_campaigns.items()
     }
-    closed_trades_df = build_closed_trades(df, campaign_windows=_camp_windows)
+    # Per-campaign average acquisition cost per share — covered-call capital
+    # base in _calculate_capital_risk.  total_cost / shares_acquired survives
+    # campaign close (blended_basis is zeroed when shares hit 0).
+    _camp_basis = {
+        _t: [
+            (_c.start_date, _c.end_date or latest_date,
+             (_c.total_cost / _c.shares_acquired)
+             if _c.shares_acquired > FIFO_EPSILON else _c.blended_basis)
+            for _c in _camps
+        ]
+        for _t, _camps in all_campaigns.items()
+    }
+    closed_trades_df = build_closed_trades(
+        df, campaign_windows=_camp_windows, campaign_basis=_camp_basis)
 
     # ── All-time P/L accounting ────────────────────────────────────────────
     closed_camp_pnl, open_premiums_banked, capital_deployed = _aggregate_campaign_pnl(

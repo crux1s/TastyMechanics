@@ -1844,6 +1844,52 @@ check_int('detect_unknown_actions: canonical test CSV produces zero unknowns',
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 28. REGRESSION — v26.15 covered-call stock-basis capital
+# ══════════════════════════════════════════════════════════════════════════════
+# With cap-at-risk = premium (v26.12), every covered call's Daily θ %
+# degenerated to 100/dte_open (the premium cancels out of credit/dte/capital)
+# and Ann Return % pegged at ±cap.  v26.15 supplies an optional campaign_basis
+# dict {ticker: [(start, end, basis_per_share)]} so a pure covered call uses
+# the stock actually pinned (basis × mult) as its capital base — the same
+# scale as a CSP's strike × mult.
+#
+# Campaign.shares_acquired (cumulative buys, split-adjusted, never reduced by
+# sales) makes total_cost / shares_acquired survive campaign close, where
+# blended_basis is zeroed.
+#
+# Reuses the SOXS fixture from section 25: bought 100 @ $5.1208/sh
+# (total_cost 512.08), covered call sold for 67.87 credit at 43 DTE.
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 28. Regression: covered-call stock-basis capital ─────────────────────')
+
+# shares_acquired survives the (closed) SOXS campaign
+check_int('Basis: SOXS campaign shares_acquired = 100',
+          int(_camp.shares_acquired), 100)
+check('Basis: per-share acquisition cost = 5.1208',
+      _camp.total_cost / _camp.shares_acquired, 5.1208, tol=0.0001)
+check_int('Basis: blended_basis zeroed on close (why shares_acquired exists)',
+          _camp.blended_basis == 0.0, True)
+
+# With campaign_basis supplied: cap-at-risk = basis × 100 = 512.08
+_soxs_basis = {'SOXS': [(_camp.start_date, _camp.end_date,
+                         _camp.total_cost / _camp.shares_acquired)]}
+_soxs_ct_b = build_closed_trades(
+    _soxs_df, campaign_windows=_camp_windows, campaign_basis=_soxs_basis)
+_row_b = _soxs_ct_b.iloc[0]
+check_int('Basis: still classified Covered Call',
+          _row_b['Trade Type'] == 'Covered Call', True)
+check('Basis: cap-at-risk = stock basis × 100', _row_b['Capital at Risk'], 512.08)
+# Daily θ % = 67.87 / 42 / 512.08 × 100 ≈ 0.316 — a genuine yield, not 100/DTE.
+# (dte_open = 42: Jul 17 00:00 − Jun 4 19:43 truncates the partial day.)
+check('Basis: Daily θ % is yield-on-collateral', _row_b['Daily θ %'], 0.3156, tol=0.001)
+
+# Without campaign_basis: premium fallback (pre-v26.15 behaviour) preserved —
+# section 25 pins this at 67.87; re-assert here so the pairing is explicit.
+_soxs_ct_nb = build_closed_trades(_soxs_df, campaign_windows=_camp_windows)
+check('Basis: no-basis fallback still premium', _soxs_ct_nb.iloc[0]['Capital at Risk'], 67.87)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # GRAND TOTAL
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"═"*60}')

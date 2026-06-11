@@ -45,7 +45,7 @@ Capital Risk is used to compute Ann Return % and Daily θ %, and gives context f
 | Strategy | Capital Risk |
 |---|---|
 | Short Put | Strike × 100 |
-| Short Call (covered, inside wheel window) | Premium received (stock already accounted for in the campaign) |
+| Short Call (covered, inside wheel window) | Campaign average acquisition cost per share × 100 — the stock pinned by the position, same scale as a CSP's strike × 100 |
 | Spread (defined risk) | Width of spread × 100 − credit received |
 | Index options (SPX, XSP, NDX etc.) | Premium received (cash-secured not applicable) |
 | Iron Condor | Width of wider spread × 100 |

@@ -213,6 +213,12 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 
 ## Changelog
 
+**v26.15 — Covered-call capital base: stock basis, not premium** (2026-06-11)
+- **Covered-call Capital at Risk now uses the campaign's average acquisition cost per share × 100** — the stock actually pinned by the position, on the same scale as a CSP's strike × 100. The v26.12 premium-as-capital interim fix made `Daily θ %` degenerate to `100 ÷ DTE` (the premium cancels out of credit ÷ DTE ÷ capital) and pegged `Ann Return %` at ±500% on virtually every covered call. With covered calls at 38% of the book, the scorecard's Med Daily θ % was reading ~2.2%/day — an artifact of DTE choice, not entry quality. It now reads ~0.13%/day, back in the regime the green/orange thresholds (0.10% / 0.05%) were calibrated for, and directly comparable to short-put yields. For context, tastylive guidance: portfolio theta ≈ 0.1–0.5% of net liq per day; CSP entry yield ≈ 0.03–0.07%/day on committed capital.
+- **New `Campaign.shares_acquired` field** — cumulative shares bought (split-adjusted, never reduced by sales), so `total_cost ÷ shares_acquired` survives campaign close where `blended_basis` is zeroed. `compute_app_data` builds a `campaign_basis` dict from it and threads it through `build_closed_trades` → `_calculate_capital_risk`. Premium-as-capital remains as the fallback when no basis is supplied (e.g. direct calls in tests).
+- **Windowed Realized P/L chips split open vs closed** — the single "Wheel & Options Trading" chip is now "Options — Closed Trades" plus "Options — Open Positions ⏳" (premium banked, position still open, buyback/expiry lands in a future window), with an inline legend. Stops a heavy premium-selling month from reading as fully locked-in profit.
+- Test suite at **388 tests** (7 new in section 28 covering `shares_acquired` survival, stock-basis cap-at-risk, Daily θ % as genuine yield, and the no-basis fallback).
+
 **v26.14 — Documentation, table/chart accuracy audit + HTML report enhancements** (2026-06-07)
 - **Help-text and docstring audit** — six accuracy fixes: Realized P/L help now mentions interest; Capital Deployed help says "blended cost basis" not "entry price"; landing-page Tab 1 pitch dropped stale "annualised return" reference; `parse_csv` and `models.py` docstrings updated to reflect the v26.13 `@dataclass` conversion; `mechanics.py` Ann Return % comment pins the per-trade-only intent so a future maintainer can't accidentally re-add the dropped aggregate.
 - **Tables and charts audit (5 fixes)** — Tab 1 Call vs Put `Prem/Day` switched to median throughout (was mean per-row but median in totals) and renamed `Med Prem/Day` to match the scorecard; the dead `Time to B/E` column removed from the Wheel summary table (data still surfaced in the per-campaign cards when live prices are on); Lifetime-mode basis columns renamed `Gross /sh` and `Blended /sh` so the same labels don't mean different things across modes; `Exit` column shows `—` instead of `$0.00` on open campaigns; Tab 2 "Cumulative Realized P/L" chart renamed "Cumulative Options Realized P/L" so it doesn't collide with Tab 4's portfolio-wide curve under the same label.
@@ -244,71 +250,7 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 - **Wheel campaign same-timestamp close** — a stock exit and option BTC sharing the exact order timestamp (sort order placed equity row before option row) caused the BTC to be dropped from the campaign event log and routed to the outside-window options bucket. A `just_closed` reference now captures it on the campaign side, and `pure_options_pnl` uses an inclusive end boundary to avoid double-counting. Visible bug: SOXS covered-call campaign was reporting +$221.67 instead of the correct +$74.55.
 - Test suite at **347 tests** (14 new synthetic-data regression checks pinning the same-timestamp close and covered-call cap-at-risk behaviour).
 
-**v26.10 — TastyTrade-style Date Range Picker** (2026-06-05)
-- Time Window selector in tabs 1, 2, 4, 5 replaced with a `st.popover` date-range picker matching TastyTrade's UI. Button shows the live date range (📅 01/06 → 06/06); clicking opens a panel with 10 presets (Today, Yesterday, 7/14/30/60/120 Days, Year to Date, All Time) on the left and a calendar on the right for **Custom** date ranges. Active preset highlighted. Custom mode introduces a user-chosen `end_date` respected throughout the window slice, equity P/L, prior-period comparison, and chart renders.
-
-**v26.9 — Position Snapshot, Fintech Report Theme & Closed Campaign Tests** (2026-06-03)
-- **Position Snapshot** — replaces the AI Review Prompt. ⬇️ Snapshot button in the Open Positions tab downloads a plain-text file with live marks, IV, Black-Scholes Greeks (position-adjusted Δ/Γ/θ/ν), OTM/ITM distance, open P/L, gross vs net unrealised on wheel campaigns (showing premium offset explicitly), standalone equity positions, condensed historical scorecard, and portfolio-level Greeks summary including beta-weighted delta to SPY (computed from 90-day rolling returns via `yf.download()`).
-- **HTML report fintech theme** — complete visual overhaul: `#111827` background, `#1F2937` cards, teal brand mark, Inter font (Google CDN), pill badges, teal row hover. New sections: Closed Wheel Campaigns table, Capital Deployed + Closed Wheel P/L in Portfolio Overview (9 cards), Med Daily θ % in scorecard.
-- **Closed wheel campaign verification** — first real-data test of a fully closed campaign (ACHR: assigned Dec 2025, sold May 2026, net −$78.90 over full cycle).
-- **Account Interest row** in Per-Ticker P/L table — debit/credit interest not tied to a specific ticker now appears as an `Account / 💳 Interest` row so the table total matches the Portfolio Overview.
-- **Capital Deployed toggle fix** — House Money toggle no longer changes the Capital Deployed figure in the Wheel Campaigns tab.
-- Test suite at **333 tests**.
-
-**v26.8 — Daily θ %, Open Positions Enhancements & Fixes** (2026-05-12)
-- **Daily θ % metric** — new trade entry quality score: `Prem/Day ÷ Capital at Risk × 100`. Answers "was this trade worth putting on?" at the time of entry, regardless of how it ended. Appears in the Premium Selling Scorecard (Tab 1, 8th card), Performance by Ticker table, and Full Closed Trade Log. Coloured green (≥ 0.10%/day), orange (≥ 0.05%/day), red below — capped at 5%/day to suppress 0DTE distortion.
-- **Open Positions tab** — Wheel Campaign basis strip added to active campaign summaries; CSV export button added for the open positions list.
-- **Wheel Campaign cards** — live price strip added showing current equity/option marks inline on the card.
-- **Fix**: `detect_strategy()` for ratio spreads now counts option quantities instead of row counts, fixing misclassification of multi-row single-expiry ratio spread structures.
-- **Fix**: Futures options capital at risk now uses the correct per-product multiplier instead of a hardcoded fallback.
-- **UX**: 50% Target column removed from the closed trade log. "Basis Free In" renamed to "Time to B/E".
-- Test suite at **324 tests**.
-
-**v26.7 — Open Position Card Fixes & Iron Condor Detection** (2026-04-17)
-- **Live option marks now work** — two silent bugs fixed: `itertuples()` was dropping space-containing column names (`Expiration Date` → `_1`) so every mark lookup missed; and TastyTrade exports Saturday OCC settlement dates while yfinance uses the Friday last-trading-day, so the chain fetch never matched. Both fixed.
-- **Iron Condor / Reverse Iron Condor / Iron Butterfly / Reverse Iron Butterfly** added to the open positions strategy detector. Previously a four-leg condor was misidentified as Jade Lizard (a subset match). These four structures now take priority and mirror the closed-trades classifier.
-- **Strategy badge fix** — vertical call/put spreads (e.g. a bear call credit spread) were showing as `Long Call`. Fixed by replacing an incorrect `lc > 1` guard with proper strike-comparison logic for both call and put spreads.
-- **Open position card improvements** — explicit minus sign on negative unrealised P/L (was colour-only); per-share breakdown on stock legs; % of premium captured on single-leg short options; spread context row showing net credit/debit, max loss, and % of max profit.
-- Test suite at **311 tests**.
-
-**v26.6 — Ratio Spread & Ratio Lizard Detection** (2026-03-30)
-- **Three new strategy labels** — Call Ratio Spread, Put Ratio Spread, and Ratio Lizard (short put + unequal call spread, e.g. -1 45P / +1 65C / -2 70C). Previously these fell through to 'Call Credit Spread' or 'Jade Lizard'.
-- **Jade Lizard detection tightened** — now requires equal call quantities on both legs. Unequal-quantity call spreads combined with a short put now correctly classify as Ratio Lizard.
-- **Capital risk for ratio spreads** — the extra naked short leg is priced at the highest short strike × 100 minus credit received, reflecting the unbounded exposure.
-- Test suite at **307 tests**.
-
-**v26.5 — AI Review Prompt & Per-Ticker P/L Redesign** (2026-03-21)
-- **AI Review Prompt** in the sidebar — generates a structured markdown prompt covering win rate, capture %, DTE discipline, concentration, and strategy mix, ready to paste into any AI chat for a trading review.
-- **Per-Ticker P/L columns redesigned** — Premiums/Divs/Options → Options / Equity / Income. Options now merges in pre-campaign P/L; Equity is a new FIFO gain/loss column (was previously hidden).
-- **Portfolio Overview UX** — metric captions moved to help tooltips, DATA SYNC header replaced with a lighter caption, corporate action warnings collapsed into an expander, period comparison card moved into the Portfolio P/L tab.
-- Time window selector labels now visible consistently across all tabs.
-- Tab 4 renamed from "All Trades" to **"Portfolio P/L"**.
-
-**v26.4 — Wheel "Days to Free", Stacked Cash-Flow Charts & Tab UX** (2026-03-14)
-- **"Days to Free" estimate** on Wheel Campaign cards and summary table — projects how many days at the current premium + dividend collection rate until effective cost basis reaches $0. Displays `~450d`, `✅ Free`, or `—` (no income collected yet). "at current rate" sub-caption flags it as a straight-line projection.
-- **Stacked cash-flow bar charts** in the Portfolio Realized P/L tab — weekly and monthly bars now broken into Options (blue), Equity (orange), and Income (green) segments, making it immediately clear which category is driving a positive or negative period.
-- **Pre-purchase option attribution banner** on Wheel Campaign cards — amber info note when closing debits from options opened before the share purchase land inside the campaign window without their opening credits.
-- **Discipline & Patterns tab reordered** for narrative flow: Cumulative P/L moved to top, both DTE charts grouped under one "DTE Discipline" section, Win/Loss Distribution and Rolling Capture % paired side-by-side under "Trade Quality", timing charts and ticker heatmap under "Timing & Concentration".
-- **Fix**: Monthly options equity curve was showing duplicate month labels (e.g. two "Jan 2026") — x-axis ticks now pinned to exact candle positions via `tickvals`/`ticktext`.
-- **Rename**: Portfolio Realized P/L tab sections and charts renamed to "Cash Flow" terminology; caption added explaining settlement-date vs closed-trade methodology difference.
-
-**v26.3 — Live Prices & UX Polish** (2026-03-06)
-- **Live market prices** on Open Positions tab — opt-in toggle fetches equity quotes and option marks from Yahoo Finance (5-min cache). Shows last price, day change %, mark (bid/ask), and unrealised P/L per leg with a card-level total. Nothing is sent until the toggle is enabled.
-- Open Positions cards now show **share quantity** including fractional holdings (e.g. META 0.2 sh)
-- Roll chain table column order and labels updated — Date first, `Exp` → Expiry, `Cash` → Credit/Debit Rcvd, `Days` → **Days Held**; closing legs show days the position was held open
-- Landing page extracted to `tabs/landing.py` matching the tab renderer pattern
-- `market_data.py` added — isolated yfinance wrapper with graceful network-error handling
-- `yfinance>=0.2` added to `requirements.txt`
-
-**v25.12 — Charts, Report Export & Fixes** (2026-03-01)
-- Weekly and Monthly P/L bar charts replaced with **candlestick charts**
-- **HTML report export** — self-contained dark-theme HTML with two scorecard sections, equity curve, candle charts, and performance by ticker table
-- Lifetime "House Money" toggle moved into the Wheel Campaigns tab header
-- f-string Python 3.10/3.11 compatibility fix; `datetime.utcnow()` deprecation fixed
-- 13-colour `COLOURS` palette — all hardcoded hex removed from UI layer
-- Test suite expanded to **294 tests** (24 sections); two `detect_strategy()` false positives fixed
-
-**Earlier releases** — v25.3 through v25.11 covered the initial modular refactor (mechanics.py, ingestion.py, tabs/, config.py), FIFO engine fixes, stock split handling, LEAPS separation, and test suite build-out. See git log for detail.
+**Earlier releases (v25.12 – v26.10, Mar–Jun 2026)** — HTML report export and fintech dark theme; live Yahoo Finance prices on Open Positions and Wheel Campaign cards; Position Snapshot download (marks, IV, Black-Scholes Greeks, beta-weighted delta); TastyTrade-style date-range picker with custom windows; Daily θ % metric introduced; strategy detection expanded (Iron Condor variants, ratio spreads, Ratio Lizard, vertical-spread fixes); per-ticker P/L redesign with Options / Equity / Income split; stacked cash-flow charts and candlesticks; "Days to Free" estimate on campaign cards. v25.3 – v25.11 covered the initial modular refactor (mechanics.py, ingestion.py, tabs/, config.py), FIFO engine fixes, stock split handling, LEAPS separation, and the test suite build-out. Full notes in the git log.
 
 ---
 

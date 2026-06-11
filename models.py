@@ -77,6 +77,12 @@ class Campaign:
     end_date       Date shares hit zero (None while still open)
     status         'open' or 'closed'
     events         Ordered list of dicts — {date, type, detail, cash} for the UI log
+    shares_acquired  Cumulative shares BOUGHT over the campaign (split-adjusted,
+                   never reduced by sales).  total_cost / shares_acquired gives
+                   the average acquisition cost per share, which survives
+                   campaign close (blended_basis is zeroed when shares hit 0).
+                   Used as the covered-call capital base in
+                   _calculate_capital_risk.
     """
     ticker:                  str
     total_shares:            float
@@ -90,6 +96,7 @@ class Campaign:
     status:                  str                     # 'open' | 'closed'
     events:                  list = field(default_factory=list)
     pre_campaign_close_net:  float = 0.0             # net cash from closes of pre-purchase options
+    shares_acquired:         float = 0.0             # cumulative shares bought (split-adjusted)
 
 
 # ── Computation output ────────────────────────────────────────────────────────

@@ -28,7 +28,7 @@ Always run after any change:
 PYTHONIOENCODING=utf-8 python3 test_tastymechanics.py
 ```
 
-Expected: `381 tests | 381 passed | 0 failed` (28 sections, with section 0 = end-to-end smoke check)
+Expected: `388 tests | 388 passed | 0 failed` (29 sections, with section 0 = end-to-end smoke check)
 
 The `PYTHONIOENCODING=utf-8` prefix is required on Windows — omitting it causes a `charmap` codec error on the Unicode characters in test output.
 
@@ -103,7 +103,7 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 **Strategy classifier labels** — `_classify_trade_type()` returns direction-aware butterfly labels: `'Long Call/Put Butterfly'` (buy wings, sell body) and `'Short Call/Put Butterfly'` (sell wings, buy body ×2). Iron Condor variants: `'Iron Butterfly'` (short legs share same ATM strike), `'Reverse Iron Butterfly'` (long legs share same ATM strike), `'Iron Condor'` (credit, short legs at different strikes), `'Reverse Iron Condor'` (debit). Both `_classify_trade_type()` and `_calculate_capital_risk()` now consume the same `_LegInfo` dataclass built by `_derive_leg_info(grp, opens)` — any structure-detection change (butterfly flags, jade/ratio lizard conditions, leg-quantity aggregates) must happen in `_derive_leg_info` only. Never re-derive `has_sc`/`has_sp`/`is_butterfly` inline in either consumer.
 
-**Covered call capital at risk** — `_calculate_capital_risk()` takes optional `campaign_windows` and `open_date`. Inside an active wheel window: a pure covered call (`has_sc and not has_lc and not has_sp`) uses `abs(open_credit)`; a covered strangle / straddle (`has_sc and has_sp` with no longs) uses `put_strike × mult − abs(open_credit)` since the stock only hedges the call side. Pass both args through from `build_closed_trades()`; the call site already does.
+**Covered call capital at risk** — `_calculate_capital_risk()` takes optional `campaign_windows`, `open_date`, and `campaign_basis` (`{ticker: [(start, end, basis_per_share)]}`). Inside an active wheel window: a pure covered call (`has_sc and not has_lc and not has_sp`) uses `basis_per_share × mult` — the stock actually pinned by the position, same scale as a CSP's `strike × mult`. Premium-as-capital (the v26.12 interim fix) made `Daily θ %` degenerate to `100/dte_open` (premium cancels out) and pegged `Ann Return %` at ±cap on every covered call; it remains only as the fallback when no basis is supplied. A covered strangle / straddle (`has_sc and has_sp` with no longs) uses `put_strike × mult − abs(open_credit)`. `compute_app_data` builds `_camp_basis` from `total_cost / shares_acquired` — the `Campaign.shares_acquired` field (cumulative buys, split-adjusted, never reduced by sales) exists precisely because `blended_basis` is zeroed when a campaign closes.
 
 **`unknown_action_rows` defensive scan** — `parse_csv` runs `detect_unknown_actions(df)` after `Net_Qty_Row` is computed and surfaces any `Trade` / `Receive Deliver` row that has non-zero `Quantity` but `Net_Qty_Row == 0`. Split removals and cash-settled / symbol-change Sub Types are allow-listed (`_LEGITIMATE_ZERO_SUB_TYPE_FRAGMENTS` in `ingestion.py`). The list is exposed on `ParsedData.unknown_action_rows` (defaults to `[]`) and shown as a red banner in `tastymechanics.py main()` ahead of the corporate-action expander. If a new TastyTrade format adds a legitimate zero-share Sub Type that isn't a split or cash-settled, append the fragment to that allow-list — don't widen the detector.
 
@@ -125,7 +125,7 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 - `ROADMAP.md` — pending work, prioritised
 - `Known-Limitations.md` — what doesn't work or is untested
-- `test_tastymechanics.py` — 381 tests, 28 sections (section 0 = compute_app_data end-to-end smoke check; gates the rest)
+- `test_tastymechanics.py` — 388 tests, 29 sections (section 0 = compute_app_data end-to-end smoke check; gates the rest)
 - `config.py` — `KNOWN_INDEXES`, `COLOURS`, `DTE_*`, `WIN_RATE_*`, `FIFO_EPSILON`
 
 ---
