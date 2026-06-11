@@ -16,7 +16,7 @@ from config import (
     WHEEL_MIN_SHARES, LEAPS_DTE_THRESHOLD, ROLL_CHAIN_GAP_DAYS,
     SPLIT_DSC_PATTERNS, ZERO_COST_WARN_TYPES,
     REQUIRED_COLUMNS,
-    ANN_RETURN_CAP,
+    ANN_RETURN_CAP, FIFO_EPSILON,
     MTM_ROR_GREEN, MTM_ROR_ORANGE,
     COLOURS,
 )
@@ -813,6 +813,18 @@ def main():
 
     window_realized_pnl = _w_opts['Total'].sum() + _eq_pnl + _w_div_int
 
+    # Split the window's options flow by whether the option symbol is still
+    # open (all-time net qty != 0).  Premium from open shorts is banked cash,
+    # but the position's risk is live — its buyback or expiry lands in a
+    # FUTURE window.  Showing the split stops a heavy premium-selling month
+    # from reading as fully locked-in profit.
+    _opt_all_syms = (
+        df[df['Instrument Type'].isin(OPT_TYPES) & df['Type'].isin(TRADE_TYPES)]
+        .groupby('Symbol')['Net_Qty_Row'].sum()
+    )
+    _open_opt_syms     = set(_opt_all_syms[_opt_all_syms.abs() > FIFO_EPSILON].index)
+    _w_opts_open_flow  = _w_opts[_w_opts['Symbol'].isin(_open_opt_syms)]['Total'].sum()
+
     # ── Prior period P/L (for WoW / MoM comparison card) ─────────────────────────
     _window_span  = end_date - start_date
     _prior_end    = start_date
@@ -959,11 +971,19 @@ def main():
             f'<span style="color:' + COLOURS['text_muted'] + ';font-size:0.78rem;font-style:italic;">All Time</span>'
         )
     else:
-        _w_opts_only = _w_opts['Total'].sum()
+        _w_opts_only   = _w_opts['Total'].sum()
+        _w_opts_closed = _w_opts_only - _w_opts_open_flow
+        # Two chips instead of one: premium from still-open positions is real
+        # banked cash, but its buyback/expiry lands in a future window — the
+        # split keeps a heavy selling month honest about what's locked in.
         _breakdown_html = (
-            _pnl_chip('Wheel & Options Trading', _w_opts_only) +
+            _pnl_chip('Options — Closed Trades', _w_opts_closed) +
+            _pnl_chip('Options — Open Positions ⏳', _w_opts_open_flow) +
             _pnl_chip('Equity Sales', _eq_pnl) +
-            _pnl_chip('Div + Interest', div_income + int_net)
+            _pnl_chip('Div + Interest', div_income + int_net) +
+            f'<span style="color:' + COLOURS['text_muted'] + ';font-size:0.74rem;'
+            f'font-style:italic;margin-left:6px;">⏳ = premium banked, position still open — '
+            f'risk lands in a future window</span>'
         )
 
     st.markdown(
