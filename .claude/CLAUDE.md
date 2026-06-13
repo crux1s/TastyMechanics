@@ -70,7 +70,7 @@ mechanics.py           FIFO engine, campaign logic, trade classification
 ui_components.py       Formatters, colour functions, chart helpers
 market_data.py         Live price fetcher — yfinance wrapper, 5-min cache, opt-in only
                        Also exposes bs_greeks() and returns iv/beta per ticker
-report.py              HTML report export — fintech dark theme, no Streamlit dependency
+report.py              HTML report export — self-contained tabbed dashboard, no Streamlit/Plotly dependency
 position_snapshot.py   Plain-text position snapshot for AI review — no Streamlit dependency
 tabs/landing.py        Landing page renderer (shown before CSV upload)
 tabs/tab0–tab5         One renderer per tab, imported by tastymechanics.py
@@ -94,6 +94,8 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 **DTE thresholds** — `DTE_ALERT_CRIT = 5` and `DTE_ALERT_WARN = 14` live in `config.py`. Never hardcode 5 or 14 in UI code.
 
 **xe()** — `xe(s)` in `ui_components.py` escapes strings for HTML. Every dynamic value interpolated into an f-string HTML template must pass through `xe()`.
+
+**report.py (the dashboard)** — `build_html_report()` emits a self-contained tabbed dashboard (Overview / Performance / Wheel & Discipline) with hand-rolled inline-SVG equity curve + OHLC candlesticks, sortable tables, and vanilla JS — no Plotly, no CDN, no Streamlit. The big HTML/CSS/JS lives in the `_TEMPLATE` string (token `__NAME__` substitution, NOT f-strings, so CSS/JS braces need no escaping). `_dashboard_data()` derives the single `DATA` dict it bakes in, computed entirely from the args `build_html_report` already receives — ThetaGang management rate from `all_cdf['Close Reason']`, concentration from premium-by-ticker in `credit_cdf`, so there's no raw-df dependency. All-time-vs-window split: scorecard / breakdowns / candles / per-ticker reflect the window-sliced `all_cdf`/`credit_cdf`; the Portfolio Realized P/L curve uses full-history `daily_pnl_all`. Keep the signature stable — `tastymechanics.py` calls it with fixed kwargs.
 
 **realized_pnl()** — for closed campaigns includes `exit_proceeds`. For open campaigns it's premiums + dividends only. `use_lifetime=True` always returns premiums + dividends regardless of status (strips equity component for House Money mode).
 
