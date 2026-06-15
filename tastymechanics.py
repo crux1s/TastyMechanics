@@ -1124,6 +1124,7 @@ def main():
                 pure_opts_pnl=pure_opts_pnl,
                 app_version=APP_VERSION,
                 csv_fingerprint=_file_hash[:6],
+                end_date=end_date,   # window upper bound so the curve slices to the same range
             )
             _report_fname = 'tastymechanics_report_%s.html' % _win_start_str.replace('/', '-')
             st.download_button(

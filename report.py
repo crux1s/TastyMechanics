@@ -48,8 +48,8 @@ def _r(v, dp=2):
         return 0.0
 
 
-def _dashboard_data(all_cdf, credit_cdf, all_campaigns, daily_pnl_all,
-                    total_realized_pnl, net_deposited, capital_deployed,
+def _dashboard_data(all_cdf, credit_cdf, all_campaigns, daily_pnl_all, series_df,
+                    pnl_display, net_deposited, capital_deployed,
                     div_income, int_net, total_fees,
                     win_start, win_end, days, n_trades):
     cdf = all_cdf if all_cdf is not None else pd.DataFrame()
@@ -57,9 +57,12 @@ def _dashboard_data(all_cdf, credit_cdf, all_campaigns, daily_pnl_all,
     has_credit = not credit.empty
 
     # ── overview ──
+    # pnl_display is window-aware (window figure when a window is selected,
+    # all-time figure for 'All Time') so the hero matches the windowed curve
+    # endpoint and the windowed scorecard below it.
     overview = {
-        'total_pnl': _r(total_realized_pnl),
-        'ror': _r(total_realized_pnl / net_deposited * 100, 1) if net_deposited else 0.0,
+        'total_pnl': _r(pnl_display),
+        'ror': _r(pnl_display / net_deposited * 100, 1) if net_deposited else 0.0,
         'deployed': _r(capital_deployed),
         'div': _r(div_income), 'int': _r(int_net),
         'deposited': _r(net_deposited),
@@ -136,10 +139,14 @@ def _dashboard_data(all_cdf, credit_cdf, all_campaigns, daily_pnl_all,
     else:
         cap_dist = [{'label': l, 'n': 0} for l in labels]
 
-    # ── portfolio realized P/L series (all-time, from daily_pnl_all) ──
+    # ── portfolio realized P/L series — reflects the selected window ──
+    # series_df is daily_pnl_all sliced to [win start, win end] by the caller
+    # (full frame when 'All Time'), so the cumulative curve starts at 0 at the
+    # window open and its endpoint equals the windowed hero P/L.
     series = []
-    if daily_pnl_all is not None and not daily_pnl_all.empty:
-        d = daily_pnl_all.sort_values('Date').copy()
+    src = series_df if (series_df is not None) else daily_pnl_all
+    if src is not None and not src.empty:
+        d = src.sort_values('Date').copy()
         d['cum'] = d['PnL'].cumsum()
         series = [{'d': str(r['Date'])[:10], 'v': _r(r['cum'])} for _, r in d.iterrows()]
 
@@ -235,7 +242,12 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .brand { width:36px; height:36px; border-radius:9px; flex-shrink:0;
     background:linear-gradient(135deg,var(--teal),var(--violet));
     display:grid; place-items:center; font-size:19px; box-shadow:0 6px 20px rgba(45,212,191,0.35); }
-  .brand-txt { font-weight:800; font-size:1.5rem; letter-spacing:-0.02em; }
+  .brand-block { display:flex; flex-direction:column; gap:4px; }
+  .brand-txt { font-weight:800; font-size:1.4rem; letter-spacing:-0.02em; line-height:1; }
+  .period-line { display:flex; align-items:center; gap:11px; flex-wrap:wrap; }
+  .pp { font-size:0.74rem; font-weight:800; letter-spacing:0.08em; text-transform:uppercase;
+    color:#06121a; background:linear-gradient(135deg,var(--teal),var(--cyan)); padding:4px 12px; border-radius:999px; }
+  .pr { font-size:1.12rem; font-weight:700; color:var(--txt); font-variant-numeric:tabular-nums; letter-spacing:-0.01em; }
   .brand-sub { color:var(--mut); font-size:0.86rem; margin-left:auto; text-align:right; }
   .brand-sub b { color:var(--txt); }
   .rise { opacity:0; transform:translateY(14px); animation:rise .6s cubic-bezier(.2,.7,.3,1) forwards; }
@@ -332,12 +344,15 @@ _TEMPLATE = r"""<!DOCTYPE html>
 <div class="wrap">
   <div class="hdr rise">
     <div class="brand">📟</div>
-    <div class="brand-txt">TastyMechanics</div>
-    <div class="brand-sub">__START__ → __END__<br><b>__NTRADES__ closed trades</b> · __DAYS__ days</div>
+    <div class="brand-block">
+      <div class="brand-txt">TastyMechanics</div>
+      <div class="period-line"><span class="pp">__PERIOD__</span><span class="pr">__RANGE__</span></div>
+    </div>
+    <div class="brand-sub"><b>__NTRADES__ closed trades</b><br>__DAYS__ days</div>
   </div>
   <div class="hero">
     <div class="card hero-main rise" style="animation-delay:.05s">
-      <div class="card-lbl">Total Realized P/L</div>
+      <div class="card-lbl">__PNL_LABEL__</div>
       <div class="hero-pnl" id="heroPnl">$0</div>
       <div class="hero-row">
         <span class="pill">ROR <b id="heroRor" class="pos">0%</b></span>
@@ -365,16 +380,6 @@ _TEMPLATE = r"""<!DOCTYPE html>
     <div class="sec"><span class="tag">Verdict</span><h2>Account Health</h2>
       <span class="meta">traffic-light thresholds · TastyTrade playbook</span></div>
     <div class="grid4" id="health"></div>
-    <div class="sec"><span class="tag">Options</span><h2>Premium Selling Scorecard</h2>
-      <span class="meta">credit trades only</span></div>
-    <div class="card">
-      <div class="row-lbl">Trade Quality</div>
-      <div class="mgrid mrow7" id="scQuality"></div>
-      <div class="row-lbl">Risk &amp; Fees</div>
-      <div class="mgrid mrow7" id="scRisk"></div>
-    </div>
-  </div>
-  <div class="panel" id="panel-perf">
     <div class="sec"><span class="tag">Performance</span><h2>Portfolio Realized P/L</h2>
       <span class="meta">cumulative · options + equity + income</span></div>
     <div class="card chart-card">
@@ -386,6 +391,16 @@ _TEMPLATE = r"""<!DOCTYPE html>
         <span><i style="background:var(--teal)"></i>Realized P/L</span>
         <span><i style="background:var(--violet);opacity:.7"></i>10%/yr S&amp;P proxy on deposits</span>
       </div>
+    </div>
+  </div>
+  <div class="panel" id="panel-perf">
+    <div class="sec"><span class="tag">Options</span><h2>Premium Selling Scorecard</h2>
+      <span class="meta">credit trades only</span></div>
+    <div class="card">
+      <div class="row-lbl">Trade Quality</div>
+      <div class="mgrid mrow7" id="scQuality"></div>
+      <div class="row-lbl">Risk &amp; Fees</div>
+      <div class="mgrid mrow7" id="scRisk"></div>
     </div>
     <div class="sec"><span class="tag">Options curve</span><h2>Weekly &amp; Monthly Options P/L</h2>
       <span class="meta">cumulative-P/L candlesticks · by close date</span></div>
@@ -603,25 +618,27 @@ function wireHover(svg){
   });
   wrap.addEventListener('mouseleave',()=>{ tip.style.opacity=0; const c=wrap.querySelector('.crosshair'); if(c)c.style.opacity=0; const d=dot(); if(d)d.setAttribute('opacity','0'); });
 }
+function renderEquity(){
+  const S=DATA.series; if(!S.length) return;
+  const d0=new Date(S[0].d), dep=ov.deposited;
+  const bench=dep>0?S.map(p=>{const days=(new Date(p.d)-d0)/86400000; return dep*(Math.pow(1+0.10/365,days)-1);}):null;
+  const svg=document.getElementById('eqsvg'); areaCurve(svg,S,'v',{bench,lbl:'d'}); wireHover(svg);
+}
 function renderPerf(){
-  const S=DATA.series;
-  if(S.length){
-    const d0=new Date(S[0].d), dep=ov.deposited;
-    const bench=dep>0?S.map(p=>{const days=(new Date(p.d)-d0)/86400000; return dep*(Math.pow(1+0.10/365,days)-1);}):null;
-    const svg=document.getElementById('eqsvg'); areaCurve(svg,S,'v',{bench,lbl:'d'}); wireHover(svg);
-  }
   if(DATA.weekly.length){ const s=document.getElementById('wkSvg'); candleChart(s,DATA.weekly); wireHover(s);
     const e=DATA.weekly[DATA.weekly.length-1].c, el=document.getElementById('wkEnd'); el.textContent=fmtUSD(e,0); el.className='endval '+cls(e); }
   if(DATA.monthly.length){ const s=document.getElementById('moSvg'); candleChart(s,DATA.monthly); wireHover(s);
     const e=DATA.monthly[DATA.monthly.length-1].c, el=document.getElementById('moEnd'); el.textContent=fmtUSD(e,0); el.className='endval '+cls(e); }
   animBars();
 }
+renderEquity();  // Portfolio Realized P/L lives in Overview (default-active tab) — draw on load
 document.querySelectorAll('.tab-btn').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
   b.classList.add('active');
   document.getElementById('panel-'+b.dataset.tab).classList.add('active');
   if(b.dataset.tab==='perf') renderPerf();
+  else if(b.dataset.tab==='overview') renderEquity();
 });
 </script>
 </body>
@@ -648,6 +665,7 @@ def build_html_report(
     app_version='',
     csv_fingerprint='',
     benchmark_annual_pct=10.0,
+    end_date=None,               # window upper bound (Custom-aware); defaults to latest_date
 ):
     """Build the self-contained tabbed HTML dashboard as a string.
 
@@ -664,12 +682,42 @@ def build_html_report(
         days = 1
     n_trades = len(all_cdf) if all_cdf is not None else 0
 
+    _is_all_time = (selected_period == 'All Time')
+    # Window-aware hero P/L — matches the windowed curve endpoint + scorecard.
+    pnl_display = total_realized_pnl if _is_all_time else window_realized_pnl
+
+    # Slice the daily P/L series to the selected window so the Portfolio
+    # Realized P/L curve reflects the same range as every other chart.  Use the
+    # real start_date / end_date Timestamps (time-aware) — the exact bounds the
+    # caller used to slice df_window / all_cdf — so the curve's endpoint equals
+    # the windowed hero P/L to the cent.  (Normalising to calendar dates pulled
+    # in an extra boundary day and broke that match.)
+    series_df = daily_pnl_all
+    _end = end_date if end_date is not None else latest_date
+    if (daily_pnl_all is not None and not daily_pnl_all.empty and not _is_all_time):
+        try:
+            _d = pd.to_datetime(daily_pnl_all['Date'])
+            series_df = daily_pnl_all[(_d >= start_date) & (_d <= _end)]
+        except (ValueError, TypeError):
+            series_df = daily_pnl_all
+
     data = _dashboard_data(
-        all_cdf, credit_cdf, all_campaigns, daily_pnl_all,
-        total_realized_pnl, net_deposited, capital_deployed,
+        all_cdf, credit_cdf, all_campaigns, daily_pnl_all, series_df,
+        pnl_display, net_deposited, capital_deployed,
         div_income, int_net, total_fees,
         _win_start_str, _win_end_str, days, n_trades,
     )
+
+    # ── headline period + range (e.g. "30 DAYS   11 May 2026 → 10 Jun 2026") ──
+    def _pretty(s):
+        for fmt in ('%d/%m/%y', '%d/%m/%Y', '%Y-%m-%d'):
+            try:
+                return datetime.strptime(str(s), fmt).strftime('%d %b %Y')
+            except (ValueError, TypeError):
+                continue
+        return str(s)
+    range_str = '%s → %s' % (_pretty(_win_start_str), _pretty(_win_end_str))
+    pnl_label = 'Total Realized P/L' if _is_all_time else 'Realized P/L · window'
 
     ov = data['overview']
     fmt_int = lambda v: '$%s' % format(round(v), ',')
@@ -683,8 +731,9 @@ def build_html_report(
         .replace('__DATA__', json.dumps(data))
         .replace('__GENERATED__', generated)
         .replace('__VERSTAMP__', verstamp)
-        .replace('__START__', str(_win_start_str))
-        .replace('__END__', str(_win_end_str))
+        .replace('__PERIOD__', str(selected_period))
+        .replace('__RANGE__', range_str)
+        .replace('__PNL_LABEL__', pnl_label)
         .replace('__DAYS__', str(days))
         .replace('__NTRADES__', str(n_trades))
         .replace('__DEPOSITED__', fmt_int(ov['deposited']))
