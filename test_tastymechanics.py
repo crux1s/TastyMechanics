@@ -58,6 +58,7 @@ from mechanics import (
     build_option_chains,
     build_closed_trades,
     _calculate_capital_risk,
+    calculate_daily_realized_pnl,
     calc_dte,
     _uf_find,
     _uf_union,
@@ -1887,6 +1888,99 @@ check('Basis: Daily θ % is yield-on-collateral', _row_b['Daily θ %'], 0.3156, 
 # section 25 pins this at 67.87; re-assert here so the pairing is explicit.
 _soxs_ct_nb = build_closed_trades(_soxs_df, campaign_windows=_camp_windows)
 check('Basis: no-basis fallback still premium', _soxs_ct_nb.iloc[0]['Capital at Risk'], 67.87)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 29. LONG-TERM PERFORMANCE — xirr() + portfolio_metrics()
+# ══════════════════════════════════════════════════════════════════════════════
+# MWR (money-weighted return / XIRR), CAGR on deposits, max drawdown, Calmar,
+# monthly stats.  TWR is intentionally NOT computed (needs daily NLV the CSV
+# lacks) — these are the honest, computable long-term metrics.
+print('\n── 29. Long-term performance: xirr + portfolio_metrics ──────────────────')
+
+from mechanics import xirr, portfolio_metrics, _max_drawdown
+
+_T0 = pd.Timestamp('2025-01-01')
+def _yr(n): return _T0 + pd.Timedelta(days=365*n)
+
+# ── XIRR ──
+# Deposit $1000 (out of pocket → -1000), 1yr later worth $1100 (+1100) → 10%.
+check('XIRR: +10%/yr', xirr([(_T0,-1000.0),(_yr(1),1100.0)]), 0.10, tol=0.005)
+# $1000 → $500 over 1yr → -50%.
+check('XIRR: -50%/yr', xirr([(_T0,-1000.0),(_yr(1),500.0)]), -0.50, tol=0.005)
+# Two deposits then terminal: -1000 @ y0, -1000 @ y1, +2200 @ y2 → ~ small positive
+_mwr2 = xirr([(_T0,-1000.0),(_yr(1),-1000.0),(_yr(2),2200.0)])
+check_int('XIRR: multi-flow returns a rate', _mwr2 is not None and -1 < _mwr2 < 10, True)
+# Degenerate cases → None
+check_int('XIRR: all same sign → None', xirr([(_T0,-1000.0),(_yr(1),-500.0)]) is None, True)
+check_int('XIRR: single flow → None', xirr([(_T0,-1000.0)]) is None, True)
+check_int('XIRR: empty → None', xirr([]) is None, True)
+# Terminal far beyond the +1000%/yr bracket → unbracketed → None
+check_int('XIRR: beyond bracket → None',
+          xirr([(_T0,-1000.0),(_yr(1),100000.0)]) is None, True)
+
+# ── portfolio_metrics: CAGR ──
+def _flat_daily(dates_vals):
+    return pd.DataFrame([{'Date': pd.Timestamp(d), 'PnL': v} for d, v in dates_vals])
+
+# CAGR: realized 1000 on 1000 deposited over 365d → (1+1)^1 - 1 = 1.0
+_pm = portfolio_metrics(_flat_daily([('2025-01-01',1000.0)]),
+                        [(_T0,-1000.0)], 1000.0, 1000.0, 365, _yr(1))
+check('CAGR: 1000/1000/365d = 1.0', _pm['cagr'], 1.0, tol=0.001)
+# Same over 730d → (2)^(0.5) - 1 ≈ 0.4142
+_pm2 = portfolio_metrics(_flat_daily([('2025-01-01',1000.0)]),
+                         [(_T0,-1000.0)], 1000.0, 1000.0, 730, _yr(2))
+check('CAGR: 1000/1000/730d ≈ 0.414', _pm2['cagr'], 0.4142, tol=0.001)
+# Guards → None
+_pm3 = portfolio_metrics(_flat_daily([('2025-01-01',100.0)]), [], 0.0, 100.0, 365, _yr(1))
+check_int('CAGR: net_deposited<=0 → None', _pm3['cagr'] is None, True)
+
+# ── Max drawdown ──
+# PnL [100,50,-200,30,100,100] → cum [100,150,-50,-20,80,180]; trough at idx2.
+_dd_dates = [('2025-01-01',100.0),('2025-01-02',50.0),('2025-01-03',-200.0),
+             ('2025-01-04',30.0),('2025-01-05',100.0),('2025-01-06',100.0)]
+_dd = _max_drawdown(_flat_daily(_dd_dates))
+check('MaxDD: dollar = -200', _dd['dollar'], -200.0)
+check('MaxDD: pct ≈ -133.3', _dd['pct'], -133.3333, tol=0.01)
+check_int('MaxDD: recovered (idx5, cum 180 >= peak 150)', _dd['recovery_days'] is not None, True)
+
+# ── Monthly stats ── three months: +500, -200, +300
+_mo = _flat_daily([('2025-01-15',500.0),('2025-02-15',-200.0),('2025-03-15',300.0)])
+_pmm = portfolio_metrics(_mo, [(_T0,-1000.0)], 1000.0, 600.0, 90, pd.Timestamp('2025-03-31'))
+check_int('Months: n_months = 3', _pmm['n_months'], 3)
+check('Months: pct profitable ≈ 66.67', _pmm['pct_profitable_months'], 66.6667, tol=0.01)
+check('Months: best = 500', _pmm['best_month'], 500.0)
+check('Months: worst = -200', _pmm['worst_month'], -200.0)
+
+# ── MTM terminal adds unrealized ──
+_pm_mtm = portfolio_metrics(_flat_daily([('2025-01-01',1000.0)]),
+                            [(_T0,-1000.0)], 1000.0, 1000.0, 365, _yr(1),
+                            unrealized_total=500.0)
+check('MTM: terminal_realized = dep + realized', _pm_mtm['terminal_realized'], 2000.0)
+check('MTM: terminal_mtm = + unrealized', _pm_mtm['terminal_mtm'], 2500.0)
+check_int('MTM: mwr_mtm computed', _pm_mtm['mwr_mtm'] is not None, True)
+check_int('Realized-only: mwr_mtm is None', _pm['mwr_mtm'] is None, True)
+
+# ── Real-CSV smoke ──
+_dep_rows = df[df['Sub Type'] == 'Deposit'][['Date', 'Total']]
+_wd_rows  = df[df['Sub Type'] == 'Withdrawal'][['Date', 'Total']]
+_cf = ([(d, -t) for d, t in zip(_dep_rows['Date'], _dep_rows['Total'])] +
+       [(d, -t) for d, t in zip(_wd_rows['Date'], _wd_rows['Total'])])
+_net_dep = df[df['Sub Type'] == 'Deposit']['Total'].sum() + df[df['Sub Type'] == 'Withdrawal']['Total'].sum()
+_real_total = _smoke_app.closed_camp_pnl + _smoke_app.open_premiums_banked + _smoke_app.pure_opts_pnl
+_real_total += df[df['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum() - sum(
+    c.dividends for cs in _smoke_app.all_campaigns.values() for c in cs)
+_daily_all = calculate_daily_realized_pnl(df, df['Date'].min())
+_acct_days = max((df['Date'].max() - df['Date'].min()).days, 1)
+_perf = portfolio_metrics(_daily_all, _cf, _net_dep, _real_total, _acct_days, df['Date'].max())
+check_int('Smoke: all metric keys present',
+          all(k in _perf for k in ['mwr_realized','cagr','max_dd_dollar','calmar',
+                                    'monthly_pnl','pct_profitable_months','terminal_realized']), True)
+check('Smoke: terminal_realized = net_dep + realized', _perf['terminal_realized'], round(_net_dep + _real_total, 4), tol=0.01)
+check_int('Smoke: max_dd_dollar <= 0', (_perf['max_dd_dollar'] or 0) <= 0, True)
+check_int('Smoke: deposits found (cash flows non-empty)', len(_cf) > 0, True)
+check_int('Smoke: mwr_realized None or in (-1,10)',
+          _perf['mwr_realized'] is None or (-1 < _perf['mwr_realized'] < 10), True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

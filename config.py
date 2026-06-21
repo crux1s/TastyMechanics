@@ -183,6 +183,16 @@ DAILY_THETA_ORANGE = 0.05  # % per day → acceptable (≈18% ARR equivalent)
 MTM_ROR_GREEN  = 10.0  # %
 MTM_ROR_ORANGE = 0.0   # %
 
+# ── XIRR / money-weighted return solver ───────────────────────────────────────
+# Bisection bracket + convergence for the money-weighted return (XIRR) used in
+# the Long-Term Performance panel. Annual rate as a decimal: -0.9999 = near-total
+# loss floor, 10.0 = 1000%/yr ceiling. A root outside this bracket returns None
+# (we don't fabricate a rate we can't bracket).
+XIRR_RATE_LO  = -0.9999
+XIRR_RATE_HI  = 10.0
+XIRR_MAX_ITER = 200
+XIRR_TOL      = 1e-6
+
 # ── Scorecard colour thresholds ───────────────────────────────────────────────
 # Win rate colouring in Performance by Ticker table:
 #   >= WIN_RATE_GREEN  → green  (strong edge)

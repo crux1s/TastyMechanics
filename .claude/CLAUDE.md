@@ -28,7 +28,7 @@ Always run after any change:
 PYTHONIOENCODING=utf-8 python3 test_tastymechanics.py
 ```
 
-Expected: `388 tests | 388 passed | 0 failed` (29 sections, with section 0 = end-to-end smoke check)
+Expected: `414 tests | 414 passed | 0 failed` (30 sections, with section 0 = end-to-end smoke check)
 
 The `PYTHONIOENCODING=utf-8` prefix is required on Windows — omitting it causes a `charmap` codec error on the Unicode characters in test output.
 
@@ -97,6 +97,8 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 **report.py (the dashboard)** — `build_html_report()` emits a self-contained tabbed dashboard (Overview / Performance / Wheel & Discipline) with hand-rolled inline-SVG equity curve + OHLC candlesticks, sortable tables, and vanilla JS — no Plotly, no CDN, no Streamlit. The big HTML/CSS/JS lives in the `_TEMPLATE` string (token `__NAME__` substitution, NOT f-strings, so CSS/JS braces need no escaping). `_dashboard_data()` derives the single `DATA` dict it bakes in, computed entirely from the args `build_html_report` already receives — ThetaGang management rate from `all_cdf['Close Reason']`, concentration from premium-by-ticker in `credit_cdf`, so there's no raw-df dependency. All-time-vs-window split: scorecard / breakdowns / candles / per-ticker reflect the window-sliced `all_cdf`/`credit_cdf`; the Portfolio Realized P/L curve uses full-history `daily_pnl_all`. Keep the signature stable — `tastymechanics.py` calls it with fixed kwargs.
 
+**Long-term performance (`portfolio_metrics` + `xirr`)** — `portfolio_metrics()` in `mechanics.py` is pure/Streamlit-free and returns the dict the Tab 4 "Long-Term Performance" section displays (MWR/XIRR, CAGR on deposits, max drawdown, Calmar, monthly stats). `xirr()` is a hand-rolled bisection solver (no numpy/scipy; bracket from `XIRR_*` constants in `config.py`); returns `None` for <2 flows, all-same-sign, or an unbracketed root — never fabricates a rate. Cash flows are dated deposits/withdrawals, sign convention money-out-of-pocket negative; the terminal flow is `net_deposited + total_realized_pnl` (realized) or `+ unrealized_total` (MTM, when the Live toggle supplied it). `tastymechanics.py` builds `_cash_flows` near `net_deposited` (~:652) and computes `_perf` **after the MTM block** so the MTM terminal can use `_mtm.total`. **TWR and a true Sharpe are deliberately not computed** — they need a daily account-value (NLV) series the CSV lacks; don't add a faked version.
+
 **realized_pnl()** — for closed campaigns includes `exit_proceeds`. For open campaigns it's premiums + dividends only. `use_lifetime=True` always returns premiums + dividends regardless of status (strips equity component for House Money mode).
 
 **effective_basis()** — `use_lifetime=True` returns raw `blended_basis` (no premium offset). Default returns `(total_cost - premiums - dividends) / total_shares`.
@@ -127,7 +129,7 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 - `ROADMAP.md` — pending work, prioritised
 - `Known-Limitations.md` — what doesn't work or is untested
-- `test_tastymechanics.py` — 388 tests, 29 sections (section 0 = compute_app_data end-to-end smoke check; gates the rest)
+- `test_tastymechanics.py` — 414 tests, 30 sections (section 0 = compute_app_data end-to-end smoke check; gates the rest)
 - `config.py` — `KNOWN_INDEXES`, `COLOURS`, `DTE_*`, `WIN_RATE_*`, `FIFO_EPSILON`
 
 ---

@@ -213,6 +213,12 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 
 ## Changelog
 
+**v26.17 — Long-Term Performance panel (money-weighted return)** (2026-06-12)
+- **New "🏁 Long-Term Performance" section in the Portfolio P/L tab** — account-lifetime metrics that answer "how is the whole portfolio doing over time": **MWR (XIRR)** as the headline, **CAGR** on deposited capital, **Max Drawdown** ($/%/recovery), **Calmar**, **% Profitable Months**, plus a monthly realized-P/L bar chart.
+- **MWR = money-weighted return (XIRR)** via a hand-rolled bisection solver (pure stdlib, no numpy/scipy). Cash flows are your dated deposits/withdrawals; the terminal value is `net deposited + realized P/L`, switching to a mark-to-market value (adding open-position unrealized P/L) when the Live price toggle is on. Returns nothing rather than a fabricated number when undefined (no deposits, unbracketed root).
+- **TWR and a true Sharpe are intentionally not shown** — both need a daily account-value (NLV) series a transactions CSV doesn't contain. Documented in Known-Limitations / ROADMAP rather than approximated, consistent with the project's metric-honesty stance.
+- New pure helpers `xirr()` and `portfolio_metrics()` in `mechanics.py`; `XIRR_*` solver constants in `config.py`. Test suite at **414 tests** (26 new in section 29 covering XIRR with known answers, CAGR, max drawdown, monthly stats, MTM terminal, and a real-CSV smoke).
+
 **v26.16 — HTML report rebuilt as an interactive dashboard** (2026-06-12)
 - **`report.py` is now a self-contained tabbed dashboard** — the HTML export was rewritten from a flat single-scroll report into a three-tab layout (Overview / Performance / Wheel & Discipline) with a pinned hero P/L band. Overview carries Account Health traffic-lights + the full Premium Selling Scorecard; Performance holds the Portfolio Realized P/L curve, weekly + monthly options candlesticks, capture distribution, strategy breakdown, Short Calls vs Short Puts, and Performance by Ticker; Wheel & Discipline holds ThetaGang metrics + the Wheel Campaigns table.
 - **Hand-rolled inline-SVG charts — no Plotly, no CDN** — the equity curve (with the 10%/yr S&P-proxy benchmark and a live hover crosshair) and the weekly/monthly OHLC candlesticks (cumulative options P/L by close date, matching the in-app Tab 2 logic) are drawn directly in SVG. The report now has zero charting-library or network dependency and opens/prints anywhere.

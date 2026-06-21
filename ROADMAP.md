@@ -47,3 +47,4 @@ Waiting on the right CSV scenarios to appear naturally:
 
 - **Vectorise `get_signed_qty`** — row-by-row `df.apply()` during CSV parsing. Only matters at 5+ years / tens of thousands of rows. Not a priority until someone reports slow load times.
 - **Scroll-to on Wheel Campaign table click** — not achievable cleanly in Streamlit (iframe sandboxing). Revisit if the app moves to a custom web framework.
+- **Time-weighted return (TWR) + true Sharpe** — both need a daily account-value (NLV) series. A transactions CSV has only cash flows and fills, so they can't be computed from the export; the Long-Term Performance panel shows MWR (XIRR) instead. Parked behind a TastyTrade-API daily-NLV ingestion path (same dependency as exact betas / account-level NLV/BP).

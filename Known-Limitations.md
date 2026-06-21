@@ -92,6 +92,14 @@ Products added from spec but not yet verified against a real trade: /RB, /HO, /H
 
 ---
 
+## Performance Metrics
+
+### Time-weighted return (TWR) and true Sharpe are not computed
+The Long-Term Performance panel (Tab 4) shows **MWR (money-weighted return / XIRR)** as the headline, plus CAGR, max drawdown, Calmar, and monthly stats. It deliberately does **not** show a time-weighted return or a true Sharpe ratio: both require the portfolio's market value (NLV) at each point in time, and a TastyTrade transactions CSV contains only cash flows and trade fills — no daily account-value history. Rather than fabricate those metrics from realized P/L (which would be misleading), they are omitted. A faithful TWR / Sharpe would need a daily NLV feed, available only via the TastyTrade API.
+
+### Realized-P/L basis of drawdown and XIRR terminal
+Max Drawdown is measured on the **cumulative realized-P/L curve**, not on account NLV, so it does not reflect intra-trade mark-to-market swings on open positions. The XIRR terminal value is `net deposited + realized P/L` by default; it switches to a mark-to-market value (adding open-position unrealized P/L) only when the Live price toggle has fetched quotes.
+
 ## Other
 
 ### Non-US accounts

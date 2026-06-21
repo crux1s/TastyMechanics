@@ -52,6 +52,7 @@ def render_tab4(
     use_lifetime: bool,
     net_deposited: float = 0.0,
     benchmark_annual_pct: float = 10.0,
+    portfolio_perf: dict | None = None,
 ) -> None:
     """Tab 4 — All Trades: equity curve, per-ticker table, period charts, volatility metrics."""
     st.markdown(f'### 🔍 Portfolio Realized P/L {_win_label}', unsafe_allow_html=True)
@@ -490,5 +491,82 @@ def render_tab4(
             st.info('Not enough data for volatility metrics (need at least 2 days).')
     else:
         st.info('No cash flow data in the selected window.')
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 🏁 LONG-TERM PERFORMANCE — money-weighted return + account-lifetime metrics
+    # ══════════════════════════════════════════════════════════════════════════
+    # All-time (not window-scoped): long-term success is an account-lifetime
+    # question.  MWR (XIRR) is the headline — it accounts for *when* capital was
+    # added.  Time-weighted return is NOT shown: it needs a daily account-value
+    # (NLV) series the CSV doesn't contain (see Known-Limitations).
+    if portfolio_perf is not None:
+        _pf = portfolio_perf
+        st.markdown('---')
+        st.markdown(
+            '<div style="font-size:1.05rem;font-weight:600;color:#e6edf3;margin:28px 0 2px 0;">'
+            '🏁 Long-Term Performance <span style="color:#6b7280;font-size:0.8rem;font-weight:400;">'
+            '· account lifetime</span></div>',
+            unsafe_allow_html=True
+        )
+
+        def _pct(v):
+            return '%.1f%%' % (v * 100) if v is not None else '—'
+
+        # MWR: prefer the mark-to-market figure when Live prices supplied it.
+        _mwr = _pf.get('mwr_mtm') if _pf.get('mwr_mtm') is not None else _pf.get('mwr_realized')
+        _mwr_basis = 'mark-to-market' if _pf.get('mwr_mtm') is not None else 'realized'
+
+        lc1, lc2, lc3, lc4, lc5 = st.columns(5)
+        lc1.metric('MWR (annual)', _pct(_mwr))
+        lc1.caption('Money-weighted return (XIRR) — annualised return on capital, '
+                    'accounting for when you deposited. Terminal value: %s. '
+                    'TWR not shown (needs daily account value).' % _mwr_basis)
+        lc2.metric('CAGR', _pct(_pf.get('cagr')))
+        lc2.caption('Compound annual growth of realized P/L on net deposited capital.')
+        _dd_d = _pf.get('max_dd_dollar')
+        if _dd_d is not None and _dd_d < 0:
+            _rec = _pf.get('dd_recovery_days')
+            lc3.metric('Max Drawdown', fmt_dollar(_dd_d),
+                       delta='%s%s' % (
+                           ('%.1f%% · ' % _pf['max_dd_pct']) if _pf.get('max_dd_pct') is not None else '',
+                           'recovered %dd' % _rec if _rec is not None else 'not recovered'),
+                       delta_color='off')
+        else:
+            lc3.metric('Max Drawdown', '$0.00')
+        lc3.caption('Largest peak-to-trough drop in cumulative realized P/L.')
+        lc4.metric('Calmar', '%.2f' % _pf['calmar'] if _pf.get('calmar') is not None else '—')
+        lc4.caption('CAGR ÷ |Max Drawdown %|. Higher = better return per unit of drawdown pain.')
+        _ppm = _pf.get('pct_profitable_months')
+        lc5.metric('Profitable Months',
+                   '%.0f%% (%d)' % (_ppm, _pf.get('n_months') or 0) if _ppm is not None else '—')
+        lc5.caption('Share of calendar months with positive realized P/L.')
+
+        # Monthly realized P/L bars
+        _mpnl = _pf.get('monthly_pnl')
+        if _mpnl is not None and not _mpnl.empty:
+            _mp = _mpnl.copy()
+            _mp['Month'] = pd.to_datetime(_mp['Month'])
+            _mp['Label'] = _mp['Month'].dt.strftime('%b %y')
+            _colors = [COLOURS['green'] if v >= 0 else COLOURS['red'] for v in _mp['PnL']]
+            _fig_mp = go.Figure(go.Bar(
+                x=_mp['Label'], y=_mp['PnL'], marker_color=_colors, marker_line_width=0,
+                text=[fmt_dollar(v, 0) for v in _mp['PnL']], textposition='outside',
+                textfont=dict(size=10, family='IBM Plex Mono', color=COLOURS['text_muted']),
+                hovertemplate='%{x}<br>Realized P/L: <b>$%{y:,.2f}</b><extra></extra>',
+            ))
+            _fig_mp.add_hline(y=0, line_color='rgba(255,255,255,0.15)', line_width=1)
+            _mp_lay = chart_layout('Monthly Realized P/L · account lifetime', height=300, margin_t=40)
+            _mp_lay['yaxis']['tickprefix'] = '$'
+            _mp_lay['yaxis']['tickformat'] = ',.0f'
+            _mp_lay['bargap'] = 0.35
+            _fig_mp.update_layout(**_mp_lay)
+            st.plotly_chart(_fig_mp, width='stretch', config={'displayModeBar': False})
+
+        st.caption(
+            'MWR is money-weighted (XIRR) on your actual deposit timing — the most '
+            'honest single number for long-term success here. Time-weighted return '
+            'and a true Sharpe need a daily account-value series the TastyTrade CSV '
+            'does not provide; they are deliberately omitted rather than approximated.'
+        )
 
 

@@ -10,6 +10,8 @@ Public API
   _iter_fifo_sells(equity_rows)                  → yields (date, proceeds, cost)
   calculate_windowed_equity_pnl(df, start, end)  → float
   calculate_daily_realized_pnl(df, start_date)   → DataFrame
+  xirr(cash_flows)                                → Optional[float]  (money-weighted annual return)
+  portfolio_metrics(daily_pnl_all, cash_flows, …) → dict             (long-term performance)
   build_campaigns(df, ticker, use_lifetime)       → list[Campaign]
   effective_basis(campaign)                       → float
   realized_pnl(campaign)                          → float
@@ -47,6 +49,7 @@ from config import (
     FIFO_EPSILON, FIFO_ROUND,
     ANN_RETURN_CAP, DAILY_THETA_CAP,
     CLOSE_EXPIRED, CLOSE_ASSIGNED, CLOSE_EXERCISED, CLOSE_CLOSED,
+    XIRR_RATE_LO, XIRR_RATE_HI, XIRR_MAX_ITER, XIRR_TOL,
     get_opt_multiplier,
 )
 from ingestion import equity_mask, option_mask, is_share_row, is_option_row
@@ -255,6 +258,165 @@ def calculate_daily_realized_pnl(df_full: pd.DataFrame, start_date: pd.Timestamp
             daily[col] = 0.0
     daily['PnL'] = daily[['Equity', 'Options', 'Income']].sum(axis=1)
     return daily
+
+
+# ── LONG-TERM PERFORMANCE — XIRR / money-weighted return + portfolio metrics ───
+
+def _xnpv(rate: float, flows: list, t0: pd.Timestamp) -> float:
+    """Net present value of dated cash flows at an annual `rate` (decimal).
+
+    flows: list of (date, amount). Discount factor uses actual/365 day counts.
+    """
+    return sum(cf / (1.0 + rate) ** ((d - t0).days / 365.0) for d, cf in flows)
+
+
+def xirr(cash_flows: list,
+         lo: float = XIRR_RATE_LO, hi: float = XIRR_RATE_HI,
+         max_iter: int = XIRR_MAX_ITER, tol: float = XIRR_TOL) -> Optional[float]:
+    """Money-weighted annual return (XIRR) via bisection.
+
+    cash_flows: list of (pd.Timestamp, amount). Sign convention — money OUT of
+    pocket is negative (deposits), money IN is positive (withdrawals + the
+    terminal account value as the final flow).
+
+    Bisection is used over Newton: it needs no derivative, cannot diverge, and
+    converges on any sign-changed bracket — robust over clever, matching the
+    pure-stdlib (no numpy/scipy) constraint.
+
+    Returns the annual rate as a decimal, or None when undefined:
+      - fewer than 2 flows
+      - all flows the same sign (no root exists)
+      - no sign change of NPV across [lo, hi] (root outside the supported band)
+    """
+    flows = [(d, float(a)) for d, a in cash_flows if a is not None]
+    if len(flows) < 2:
+        return None
+    amounts = [a for _, a in flows]
+    if all(a >= 0 for a in amounts) or all(a <= 0 for a in amounts):
+        return None
+
+    t0 = min(d for d, _ in flows)
+    f_lo = _xnpv(lo, flows, t0)
+    f_hi = _xnpv(hi, flows, t0)
+    if f_lo == 0:
+        return lo
+    if f_hi == 0:
+        return hi
+    if (f_lo > 0) == (f_hi > 0):
+        return None  # no bracketed root in the supported range
+
+    for _ in range(max_iter):
+        mid = (lo + hi) / 2.0
+        f_mid = _xnpv(mid, flows, t0)
+        if abs(f_mid) < tol or (hi - lo) < 1e-9:
+            return mid
+        if (f_mid > 0) == (f_lo > 0):
+            lo, f_lo = mid, f_mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def _max_drawdown(daily_pnl_all: pd.DataFrame) -> dict:
+    """Max drawdown of the all-time cumulative realized-P/L curve.
+
+    Returns {dollar, pct, duration_days, recovery_days}.  pct is relative to the
+    running peak at the trough (None when that peak is not positive).  duration
+    is peak→trough days; recovery is trough→full-recovery days (None if never
+    recovered).  Operates on realized P/L only — see Known-Limitations (no NLV).
+    """
+    out = {'dollar': None, 'pct': None, 'duration_days': None, 'recovery_days': None}
+    if daily_pnl_all is None or daily_pnl_all.empty:
+        return out
+    d = daily_pnl_all.sort_values('Date')
+    dates = pd.to_datetime(d['Date']).tolist()
+    cum = d['PnL'].cumsum().tolist()
+
+    peak = cum[0]
+    peak_i = 0
+    max_dd = 0.0          # most-negative trough-minus-peak
+    dd_peak_i = dd_tr_i = 0
+    for i, v in enumerate(cum):
+        if v > peak:
+            peak, peak_i = v, i
+        dd = v - peak
+        if dd < max_dd:
+            max_dd, dd_peak_i, dd_tr_i = dd, peak_i, i
+
+    if max_dd >= 0:
+        return out  # no drawdown (monotonic non-decreasing curve)
+
+    peak_val = cum[dd_peak_i]
+    out['dollar'] = max_dd
+    out['pct'] = (max_dd / peak_val * 100) if peak_val > 0 else None
+    out['duration_days'] = (dates[dd_tr_i] - dates[dd_peak_i]).days
+    # recovery: first index after the trough whose cum regains the prior peak
+    rec_i = next((j for j in range(dd_tr_i + 1, len(cum)) if cum[j] >= peak_val), None)
+    out['recovery_days'] = (dates[rec_i] - dates[dd_tr_i]).days if rec_i is not None else None
+    return out
+
+
+def portfolio_metrics(daily_pnl_all: pd.DataFrame, cash_flows: list,
+                      net_deposited: float, total_realized_pnl: float,
+                      account_days: int, latest_date: pd.Timestamp,
+                      unrealized_total: Optional[float] = None) -> dict:
+    """Long-term portfolio performance metrics.
+
+    Pure / Streamlit-free.  Every key is always present (None when undefined).
+
+    MWR (money-weighted return / XIRR) is the headline long-term figure — it
+    accounts for *when* capital was added.  Time-weighted return (TWR) is NOT
+    computed: it requires a daily account-value (NLV) series the transactions
+    CSV does not contain; we don't fabricate it (see Known-Limitations).
+
+    Terminal account value for XIRR:
+      realized = net_deposited + total_realized_pnl
+      mtm      = realized + unrealized_total   (only when unrealized_total given)
+    """
+    cf = list(cash_flows) if cash_flows else []
+    terminal_realized = net_deposited + total_realized_pnl
+    mwr_realized = xirr(cf + [(latest_date, terminal_realized)]) if cf else None
+
+    terminal_mtm = mwr_mtm = None
+    if unrealized_total is not None:
+        terminal_mtm = terminal_realized + unrealized_total
+        mwr_mtm = xirr(cf + [(latest_date, terminal_mtm)]) if cf else None
+
+    # CAGR on deposited capital — annualised growth of realized P/L over deposits
+    cagr = None
+    if net_deposited > 0 and account_days >= 1:
+        base = 1.0 + total_realized_pnl / net_deposited
+        if base > 0:
+            cagr = base ** (365.0 / account_days) - 1.0
+
+    dd = _max_drawdown(daily_pnl_all)
+    calmar = None
+    if cagr is not None and dd['pct'] is not None and dd['pct'] != 0:
+        calmar = cagr / abs(dd['pct'] / 100.0)
+
+    # Monthly realized P/L
+    monthly_pnl = None
+    pct_profitable_months = n_months = best_month = worst_month = None
+    if daily_pnl_all is not None and not daily_pnl_all.empty:
+        m = daily_pnl_all.copy()
+        m['Month'] = pd.to_datetime(m['Date']).dt.to_period('M').apply(lambda p: p.start_time)
+        monthly_pnl = m.groupby('Month')['PnL'].sum().reset_index()
+        n_months = len(monthly_pnl)
+        if n_months:
+            pct_profitable_months = (monthly_pnl['PnL'] > 0).mean() * 100
+            best_month = monthly_pnl['PnL'].max()
+            worst_month = monthly_pnl['PnL'].min()
+
+    return {
+        'mwr_realized': mwr_realized, 'mwr_mtm': mwr_mtm,
+        'terminal_realized': terminal_realized, 'terminal_mtm': terminal_mtm,
+        'cagr': cagr, 'calmar': calmar,
+        'max_dd_dollar': dd['dollar'], 'max_dd_pct': dd['pct'],
+        'dd_duration_days': dd['duration_days'], 'dd_recovery_days': dd['recovery_days'],
+        'monthly_pnl': monthly_pnl, 'n_months': n_months,
+        'pct_profitable_months': pct_profitable_months,
+        'best_month': best_month, 'worst_month': worst_month,
+    }
 
 
 def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -> list[Campaign]:

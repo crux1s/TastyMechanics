@@ -58,6 +58,7 @@ from mechanics import (
     calc_dte,
     compute_app_data,
     compute_unrealized_pnl, UnrealizedPnL,
+    portfolio_metrics,
 )
 from market_data import fetch_live_prices
 
@@ -222,7 +223,7 @@ import hashlib as _hashlib
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.16"
+APP_VERSION = "v26.17"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 
@@ -650,6 +651,15 @@ def main():
     total_deposited = df[df['Sub Type']=='Deposit']['Total'].sum()
     total_withdrawn = df[df['Sub Type']=='Withdrawal']['Total'].sum()
     net_deposited   = total_deposited + total_withdrawn
+
+    # Dated, signed cash flows for the money-weighted return (XIRR) in the
+    # Long-Term Performance panel. Sign convention: money OUT of pocket is
+    # negative, so negate both — Deposit.Total is positive (cash in → -),
+    # Withdrawal.Total is already negative (cash out → +).
+    _dep_rows = df[df['Sub Type']=='Deposit'][['Date','Total']]
+    _wd_rows  = df[df['Sub Type']=='Withdrawal'][['Date','Total']]
+    _cash_flows = ([(d, -t) for d, t in zip(_dep_rows['Date'], _dep_rows['Total'])] +
+                   [(d, -t) for d, t in zip(_wd_rows['Date'],  _wd_rows['Total'])])
     if net_deposited > 0:
         realized_ror = total_realized_pnl / net_deposited * 100
     elif net_deposited == 0:
@@ -1026,6 +1036,16 @@ def main():
     _mtm_ror_val    = (_mtm_pnl_val / net_deposited * 100) if (_mtm and net_deposited > 0) else None
     _unreal_ror_val = (_mtm.total / _mtm.notional * 100)   if (_mtm and _mtm.notional > 0) else None
 
+    # ── Long-term performance (all-time, money-weighted) ──────────────────────────
+    # Computed here, after the MTM block, so the MTM-inclusive MWR can use live
+    # unrealized P/L when the Live toggle fetched it. Always all-time (not
+    # window-scoped) — long-term success is an account-lifetime question.
+    _perf = portfolio_metrics(
+        _daily_pnl_all, _cash_flows, net_deposited, total_realized_pnl,
+        account_days, latest_date,
+        unrealized_total=(_mtm.total if _mtm else None),
+    )
+
     # Hero stat — MTM ROR rendered larger than a standard st.metric
     if _mtm_ror_val is not None:
         _hero_color = (COLOURS['green']  if _mtm_ror_val > MTM_ROR_GREEN  else
@@ -1211,7 +1231,8 @@ def main():
                     use_lifetime,
                     # Same value the HTML report uses for its benchmark line,
                     # so the two surfaces show identical growth curves.
-                    net_deposited=total_deposited)
+                    net_deposited=total_deposited,
+                    portfolio_perf=_perf)
     with tab5:
         with st.columns([4, 1])[1]:
             _render_date_picker('tab5', _win_start_str, _win_end_str, _df_min_date, _latest_date)
