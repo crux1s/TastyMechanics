@@ -2,10 +2,10 @@
 report.py — HTML report export for TastyMechanics.
 
 Generates a self-contained, dependency-free HTML dashboard: tabbed layout
-(Overview / Performance / Wheel & Discipline), hand-rolled inline-SVG equity
-curve and OHLC candlesticks, animated bars, sortable tables, count-up hero
-numbers, vanilla JS.  No CDN, no build step, no Streamlit dependency — opens
-in any browser and prints cleanly.
+(Overview / Performance / Wheel & Discipline / Trade Log), hand-rolled
+inline-SVG equity curve and OHLC candlesticks, animated bars, sortable tables,
+count-up hero numbers, vanilla JS.  No CDN, no build step, no Streamlit
+dependency — opens in any browser and prints cleanly.
 
 Public entry point
 ------------------
@@ -51,10 +51,22 @@ def _r(v, dp=2):
 def _dashboard_data(all_cdf, credit_cdf, all_campaigns, daily_pnl_all, series_df,
                     pnl_display, net_deposited, capital_deployed,
                     div_income, int_net, total_fees,
-                    win_start, win_end, days, n_trades):
+                    win_start, win_end, days, n_trades, portfolio_perf=None):
     cdf = all_cdf if all_cdf is not None else pd.DataFrame()
     credit = credit_cdf if (credit_cdf is not None) else pd.DataFrame()
     has_credit = not credit.empty
+
+    # MWR (money-weighted return / XIRR) — account-lifetime figure the app's
+    # Long-Term Performance panel shows; prefer the mark-to-market value when the
+    # Live toggle supplied it, else realized.  Kept as None (not 0.0 via _r) when
+    # XIRR is undefined so the hero pill renders '—'.
+    _mwr = None
+    _mwr_basis = 'realized'
+    if portfolio_perf:
+        if portfolio_perf.get('mwr_mtm') is not None:
+            _mwr, _mwr_basis = portfolio_perf['mwr_mtm'], 'mark-to-market'
+        elif portfolio_perf.get('mwr_realized') is not None:
+            _mwr, _mwr_basis = portfolio_perf['mwr_realized'], 'realized'
 
     # ── overview ──
     # pnl_display is window-aware (window figure when a window is selected,
@@ -66,6 +78,8 @@ def _dashboard_data(all_cdf, credit_cdf, all_campaigns, daily_pnl_all, series_df
         'deployed': _r(capital_deployed),
         'div': _r(div_income), 'int': _r(int_net),
         'deposited': _r(net_deposited),
+        'mwr': None if _mwr is None else round(_mwr * 100, 1),
+        'mwr_basis': _mwr_basis,
     }
 
     # ── scorecard ──
@@ -198,11 +212,35 @@ def _dashboard_data(all_cdf, credit_cdf, all_campaigns, daily_pnl_all, series_df
                                   'pnl': _r(realized_pnl(c)), 'days': int(dur)})
         campaigns.sort(key=lambda x: -x['pnl'])
 
+    # ── full closed-trade log (window-sliced, one row per closed trade) ──
+    def _d(v):
+        return str(v)[:10] if pd.notna(v) else '—'
+    def _n(v, dp=1):
+        return None if (v is None or pd.isna(v)) else _r(v, dp)
+    trades = []
+    if not cdf.empty and 'Net P/L' in cdf:
+        tl = cdf.sort_values('Close Date', ascending=False) if 'Close Date' in cdf else cdf
+        for _, r in tl.iterrows():
+            con = r.get('Contracts'); dtec = r.get('DTE at Close')
+            trades.append({
+                'ticker': str(r.get('Ticker', '')), 'strat': str(r.get('Trade Type', '')),
+                'type': str(r.get('Type', '')), 'reason': str(r.get('Close Reason', '')),
+                'open': _d(r.get('Open Date')), 'close': _d(r.get('Close Date')),
+                'days': int(r['Days Held']) if pd.notna(r.get('Days Held')) else 0,
+                'exp': _d(r.get('Expiration')),
+                'dtec': int(dtec) if pd.notna(dtec) else None,
+                'con': int(con) if pd.notna(con) else 0, 'prem': _r(r.get('Net Premium')),
+                'pnl': _r(r.get('Net P/L')), 'cap': _n(r.get('Capture %')),
+                'car': _r(r.get('Capital at Risk')), 'ann': _n(r.get('Ann Return %'), 0),
+                'theta': _n(r.get('Daily θ %'), 2),
+            })
+
     return {
         'meta': {'start': win_start, 'end': win_end, 'days': int(days), 'n_trades': int(n_trades)},
         'overview': overview, 'scorecard': scorecard, 'dte': dte, 'thetagang': thetagang,
         'strategy': strategy, 'cvp': cvp, 'cap_dist': cap_dist, 'series': series,
         'weekly': weekly, 'monthly': monthly, 'tickers': tickers, 'campaigns': campaigns,
+        'trades': trades,
     }
 
 
@@ -243,7 +281,9 @@ _TEMPLATE = r"""<!DOCTYPE html>
     background:linear-gradient(135deg,var(--teal),var(--violet));
     display:grid; place-items:center; font-size:19px; box-shadow:0 6px 20px rgba(45,212,191,0.35); }
   .brand-block { display:flex; flex-direction:column; gap:4px; }
-  .brand-txt { font-weight:800; font-size:1.4rem; letter-spacing:-0.02em; line-height:1; }
+  .brand-txt { font-weight:800; font-size:1.4rem; letter-spacing:-0.02em; line-height:1;
+    background:linear-gradient(135deg,#fff 0%,var(--teal) 55%,var(--emerald) 100%);
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
   .period-line { display:flex; align-items:center; gap:11px; flex-wrap:wrap; }
   .pp { font-size:0.74rem; font-weight:800; letter-spacing:0.08em; text-transform:uppercase;
     color:#06121a; background:linear-gradient(135deg,var(--teal),var(--cyan)); padding:4px 12px; border-radius:999px; }
@@ -257,10 +297,20 @@ _TEMPLATE = r"""<!DOCTYPE html>
     border:1px solid var(--bd); border-radius:16px; padding:22px 24px;
     box-shadow:0 8px 30px rgba(0,0,0,0.35); position:relative; overflow:hidden; }
   .card-lbl { font-size:0.74rem; font-weight:700; letter-spacing:0.13em; text-transform:uppercase; color:var(--mut); }
-  .hero-main { background:linear-gradient(150deg,#16233f,#101a30); }
+  .hero-main { background:linear-gradient(150deg,#16233f,#101a30);
+    box-shadow:0 8px 30px rgba(0,0,0,0.35), 0 0 46px -12px rgba(45,212,191,0.30); }
   .hero-main::after { content:''; position:absolute; inset:0;
     background:radial-gradient(400px 200px at 85% 0%,rgba(45,212,191,0.16),transparent 70%); }
+  /* shimmering teal→emerald accent bar across the top of the hero card */
+  .hero-main::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; z-index:3;
+    background:linear-gradient(90deg,transparent,var(--teal) 38%,var(--emerald) 62%,transparent);
+    background-size:200% 100%; animation:shimmer 3.2s ease-in-out infinite; }
+  @keyframes shimmer { 0%,100% { background-position:0% 0; opacity:.9; } 50% { background-position:100% 0; opacity:.5; } }
   .hero-pnl { font-size:3rem; font-weight:900; letter-spacing:-0.03em; margin-top:6px; font-variant-numeric:tabular-nums; }
+  /* sign-aware gradient-clipped headline numbers (preserve loss=red semantics) */
+  .grad-num { -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; color:transparent; }
+  .grad-num.pos { background-image:linear-gradient(135deg,#fff 0%,var(--teal) 50%,var(--emerald) 100%); }
+  .grad-num.neg { background-image:linear-gradient(135deg,#fff 0%,var(--amber) 50%,var(--rose) 100%); }
   .hero-row { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; position:relative; z-index:1; }
   .pill { font-size:0.86rem; font-weight:600; padding:5px 12px; border-radius:999px; background:rgba(255,255,255,0.06); border:1px solid var(--bd2); }
   .pill b { font-variant-numeric:tabular-nums; }
@@ -271,7 +321,8 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .tab-btn { padding:11px 20px; font-size:1rem; font-weight:600; color:var(--mut); font-family:inherit;
     background:none; border:none; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
   .tab-btn:hover { color:var(--txt); }
-  .tab-btn.active { color:var(--txt); border-bottom-color:var(--teal); }
+  .tab-btn.active { color:var(--txt); border-bottom-color:var(--teal);
+    box-shadow:0 6px 16px -8px rgba(45,212,191,0.75); }
   .panel { display:none; } .panel.active { display:block; animation:rise .4s ease; }
   .grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin:16px 0; }
   .health { border-radius:14px; padding:16px 18px; border:1px solid var(--bd); border-left-width:4px; background:var(--card); }
@@ -327,6 +378,10 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .chip { font-size:0.74rem; font-weight:700; padding:2px 9px; border-radius:999px; background:rgba(255,255,255,0.06); }
   .badge-open { color:var(--emerald); } .badge-closed { color:var(--mut); }
   .tbl-scroll { overflow-x:auto; }
+  /* Trade Log has 16 columns — let it size to content and scroll instead of
+     squeezing every cell (which wraps dates and clips the right-most columns). */
+  #log { width:max-content; min-width:100%; }
+  #log th, #log td { white-space:nowrap; }
   .cvp { display:flex; gap:16px; }
   .cvp-card { flex:1; border-radius:14px; padding:18px 20px; border:1px solid var(--bd); background:var(--card); }
   .cvp-card .top { display:flex; align-items:center; gap:8px; }
@@ -356,6 +411,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
       <div class="hero-pnl" id="heroPnl">$0</div>
       <div class="hero-row">
         <span class="pill">ROR <b id="heroRor" class="pos">0%</b></span>
+        <span class="pill">MWR <b id="heroMwr">—</b></span>
         <span class="pill">Deposited <b>__DEPOSITED__</b></span>
         <span class="pill">Capital Deployed <b>__DEPLOYED__</b></span>
       </div>
@@ -375,6 +431,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
     <button class="tab-btn active" data-tab="overview">Overview</button>
     <button class="tab-btn" data-tab="perf">Performance</button>
     <button class="tab-btn" data-tab="wheel">Wheel &amp; Discipline</button>
+    <button class="tab-btn" data-tab="log">Trade Log</button>
   </div>
   <div class="panel active" id="panel-overview">
     <div class="sec"><span class="tag">Verdict</span><h2>Account Health</h2>
@@ -451,6 +508,20 @@ _TEMPLATE = r"""<!DOCTYPE html>
       </tr></thead><tbody></tbody></table>
     </div>
   </div>
+  <div class="panel" id="panel-log">
+    <div class="sec"><span class="tag">Closed</span><h2>Full Closed Trade Log</h2>
+      <span class="meta">every closed trade in window · click a column to sort</span></div>
+    <div class="card tbl-scroll" style="padding:8px 16px 16px;">
+      <table id="log"><thead><tr>
+        <th data-k="ticker">Ticker</th><th data-k="strat">Strategy</th><th data-k="type">C/P</th>
+        <th data-k="reason">Close Reason</th><th data-k="open">Open</th>
+        <th data-k="close" class="sorted">Close</th><th data-k="days">Days</th>
+        <th data-k="exp">Expiration</th><th data-k="dtec">DTE Close</th><th data-k="con">Qty</th>
+        <th data-k="prem">Net Prem</th><th data-k="pnl">P/L</th><th data-k="cap">Capture %</th>
+        <th data-k="car">Cap at Risk</th><th data-k="ann">Ann Ret %</th><th data-k="theta">Daily θ %</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </div>
   <div class="foot">TastyMechanics dashboard · __VERSTAMP__generated __GENERATED__ · self-contained, no dependencies</div>
 </div>
 <script>
@@ -462,10 +533,15 @@ function countUp(el,target,fmt,ms=1100){const t0=performance.now();
   (function tick(now){const p=Math.min((now-t0)/ms,1),e=1-Math.pow(1-p,3);
    el.textContent=fmt(target*e); if(p<1)requestAnimationFrame(tick);})(t0);}
 const heroPnl=document.getElementById('heroPnl');
-countUp(heroPnl,ov.total_pnl,v=>fmtUSD(v)); heroPnl.className=cls(ov.total_pnl);
+countUp(heroPnl,ov.total_pnl,v=>fmtUSD(v));
+heroPnl.className='hero-pnl grad-num '+cls(ov.total_pnl);
 const ror=document.getElementById('heroRor'); ror.textContent=ov.ror.toFixed(1)+'%'; ror.className=cls(ov.ror);
+const mw=document.getElementById('heroMwr');
+if(ov.mwr==null){ mw.textContent='—'; }
+else { mw.textContent=ov.mwr.toFixed(1)+'%'; mw.className=cls(ov.mwr);
+       mw.parentElement.title='Money-weighted return (XIRR), annualised · '+ov.mwr_basis; }
 const di=ov.div+ov.int; const dv=document.getElementById('divint');
-countUp(dv,di,v=>fmtUSD(v,2)); dv.className=cls(di);
+countUp(dv,di,v=>fmtUSD(v,2)); dv.className='v '+cls(di);
 function verdict(val,g,w,gn,wn,bn){ if(val>=g)return['good','✅',gn]; if(val>=w)return['warn','⚠️',wn]; return['bad','❌',bn]; }
 document.getElementById('health').innerHTML=[
   ['Win Rate',sc.wr.toFixed(1)+'%',verdict(sc.wr,70,50,'above 70% target','below 70% target','below 50% — review entries')],
@@ -530,9 +606,11 @@ if(DATA.strategy.length){
         <span class="plbar" style="width:${w}px;background:${col}"></span></div></td></tr>`;},'pnl');
 }
 document.getElementById('cvp').innerHTML=DATA.cvp.length?DATA.cvp.map(c=>{
-  const isC=c.type.toUpperCase().includes('CALL');
-  return `<div class="cvp-card"><div class="top"><span class="emoji">${isC?'📞':'📍'}</span>
-    <span class="nm">Short ${isC?'Calls':'Puts'}</span><span style="margin-left:auto" class="chip">${c.n} trades</span></div>
+  const ty=c.type.toUpperCase();
+  const isC=ty.includes('CALL'), isP=ty.includes('PUT');
+  const emoji=isC?'📞':isP?'📍':'🎭', nm=isC?'Short Calls':isP?'Short Puts':'Mixed';
+  return `<div class="cvp-card"><div class="top"><span class="emoji">${emoji}</span>
+    <span class="nm">${nm}</span><span style="margin-left:auto" class="chip">${c.n} trades</span></div>
     <div class="big ${cls(c.pnl)}">${fmtUSD(c.pnl,2)}</div>
     <div class="cvp-stats"><div>Win Rate<b>${c.wr.toFixed(0)}%</b></div>
       <div>Med Capture<b>${c.cap.toFixed(1)}%</b></div></div></div>`;}).join(''):'<div class="empty">No credit trades.</div>';
@@ -554,6 +632,17 @@ if(DATA.campaigns.length){
       <td>${fmtUSD(c.prem,2)}</td><td>${c.exit?fmtUSD(c.exit,2):'—'}</td>
       <td class="${cls(c.pnl)}">${fmtUSD(c.pnl,2)}</td><td>${c.days}</td></tr>`,'pnl');
 } else { document.querySelector('#camps tbody').innerHTML='<tr><td colspan="9" class="empty">No wheel campaigns.</td></tr>'; }
+if(DATA.trades.length){
+  sortable('log',DATA.trades,t=>
+    `<tr><td class="strat-name">${t.ticker}</td><td>${t.strat}</td><td>${t.type}</td>
+      <td><span class="chip badge-closed">${t.reason}</span></td>
+      <td>${t.open}</td><td>${t.close}</td><td>${t.days}d</td>
+      <td>${t.exp}</td><td>${t.dtec==null?'—':t.dtec+'d'}</td><td>${t.con}</td>
+      <td>${fmtUSD(t.prem,2)}</td><td class="${cls(t.pnl)}">${fmtUSD(t.pnl,2)}</td>
+      <td>${t.cap==null?'—':t.cap.toFixed(1)+'%'}</td><td>${fmtUSD(t.car,0)}</td>
+      <td>${t.ann==null?'—':t.ann.toFixed(0)+'%'}</td>
+      <td>${t.theta==null?'—':t.theta.toFixed(2)+'%'}</td></tr>`,'close');
+} else { document.querySelector('#log tbody').innerHTML='<tr><td colspan="16" class="empty">No closed trades.</td></tr>'; }
 const drawStyle=document.createElement('style'); drawStyle.textContent='@keyframes draw{to{stroke-dashoffset:0}}@keyframes cfade{to{opacity:1}}'; document.head.appendChild(drawStyle);
 function areaCurve(svg, pts, valKey, opts){
   opts=opts||{}; const W=opts.W||1000, H=opts.H||300, pT=14,pB=4,pL=4,pR=4;
@@ -666,6 +755,7 @@ def build_html_report(
     csv_fingerprint='',
     benchmark_annual_pct=10.0,
     end_date=None,               # window upper bound (Custom-aware); defaults to latest_date
+    portfolio_perf=None,         # portfolio_metrics() dict — supplies the hero MWR pill
 ):
     """Build the self-contained tabbed HTML dashboard as a string.
 
@@ -705,7 +795,7 @@ def build_html_report(
         all_cdf, credit_cdf, all_campaigns, daily_pnl_all, series_df,
         pnl_display, net_deposited, capital_deployed,
         div_income, int_net, total_fees,
-        _win_start_str, _win_end_str, days, n_trades,
+        _win_start_str, _win_end_str, days, n_trades, portfolio_perf,
     )
 
     # ── headline period + range (e.g. "30 DAYS   11 May 2026 → 10 Jun 2026") ──
