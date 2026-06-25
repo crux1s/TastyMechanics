@@ -223,7 +223,7 @@ import hashlib as _hashlib
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.17"
+APP_VERSION = "v26.18"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 
@@ -1145,6 +1145,7 @@ def main():
                 app_version=APP_VERSION,
                 csv_fingerprint=_file_hash[:6],
                 end_date=end_date,   # window upper bound so the curve slices to the same range
+                portfolio_perf=_perf,   # account-lifetime metrics → hero MWR pill
             )
             _report_fname = 'tastymechanics_report_%s.html' % _win_start_str.replace('/', '-')
             st.download_button(
