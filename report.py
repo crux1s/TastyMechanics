@@ -372,11 +372,24 @@ _TEMPLATE = r"""<!DOCTYPE html>
   td { padding:10px 12px; border-bottom:1px solid var(--bd); font-variant-numeric:tabular-nums; }
   tr:hover td { background:rgba(45,212,191,0.05); }
   tr.dim td { opacity:0.45; font-style:italic; }
+  #strat th:not(:first-child), #strat td:not(:first-child),
+  #camps th:not(:first-child), #camps td:not(:first-child) { text-align:center; }
   .strat-name { font-weight:600; }
-  .plbar-wrap { display:flex; align-items:center; gap:8px; justify-content:flex-end; }
+  .plbar-wrap { display:flex; align-items:center; gap:8px; justify-content:center; }
   .plbar { height:8px; border-radius:4px; }
   .chip { font-size:0.74rem; font-weight:700; padding:2px 9px; border-radius:999px; background:rgba(255,255,255,0.06); }
   .badge-open { color:var(--emerald); } .badge-closed { color:var(--mut); }
+  .badge-expired  { color:var(--emerald); background:rgba(52,211,153,0.12); }
+  .badge-assigned { color:var(--amber);   background:rgba(251,191,36,0.12); }
+  .badge-roll     { color:var(--cyan);    background:rgba(34,211,238,0.12); }
+  .ring-wrap { position:relative; width:44px; height:44px; flex-shrink:0; }
+  .ring-svg { width:44px; height:44px; transform:rotate(-90deg); }
+  .ring-icon { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:1.05rem; line-height:1; }
+  .mcard-r { display:flex; align-items:center; gap:11px; }
+  .mcard-r .mcard-body { flex:1; min-width:0; }
+  .card-teal    { border-left:3px solid var(--teal); }
+  .card-amber   { border-left:3px solid var(--amber); }
+  .card-emerald { border-left:3px solid var(--emerald); }
   .tbl-scroll { overflow-x:auto; }
   /* Trade Log has 16 columns — let it size to content and scroll instead of
      squeezing every cell (which wraps dates and clips the right-most columns). */
@@ -453,7 +466,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   <div class="panel" id="panel-perf">
     <div class="sec"><span class="tag">Options</span><h2>Premium Selling Scorecard</h2>
       <span class="meta">credit trades only</span></div>
-    <div class="card">
+    <div class="card card-teal">
       <div class="row-lbl">Trade Quality</div>
       <div class="mgrid mrow7" id="scQuality"></div>
       <div class="row-lbl">Risk &amp; Fees</div>
@@ -477,7 +490,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
     <div class="card" id="capdist"></div>
     <div class="sec"><span class="tag">Breakdown</span><h2>Strategy Performance</h2>
       <span class="meta">click a column to sort</span></div>
-    <div class="card tbl-scroll" style="padding:8px 16px 16px;">
+    <div class="card card-amber tbl-scroll" style="padding:8px 16px 16px;">
       <table id="strat"><thead><tr>
         <th data-k="name">Strategy</th><th data-k="n">Trades</th><th data-k="wr">Win %</th>
         <th data-k="cap">Capture %</th><th data-k="pnl" class="sorted">P/L</th>
@@ -487,7 +500,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
     <div class="cvp" id="cvp"></div>
     <div class="sec"><span class="tag">Per ticker</span><h2>Performance by Ticker</h2>
       <span class="meta">dim = &lt; 3 trades · click to sort</span></div>
-    <div class="card tbl-scroll" style="padding:8px 16px 16px;">
+    <div class="card card-teal tbl-scroll" style="padding:8px 16px 16px;">
       <table id="tickers"><thead><tr>
         <th data-k="ticker">Ticker</th><th data-k="wins">W/L</th><th data-k="wr">Win %</th>
         <th data-k="pnl" class="sorted">P/L</th><th data-k="avgd">Avg Days</th>
@@ -500,7 +513,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
     <div class="card"><div class="mgrid" style="grid-template-columns:repeat(3,1fr);" id="tg"></div></div>
     <div class="sec"><span class="tag">Wheel</span><h2>Wheel Campaigns</h2>
       <span class="meta">share-holding campaigns · roll detail omitted</span></div>
-    <div class="card tbl-scroll" style="padding:8px 16px 16px;">
+    <div class="card card-emerald tbl-scroll" style="padding:8px 16px 16px;">
       <table id="camps"><thead><tr>
         <th data-k="ticker">Ticker</th><th data-k="status">Status</th><th data-k="qty">Qty</th>
         <th data-k="avg">Avg Price</th><th data-k="basis">Cost Basis</th><th data-k="prem">Premiums</th>
@@ -550,21 +563,31 @@ document.getElementById('health').innerHTML=[
   ['Win/Loss Ratio',sc.wl.toFixed(2)+'×',verdict(sc.wl,0.5,0.25,'wins keep up with losers','avg loser 2–4× winner','avg loser >4× winner')],
 ].map(([l,v,[g,ic,n]])=>`<div class="health g-${g}"><span class="icon">${ic}</span> <span class="card-lbl">${l}</span>
    <div class="v">${v}</div><div class="note">${n}</div></div>`).join('');
-const mcard=(l,v,sub,c='')=>`<div class="mcard"><div class="l">${l}</div><div class="v ${c}">${v}</div>${sub?`<div class="sub">${sub}</div>`:''}</div>`;
+const ringsvg=(pct,col)=>{const p=Math.max(0,Math.min(100,pct==null?0:pct));
+  return `<circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="2.8"/><circle cx="18" cy="18" r="15.9" fill="none" stroke="${col}" stroke-width="2.8" stroke-dasharray="${p} 100" stroke-linecap="round"/>`;};
+const mcard=(l,v,sub,c='',icon='',pct=null)=>{
+  const col=c==='pos'?'var(--emerald)':c==='neg'?'var(--rose)':'var(--teal)';
+  const ring=pct!=null?`<div class="ring-wrap"><svg class="ring-svg" viewBox="0 0 36 36">${ringsvg(pct,col)}</svg><span class="ring-icon">${icon}</span></div>`:(icon?`<span style="font-size:1.3rem;flex-shrink:0">${icon}</span>`:'');
+  const inner=`<div class="l">${l}</div><div class="v ${c}">${v}</div>${sub?`<div class="sub">${sub}</div>`:''}`;
+  return `<div class="mcard ${pct!=null||icon?'mcard-r':''}">${ring}<div class="mcard-body">${inner}</div></div>`;
+};
 document.getElementById('scQuality').innerHTML=[
-  mcard('Win Rate',sc.wr.toFixed(1)+'%','',sc.wr>=70?'pos':''),
-  mcard('Median Capture %',sc.cap.toFixed(1)+'%','TT 50%'),
-  mcard('Net Prem Kept %',sc.kept.toFixed(1)+'%','TT 25%',cls(sc.kept)),
-  mcard('Med Days in Trade',sc.med_days.toFixed(0)+'d'),
-  mcard('Med Prem/Day',fmtUSD(sc.prem_day,2)),
-  mcard('Kept $/Day',fmtUSD(sc.kept_day,2),'',cls(sc.kept_day)),
-  mcard('Med Daily θ %',sc.theta.toFixed(3)+'%','','pos'),
+  mcard('Win Rate',sc.wr.toFixed(1)+'%','',sc.wr>=70?'pos':'','🏆',sc.wr),
+  mcard('Median Capture %',sc.cap.toFixed(1)+'%','TT 50%','','🎯',Math.min(100,Math.max(0,sc.cap))),
+  mcard('Net Prem Kept %',sc.kept.toFixed(1)+'%','TT 25%',cls(sc.kept),'💰',Math.min(100,Math.max(0,sc.kept))),
+  mcard('Med Days in Trade',sc.med_days.toFixed(0)+'d','','','📅'),
+  mcard('Med Prem/Day',fmtUSD(sc.prem_day,2),'','','📈'),
+  mcard('Kept $/Day',fmtUSD(sc.kept_day,2),'',cls(sc.kept_day),'💵'),
+  mcard('Med Daily θ %',sc.theta.toFixed(3)+'%','','pos','⚡'),
 ].join('');
 document.getElementById('scRisk').innerHTML=[
-  mcard('Avg Winner',fmtUSD(sc.avgw,2),'','pos'), mcard('Avg Loser',fmtUSD(sc.avgl,2),'','neg'),
-  mcard('Win/Loss Ratio',sc.wl.toFixed(2)+'×'), mcard('Total Fees',fmtUSD(sc.fees,2),'','neg'),
-  mcard('Fees % of P/L',sc.fees_pct.toFixed(1)+'%'), mcard('Fees/Trade',fmtUSD(sc.fees_trade,2)),
-  mcard('Profit Factor',sc.pf>=999?'∞':sc.pf.toFixed(2),'',sc.pf>=1?'pos':'neg'),
+  mcard('Avg Winner',fmtUSD(sc.avgw,2),'','pos','✅'),
+  mcard('Avg Loser',fmtUSD(sc.avgl,2),'','neg','❌'),
+  mcard('Win/Loss Ratio',sc.wl.toFixed(2)+'×','','','⚖️'),
+  mcard('Total Fees',fmtUSD(sc.fees,2),'','neg','🏦'),
+  mcard('Fees % of P/L',sc.fees_pct.toFixed(1)+'%','','','🪙',Math.min(100,Math.max(0,sc.fees_pct)*5)),
+  mcard('Fees/Trade',fmtUSD(sc.fees_trade,2),'','','💸'),
+  mcard('Profit Factor',sc.pf>=999?'∞':sc.pf.toFixed(2),'',sc.pf>=1?'pos':'neg','📊'),
 ].join('');
 const tg=DATA.thetagang;
 document.getElementById('tg').innerHTML=[
@@ -632,10 +655,15 @@ if(DATA.campaigns.length){
       <td>${fmtUSD(c.prem,2)}</td><td>${c.exit?fmtUSD(c.exit,2):'—'}</td>
       <td class="${cls(c.pnl)}">${fmtUSD(c.pnl,2)}</td><td>${c.days}</td></tr>`,'pnl');
 } else { document.querySelector('#camps tbody').innerHTML='<tr><td colspan="9" class="empty">No wheel campaigns.</td></tr>'; }
+const reasonCls=r=>{if(!r)return 'badge-closed';const u=r.toUpperCase();
+  if(u.includes('EXPIR')||u.includes('WORTHLESS'))return 'badge-expired';
+  if(u.includes('ASSIGN')||u.includes('EXERCIS'))return 'badge-assigned';
+  if(u.includes('ROLL'))return 'badge-roll';
+  return 'badge-closed';};
 if(DATA.trades.length){
   sortable('log',DATA.trades,t=>
     `<tr><td class="strat-name">${t.ticker}</td><td>${t.strat}</td><td>${t.type}</td>
-      <td><span class="chip badge-closed">${t.reason}</span></td>
+      <td><span class="chip ${reasonCls(t.reason)}">${t.reason}</span></td>
       <td>${t.open}</td><td>${t.close}</td><td>${t.days}d</td>
       <td>${t.exp}</td><td>${t.dtec==null?'—':t.dtec+'d'}</td><td>${t.con}</td>
       <td>${fmtUSD(t.prem,2)}</td><td class="${cls(t.pnl)}">${fmtUSD(t.pnl,2)}</td>
