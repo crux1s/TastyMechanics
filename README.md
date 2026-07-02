@@ -89,8 +89,10 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 - Full income and cash movement log with colour-coded row types
 
 **HTML Report Export**
-- Download button in sidebar generates a self-contained fintech dark-theme HTML file (`#111827` bg, teal brand, Inter font)
-- Includes: Portfolio Overview (9 KPI cards including Capital Deployed and Closed Wheel P/L), Options scorecard with Med Daily θ %, equity curve, candle charts, Closed Wheel Campaigns table, Performance by Ticker table
+- Download button in sidebar generates a self-contained, interactive fintech dark-theme dashboard (`#111827` bg, teal brand, Inter font) — no Streamlit, no Plotly, no CDN, opens and prints anywhere
+- Four tabs: **Overview** (Account Health traffic-lights + full Premium Selling Scorecard with circular progress rings and colour-accented cards), **Performance** (Portfolio Realized P/L curve, weekly/monthly options candlesticks, capture distribution, strategy breakdown, Short Calls vs Short Puts, Performance by Ticker), **Wheel & Discipline** (ThetaGang metrics + Wheel Campaigns table), and **Trade Log** (full closed trade log, same 16 columns as the in-app expander, colour-coded Close Reason badges)
+- Hero band shows the headline P/L, a sign-aware shimmer accent, and an **MWR (XIRR) pill** when Long-Term Performance data is available
+- Hand-rolled inline-SVG equity curve (with S&P-proxy benchmark overlay and live hover crosshair) and OHLC candlesticks; sortable tables; count-up hero numbers
 - Reflects the currently selected time window; no external dependencies
 
 ---
@@ -212,6 +214,19 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 ---
 
 ## Changelog
+
+**v26.19 — WealthUIUX-inspired scorecard rings, icons, card accents, badge colours** (2026-06-26)
+- **Circular SVG progress rings** on the Win Rate, Median Capture %, Net Prem Kept %, and Fees % scorecard cards in the HTML export — pos/neg/neutral colour scheme (emerald/rose/teal), pure SVG `stroke-dasharray` arc, no charting library.
+- **Emoji icon + ring/icon layout** on every scorecard metric card (`.mcard-r` flex layout) for quicker visual scanning.
+- **Left-border colour accents** on section cards — teal on the Scorecard and Per-Ticker table, amber on Strategy Performance, emerald on Wheel Campaigns.
+- **Colour-coded Close Reason badges** in the Trade Log tab — emerald for Expired, amber for Assigned/Exercised, gray for Closed.
+- Strategy Performance and Wheel Campaigns table headings/values centred for readability.
+
+**v26.18 — HTML export: Trade Log tab, hero MWR pill, Mixed-card fix, theta-engine styling** (2026-06-26)
+- **Trade Log tab** in the HTML dashboard export — a faithful port of the app's "Full Closed Trade Log" expander (same 16 columns, same order, most-recent-close-first default sort), horizontally scrollable so the wide table never clips.
+- **Hero MWR pill** — surfaces the money-weighted return (XIRR) from `portfolio_metrics()` via a new trailing optional `portfolio_perf` kwarg on `build_html_report()`. Prefers mark-to-market MWR over realized when the Live toggle supplied it; renders `—` rather than a fabricated 0.0% when XIRR is undefined.
+- **Mixed-card fix** — Short Calls vs Short Puts now gives Mixed credit trades (strangles, straddles, jade lizards) their own labelled card instead of silently duplicating "Short Puts".
+- **Styling pass** — gradient-clipped wordmark, sign-aware hero P/L number, shimmer accent bar and soft accent glow on the hero card, active-tab underline glow.
 
 **v26.17 — Long-Term Performance panel (money-weighted return)** (2026-06-12)
 - **New "🏁 Long-Term Performance" section in the Portfolio P/L tab** — account-lifetime metrics that answer "how is the whole portfolio doing over time": **MWR (XIRR)** as the headline, **CAGR** on deposited capital, **Max Drawdown** ($/%/recovery), **Calmar**, **% Profitable Months**, plus a monthly realized-P/L bar chart.

@@ -44,7 +44,7 @@ def render_landing(app_version: str) -> None:
     <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
         <div style="font-size:1.4rem;margin-bottom:0.4rem;">📡</div>
         <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Open Positions</div>
-        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Open options and equity positions with DTE countdown, strategy label, and expiry alerts. Toggle live market prices to see last price, day change, and unrealised P/L per leg.</div>
+        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Open options and equity positions with DTE countdown, strategy label, and expiry alerts. Toggle live market prices to see last price, day change, and unrealised P/L per leg. Download a plain-text position snapshot with live marks, IV, and Greeks — ready to paste into any LLM for a second opinion.</div>
     </div>
 
     <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
@@ -68,13 +68,19 @@ def render_landing(app_version: str) -> None:
     <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
         <div style="font-size:1.4rem;margin-bottom:0.4rem;">💼</div>
         <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Portfolio Realized P/L</div>
-        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Stacked cash-flow charts by week and month — Options, Equity, and Income breakdown. Equity curve, drawdown, Sharpe, and capital efficiency.</div>
+        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Stacked cash-flow charts by week and month — Options, Equity, and Income breakdown. Equity curve, drawdown, Sharpe, and capital efficiency. Long-Term Performance panel adds money-weighted return (XIRR), CAGR on deposits, max drawdown, and Calmar ratio.</div>
     </div>
 
     <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
         <div style="font-size:1.4rem;margin-bottom:0.4rem;">💵</div>
         <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Deposits, Dividends &amp; Fees</div>
         <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Complete cash flow ledger with deposited capital, dividend income, and fee summary.</div>
+    </div>
+
+    <div style="background:linear-gradient(135deg,{_cb},{_cb2});border:1px solid {_bd};border-radius:10px;padding:1rem 1.2rem;">
+        <div style="font-size:1.4rem;margin-bottom:0.4rem;">📄</div>
+        <div style="color:{_ht};font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">Standalone HTML Export</div>
+        <div style="color:{_tm};font-size:0.82rem;line-height:1.6;">Download a self-contained interactive dashboard — equity curve, scorecard, wheel campaigns, and full trade log — that opens in any browser, no upload required.</div>
     </div>
 
     </div>
