@@ -499,6 +499,13 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
     current:      Optional[Campaign] = None
     just_closed:  Optional[Campaign] = None  # last campaign sealed this iteration
     running_shares                   = 0.0
+    # Pre-campaign odd-lot pool: share buys below WHEEL_MIN_SHARES while no
+    # campaign is open. They fold into the next qualifying entry so the campaign
+    # share count matches the broker position (e.g. 5 held + 100 assigned = 105).
+    # A pool that never reaches a campaign stays invisible — wheel = 100-lot intent.
+    pool_shares:  float              = 0.0
+    pool_cost:    float              = 0.0
+    pool_events:  list               = []
 
     for row in t.itertuples(index=False):
         inst     = str(row.Instrument_Type)
@@ -547,25 +554,41 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
             continue
 
         # ── Share buy / add ────────────────────────────────────────────────
-        if is_share_row(inst) and qty >= WHEEL_MIN_SHARES:
+        if is_share_row(inst) and qty > FIFO_EPSILON:
             pps = abs(total) / qty
-            if running_shares < FIFO_EPSILON:
+            if running_shares < FIFO_EPSILON and qty + pool_shares < WHEEL_MIN_SHARES:
+                # Odd-lot buy below the campaign threshold and no campaign open —
+                # pool it; it folds into the next qualifying entry.
+                pool_shares += qty
+                pool_cost   += abs(total)
+                pool_events.append({'date': row.Date, 'type': 'Add',
+                    'detail': 'Bought %.0f @ $%.2f/sh (odd lot, pre-campaign)' % (qty, pps),
+                    'cash': total})
+            elif running_shares < FIFO_EPSILON:
                 just_closed = None  # new entry invalidates prior just_closed reference
                 # New campaign entry — check if arrival was via put assignment
                 assignment_premium, assignment_events = _find_assignment_premium(t, row)
                 entry_label = 'Bought %.0f @ $%.2f/sh%s' % (
                     qty, pps, ' (Assigned)' if assignment_events else '')
+                # Fold any pre-campaign odd-lot shares into the entry.
+                # start_date stays the entry row's date so option-premium
+                # windowing and pure_options_pnl bucketing are unchanged;
+                # pool events simply carry earlier dates in the event log.
+                entry_shares = qty + pool_shares
+                entry_cost   = abs(total) + pool_cost
                 current = Campaign(
-                    ticker=ticker, total_shares=qty, total_cost=abs(total),
-                    blended_basis=pps, premiums=assignment_premium, dividends=0.0,
+                    ticker=ticker, total_shares=entry_shares, total_cost=entry_cost,
+                    blended_basis=entry_cost / entry_shares,
+                    premiums=assignment_premium, dividends=0.0,
                     exit_proceeds=0.0, start_date=row.Date, end_date=None,
                     status='open',
-                    events=assignment_events + [
+                    events=assignment_events + pool_events + [
                         {'date': row.Date, 'type': 'Entry', 'detail': entry_label, 'cash': total}
                     ],
-                    shares_acquired=qty,
+                    shares_acquired=entry_shares,
                 )
-                running_shares = qty
+                running_shares = entry_shares
+                pool_shares, pool_cost, pool_events = 0.0, 0.0, []
             else:
                 # Adding to an existing position — recalculate blended basis
                 new_shares        = running_shares + qty
@@ -608,6 +631,20 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 else:
                     current.total_shares  = running_shares
                     current.blended_basis = current.total_cost / running_shares
+            elif pool_shares > FIFO_EPSILON:
+                # Odd-lot sale before any campaign — shrink the pool so stale
+                # shares can't leak into a later campaign entry.
+                sold      = min(abs(qty), pool_shares)
+                remaining = pool_shares - sold
+                pps = abs(total) / abs(qty) if abs(qty) > FIFO_EPSILON else 0
+                if remaining > FIFO_EPSILON:
+                    pool_cost  *= remaining / pool_shares
+                    pool_shares = remaining
+                    pool_events.append({'date': row.Date, 'type': 'Exit',
+                        'detail': 'Sold %.0f @ $%.2f/sh (odd lot, pre-campaign)' % (sold, pps),
+                        'cash': total})
+                else:
+                    pool_shares, pool_cost, pool_events = 0.0, 0.0, []
 
         # ── Option premium ─────────────────────────────────────────────────
         elif is_option_row(inst):
@@ -1503,13 +1540,16 @@ def compute_app_data(parsed: ParsedData, use_lifetime: bool) -> AppData:
     df_open = pd.DataFrame(open_records)
 
     # ── Wheel campaigns ────────────────────────────────────────────────────
-    wheel_tickers = []
-    for t in df['Ticker'].unique():
-        if t == 'CASH': continue
-        if not df[(df['Ticker'] == t) &
-                  (equity_mask(df['Instrument Type'])) &
-                  (df['Net_Qty_Row'] >= WHEEL_MIN_SHARES)].empty:
-            wheel_tickers.append(t)
+    # Candidate = cumulative bought shares reach WHEEL_MIN_SHARES, not a single
+    # 100-lot row — consistent with build_campaigns' odd-lot pool, which lets
+    # accumulation entries (e.g. 60 + 60) start a campaign.
+    _eq_rows  = df[equity_mask(df['Instrument Type'])]
+    _buy_sums = (_eq_rows[_eq_rows['Net_Qty_Row'] > 0]
+                 .groupby('Ticker')['Net_Qty_Row'].sum())
+    wheel_tickers = [
+        t for t in df['Ticker'].unique()
+        if t != 'CASH' and _buy_sums.get(t, 0) >= WHEEL_MIN_SHARES
+    ]
 
     all_campaigns = {}
     for ticker in wheel_tickers:

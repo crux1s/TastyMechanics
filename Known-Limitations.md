@@ -48,6 +48,9 @@ If a covered call assigns away only some of your shares (e.g., 100 of 200 SOFI s
 ### Multiple assignments on the same ticker
 Each buy-in starts a new campaign. If assigned, shares sold, then assigned again on the same ticker, you will have two separate campaigns. Blended basis across campaigns is not combined.
 
+### Odd-lot shares and partial sales (basis display)
+Since v26.20, share buys below 100 are pooled and folded into the next campaign entry, and mid-campaign adds of any size count — so the campaign share count matches your broker position. However, a **partial sale keeps the carry-full-cost convention**: the remaining shares carry all remaining acquisition cost, so the displayed per-share basis *rises* after selling part of the position below basis (e.g. sell 13 of 105 at a loss → the 92 remaining shares show a higher $/sh figure than the broker's average cost). This is deliberate cash-recovery accounting — premiums and dividends grind the effective basis back down, and the sale's P/L settles in full when the campaign closes. Reconcile per-share basis against your broker statement, not the campaign card.
+
 ### Long options exercised by you
 Exercising a long call or put into a share position is untested. Check the resulting position and cost basis carefully.
 

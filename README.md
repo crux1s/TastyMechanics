@@ -215,6 +215,13 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 
 ## Changelog
 
+**v26.20 — Odd-lot shares now count in wheel campaigns** (2026-07-18)
+- **Odd-lot buys fold into campaigns** — share purchases below 100 while no campaign is open are pooled and folded into the next qualifying entry, so the campaign share count matches your broker position. Previously they were silently ignored while sales still deducted full quantities: 5 shares held + 100 assigned − 13 sold showed 87 shares instead of 92, and the odd shares' cost was missing from the campaign (future closed-campaign P/L would have been overstated by that cost).
+- **Mid-campaign top-ups of any size now register as Adds** — e.g. buying 8 shares to get back to a covered 100-lot blends into basis; the old ≥100 gate ignored them.
+- **Accumulation entries start campaigns** — cumulative buys crossing 100 (e.g. 60 + 60) now open a campaign; the wheel-ticker scan matches (cumulative bought shares, not a single 100-lot row).
+- Campaign `start_date` stays the qualifying-entry date, so option-premium windowing and outside-window P/L bucketing are unchanged. Partial sales keep the existing carry-full-cost basis convention.
+- Test suite at **431 tests** (17 new in section 30 covering pool fold-in, sub-threshold pools, small adds, pre-campaign pool sales, and accumulation entries).
+
 **v26.19 — WealthUIUX-inspired scorecard rings, icons, card accents, badge colours** (2026-06-26)
 - **Circular SVG progress rings** on the Win Rate, Median Capture %, Net Prem Kept %, and Fees % scorecard cards in the HTML export — pos/neg/neutral colour scheme (emerald/rose/teal), pure SVG `stroke-dasharray` arc, no charting library.
 - **Emoji icon + ring/icon layout** on every scorecard metric card (`.mcard-r` flex layout) for quicker visual scanning.

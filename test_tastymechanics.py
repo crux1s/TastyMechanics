@@ -1984,6 +1984,107 @@ check_int('Smoke: mwr_realized None or in (-1,10)',
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 30. ODD-LOT SHARE POOL — pre-campaign buys fold into the next entry
+#
+# Regression for the RKLB 92-vs-87 bug (Jul 2026): the share-buy branch in
+# build_campaigns() required qty >= WHEEL_MIN_SHARES, so odd-lot buys (e.g.
+# 3 + 2 shares before a 100-share put assignment) were silently ignored while
+# the sale branch deducted full sale quantities from the campaign — the card
+# showed 87 shares when the broker held 92, and the odd shares' cost was
+# missing from total_cost (future closed-campaign P/L overstated by that cost).
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 30. Odd-lot share pool: pre-campaign buys fold into entry ─────────────')
+
+def _mk_share_row(ts, qty, total, sub_type=None):
+    """Minimal equity row for build_campaigns synthetic tests."""
+    if sub_type is None:
+        sub_type = 'Buy to Open' if qty > 0 else 'Sell to Close'
+    return dict(Date=pd.Timestamp(ts), Type='Trade',
+                Action='BUY_TO_OPEN' if qty > 0 else 'SELL_TO_CLOSE',
+                Symbol='ODDL', Ticker='ODDL', InstrumentType='Equity',
+                Description='%s %.0f ODDL' % ('Bought' if qty > 0 else 'Sold', abs(qty)),
+                SubType=sub_type, Net_Qty_Row=float(qty), Quantity=float(abs(qty)),
+                Value=float(total), Total=float(total), Order_No=1,
+                CallOrPut=None, StrikePrice=None, ExpirationDate=None)
+
+def _mk_share_df(rows):
+    out = pd.DataFrame(rows)
+    return out.rename(columns={
+        'InstrumentType': 'Instrument Type', 'SubType': 'Sub Type',
+        'Order_No': 'Order #', 'CallOrPut': 'Call or Put',
+        'StrikePrice': 'Strike Price', 'ExpirationDate': 'Expiration Date',
+    })
+
+# ── (a) Odd-lot buys before entry fold in (the RKLB shape: 3+2, +100, −13) ────
+_odd_df = _mk_share_df([
+    _mk_share_row('2026-06-29 19:30:01',    3,  -293.19),
+    _mk_share_row('2026-06-29 19:30:02',    2,  -195.46),
+    _mk_share_row('2026-07-16 21:00:00',  100, -9505.00),
+    _mk_share_row('2026-07-17 11:53:52',  -13,   867.33),
+])
+_odd_camps = build_campaigns(_odd_df, 'ODDL', use_lifetime=False)
+check_int('Odd-lot: one open campaign',            len(_odd_camps), 1)
+_oc = _odd_camps[0]
+check('Odd-lot: 92 shares remaining',              _oc.total_shares,    92.0)
+check('Odd-lot: 105 shares acquired',              _oc.shares_acquired, 105.0)
+check('Odd-lot: total_cost includes both lots',    _oc.total_cost,      9993.65)
+check('Odd-lot: exit_proceeds from 13-share sale', _oc.exit_proceeds,   867.33)
+check_int('Odd-lot: pool buys recorded in events',
+          sum(1 for e in _oc.events if 'odd lot' in e['detail']), 2)
+# (f) start_date stays the qualifying-entry date, not the first pool buy
+check_int('Odd-lot: start_date = entry date (premium windowing unchanged)',
+          _oc.start_date == pd.Timestamp('2026-07-16 21:00:00'), True)
+
+# ── (b) Pool never reaching threshold → no campaign ───────────────────────────
+_tiny_df = _mk_share_df([
+    _mk_share_row('2026-01-05', 5, -500.0),
+    _mk_share_row('2026-02-05', 7, -700.0),
+])
+check_int('Odd-lot: sub-threshold pool alone → no campaign',
+          len(build_campaigns(_tiny_df, 'ODDL', use_lifetime=False)), 0)
+
+# ── (c) Small mid-campaign add now counts (8-share top-up to 108) ─────────────
+_add_df = _mk_share_df([
+    _mk_share_row('2026-01-05', 100, -9500.0),
+    _mk_share_row('2026-02-05',   8,  -800.0),
+])
+_add_c = build_campaigns(_add_df, 'ODDL', use_lifetime=False)[0]
+check('Odd-lot: small add → 108 shares',           _add_c.total_shares, 108.0)
+check('Odd-lot: small add blends basis',           _add_c.blended_basis, 10300.0 / 108)
+
+# ── (d) Odd-lot sale before campaign shrinks the pool ─────────────────────────
+_pool_sale_df = _mk_share_df([
+    _mk_share_row('2026-01-05',   5, -500.0),
+    _mk_share_row('2026-01-10',  -2,   210.0),   # sell 2 of the odd lot
+    _mk_share_row('2026-02-05', 100, -9500.0),
+])
+_ps_c = build_campaigns(_pool_sale_df, 'ODDL', use_lifetime=False)[0]
+check('Odd-lot: pool sale → 103 shares fold in',   _ps_c.total_shares, 103.0)
+check('Odd-lot: pool cost relieved proportionally', _ps_c.total_cost,  9500.0 + 300.0)
+
+# full pool sale — later campaign must be a clean 100-lot
+_pool_flat_df = _mk_share_df([
+    _mk_share_row('2026-01-05',   5, -500.0),
+    _mk_share_row('2026-01-10',  -5,   520.0),
+    _mk_share_row('2026-02-05', 100, -9500.0),
+])
+_pf_c = build_campaigns(_pool_flat_df, 'ODDL', use_lifetime=False)[0]
+check('Odd-lot: emptied pool leaves clean 100-lot entry', _pf_c.total_shares, 100.0)
+check('Odd-lot: emptied pool leaves clean entry cost',    _pf_c.total_cost,  9500.0)
+
+# ── (e) Cumulative buys crossing the threshold start a campaign ───────────────
+_cum_df = _mk_share_df([
+    _mk_share_row('2026-01-05', 60, -6000.0),
+    _mk_share_row('2026-02-05', 60, -6300.0),
+])
+_cum_camps = build_campaigns(_cum_df, 'ODDL', use_lifetime=False)
+check_int('Odd-lot: 60+60 accumulation starts a campaign', len(_cum_camps), 1)
+check('Odd-lot: accumulation entry has 120 shares', _cum_camps[0].total_shares, 120.0)
+check_int('Odd-lot: accumulation start_date = crossing buy',
+          _cum_camps[0].start_date == pd.Timestamp('2026-02-05'), True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # GRAND TOTAL
 # ══════════════════════════════════════════════════════════════════════════════
 print(f'\n{"═"*60}')
