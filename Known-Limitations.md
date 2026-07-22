@@ -103,6 +103,9 @@ The Long-Term Performance panel (Tab 4) shows **MWR (money-weighted return / XIR
 ### Realized-P/L basis of drawdown and XIRR terminal
 Max Drawdown is measured on the **cumulative realized-P/L curve**, not on account NLV, so it does not reflect intra-trade mark-to-market swings on open positions. The XIRR terminal value is `net deposited + realized P/L` by default; it switches to a mark-to-market value (adding open-position unrealized P/L) only when the Live price toggle has fetched quotes.
 
+### Mark-to-Market precision on partial sales inside open wheels (v26.21)
+Since v26.21 the All-Time **Realized P/L** headline recognizes the equity P/L of partial share sales inside still-open wheel campaigns, so it reconciles with the Portfolio-tab chart. The **Mark-to-Market** figure (Live-prices toggle) was deliberately left unchanged, because its unrealized side marks the remaining shares against the carry-full-cost blended basis — which already absorbs the sold shares' cost — and recognizing the sale in both places would double-count it. As a result, MTM understates a still-open wheel by the *cash proceeds already received* from an earlier partial sale until the campaign closes. A fully precise MTM would require marking the remaining shares against their true FIFO basis in `compute_unrealized_pnl` — a documented follow-up. The realized figures (headline, ROR, MWR-realized) are unaffected and correct.
+
 ## Other
 
 ### Non-US accounts

@@ -770,6 +770,41 @@ def realized_pnl(c: Campaign, use_lifetime: bool = False) -> float:
         return c.exit_proceeds + c.premiums + c.dividends - c.total_cost
     return c.premiums + c.dividends
 
+def open_campaign_equity(df: pd.DataFrame, all_campaigns: dict) -> float:
+    """
+    FIFO-settled equity P/L of share sales that happened *inside still-open*
+    wheel campaigns — the component that `realized_pnl()` defers.
+
+    For an open campaign, `realized_pnl()` returns premiums + dividends only:
+    the equity gain/loss on a partial sale is deferred until the campaign
+    closes (the carry-full-cost convention — remaining shares carry all
+    remaining cost). The Portfolio-tab chart (`calculate_daily_realized_pnl`),
+    by contrast, books equity P/L via FIFO on each sale's settlement date, so a
+    partial sale inside an open campaign is recognised immediately. This helper
+    returns exactly that deferred amount so the All-Time Realized P/L headline
+    can reconcile to the chart / broker-realized figure.
+
+    Per wheel ticker:
+        full_fifo = Σ (proceeds − cost) over every FIFO sale, full history
+        closed_eq = Σ (exit_proceeds − total_cost) for that ticker's CLOSED
+                    campaigns (equity already recognised in closed_camp_pnl)
+        contribution = full_fifo − closed_eq
+
+    A ticker whose campaigns are all closed contributes 0 (full FIFO equals the
+    closed-campaign equity). Reads `df` directly, so it honours any upstream
+    ticker filtering (e.g. the zero-cost exclusion) without a separate cache.
+    Pure / Streamlit-free.
+    """
+    total = 0.0
+    for ticker, camps in all_campaigns.items():
+        rows = df[equity_mask(df['Instrument Type']) &
+                  (df['Ticker'] == ticker)].sort_values('Date')
+        full_fifo = sum(p - c for _, p, c in _iter_fifo_sells(rows))
+        closed_eq = sum(c.exit_proceeds - c.total_cost
+                        for c in camps if c.status == 'closed')
+        total += full_fifo - closed_eq
+    return total
+
 def pure_options_pnl(df: pd.DataFrame, ticker: str, campaigns: list[Campaign]) -> float:
     """
     Options P/L for a ticker that falls *outside* all campaign windows.

@@ -215,6 +215,12 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 
 ## Changelog
 
+**v26.21 — Overview Realized P/L reconciles with the Portfolio-tab chart** (2026-07-22)
+- **All-Time Realized P/L now matches the Portfolio-tab chart.** The Overview headline used campaign accounting, which defers the equity P/L of a partial share sale inside a still-open wheel until the campaign closes; the chart books it via FIFO on the sale date. The two disagreed by exactly that deferred amount (on the sample book, −$381.72 from a partial RKLB sale). The headline — and the Realized ROR, Capital Efficiency, money-weighted return, HTML report, and position snapshot derived from it — now recognizes that settled equity, so the first-glance number equals the chart and your broker's realized figure.
+- **New "Open Wheel Share Sales" breakdown chip** on the All-Time Overview makes the reconciliation visible.
+- **Wheel campaign cards and Mark-to-Market are unchanged.** The card keeps the carry-full-cost basis convention (equity settles at campaign close), and the MTM number is held byte-identical — the reconciled term is netted back out where it would otherwise double-count against the carry-full basis.
+- New pure helper `open_campaign_equity()` in `mechanics.py`. Test suite at **437 tests** (6 new in section 31 covering the reconciliation invariant, closed-only tickers, and no-sale open campaigns).
+
 **v26.20 — Odd-lot shares now count in wheel campaigns** (2026-07-18)
 - **Odd-lot buys fold into campaigns** — share purchases below 100 while no campaign is open are pooled and folded into the next qualifying entry, so the campaign share count matches your broker position. Previously they were silently ignored while sales still deducted full quantities: 5 shares held + 100 assigned − 13 sold showed 87 shares instead of 92, and the odd shares' cost was missing from the campaign (future closed-campaign P/L would have been overstated by that cost).
 - **Mid-campaign top-ups of any size now register as Adds** — e.g. buying 8 shares to get back to a covered 100-lot blends into basis; the old ≥100 gate ignored them.

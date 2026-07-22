@@ -59,6 +59,7 @@ from mechanics import (
     build_closed_trades,
     _calculate_capital_risk,
     calculate_daily_realized_pnl,
+    open_campaign_equity,
     calc_dte,
     _uf_find,
     _uf_union,
@@ -2082,6 +2083,61 @@ check_int('Odd-lot: 60+60 accumulation starts a campaign', len(_cum_camps), 1)
 check('Odd-lot: accumulation entry has 120 shares', _cum_camps[0].total_shares, 120.0)
 check_int('Odd-lot: accumulation start_date = crossing buy',
           _cum_camps[0].start_date == pd.Timestamp('2026-02-05'), True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 31. OPEN-CAMPAIGN SETTLED EQUITY — reconcile Overview headline with the chart
+#
+# realized_pnl() defers the equity P/L of a partial share sale inside an OPEN
+# wheel campaign until the campaign closes (carry-full-cost). The Portfolio-tab
+# chart (calculate_daily_realized_pnl) books it via FIFO on the sale date. The
+# gap made the Overview All-Time Realized P/L headline sit above the chart.
+# open_campaign_equity() returns exactly that deferred amount so the headline
+# reconciles. Reuses the _mk_share_df helper from section 30.
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 31. Open-campaign settled equity: headline reconciles to chart ────────')
+
+# ── (a) RKLB shape: 5 held + 100 assigned − 13 sold, campaign still open ──────
+_oce_df = _mk_share_df([
+    _mk_share_row('2026-06-29 19:30:01',    3,  -293.19),
+    _mk_share_row('2026-06-29 19:30:02',    2,  -195.46),
+    _mk_share_row('2026-07-16 21:00:00',  100, -9505.00),
+    _mk_share_row('2026-07-17 11:53:52',  -13,   867.33),
+])
+_oce_camps = build_campaigns(_oce_df, 'ODDL', use_lifetime=False)
+_oce_map   = {'ODDL': _oce_camps}
+# FIFO cost of the 13 sold shares: 5 @ 97.73 (488.65) + 8 @ 95.05 (760.40) = 1249.05
+# realized = 867.33 − 1249.05 = −381.72
+check('OpenEq: partial-sale FIFO loss recognized',
+      open_campaign_equity(_oce_df, _oce_map), -381.72)
+
+# ── (b) headline-with-term equals the full-history FIFO chart total ───────────
+# Headline (deferred) = Σ realized_pnl(c) over campaigns = premiums + divs for the
+# open campaign (0 here — no options/divs).  Chart = Σ FIFO equity settlement.
+_oce_headline_deferred = sum(realized_pnl(c) for c in _oce_camps)
+_oce_reconciled = _oce_headline_deferred + open_campaign_equity(_oce_df, _oce_map)
+_oce_chart      = calculate_daily_realized_pnl(_oce_df, _oce_df['Date'].min())['PnL'].sum()
+check('OpenEq: deferred headline is above chart by the term',
+      _oce_headline_deferred - _oce_chart, 381.72)
+check('OpenEq: reconciled headline == chart total',
+      _oce_reconciled, _oce_chart)
+
+# ── (c) closed-only campaign contributes 0 (equity already in closed_camp_pnl) ─
+_closed_df = _mk_share_df([
+    _mk_share_row('2026-01-05', 100, -9500.0),
+    _mk_share_row('2026-02-05', -100, 10200.0),   # full exit — campaign closes
+])
+_closed_camps = build_campaigns(_closed_df, 'ODDL', use_lifetime=False)
+check_int('OpenEq: closed campaign present', len(_closed_camps), 1)
+check('OpenEq: closed-only ticker contributes 0',
+      open_campaign_equity(_closed_df, {'ODDL': _closed_camps}), 0.0)
+
+# ── (d) open campaign with no partial sale contributes 0 ──────────────────────
+_hold_df = _mk_share_df([
+    _mk_share_row('2026-01-05', 100, -9500.0),
+])
+check('OpenEq: open campaign, no sale → 0',
+      open_campaign_equity(_hold_df, {'ODDL': build_campaigns(_hold_df, 'ODDL', use_lifetime=False)}), 0.0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

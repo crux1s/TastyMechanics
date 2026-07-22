@@ -28,7 +28,7 @@ Always run after any change:
 PYTHONIOENCODING=utf-8 python3 test_tastymechanics.py
 ```
 
-Expected: `431 tests | 431 passed | 0 failed` (31 sections, with section 0 = end-to-end smoke check)
+Expected: `437 tests | 437 passed | 0 failed` (32 sections, with section 0 = end-to-end smoke check)
 
 The `PYTHONIOENCODING=utf-8` prefix is required on Windows — omitting it causes a `charmap` codec error on the Unicode characters in test output.
 
@@ -101,6 +101,8 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 **realized_pnl()** — for closed campaigns includes `exit_proceeds`. For open campaigns it's premiums + dividends only. `use_lifetime=True` always returns premiums + dividends regardless of status (strips equity component for House Money mode).
 
+**Open-campaign settled equity (`open_campaign_equity`)** — `realized_pnl()` defers the equity P/L of a partial share sale inside an *open* campaign to campaign close (carry-full-cost), but `calculate_daily_realized_pnl` (the Portfolio-tab chart) books it via FIFO on the sale date — so the All-Time Overview headline would sit *above* the chart by that amount. `open_campaign_equity(df, all_campaigns)` in `mechanics.py` returns exactly the deferred amount: per wheel ticker, `Σ FIFO(proceeds−cost) over full history − Σ (exit_proceeds−total_cost) over that ticker's CLOSED campaigns`. `tastymechanics.py` adds it to `total_realized_pnl` in **both** the normal (~:581) and zero-cost (~:650) paths, reconciling the headline (and the ROR / MWR-realized / HTML-report / snapshot figures derived from it) to the chart. `realized_pnl()` and the wheel card stay deferred on purpose — only the portfolio total recognizes it. **MTM must subtract it back out**: `compute_unrealized_pnl` marks open-campaign shares against carry-full `blended_basis` (which already carries the sold shares' cost), so both the MTM pill (`_mtm_realized = total_realized_pnl - _open_camp_equity`) and the `portfolio_metrics` MTM terminal (`unrealized_total=_mtm.total - _open_camp_equity`) net it out to avoid double-counting — this keeps the whole MTM chain byte-identical to pre-reconcile while `mwr_realized` uses the reconciled total. Windowed mode is already FIFO-consistent, so the term is All-Time-only.
+
 **effective_basis()** — `use_lifetime=True` returns raw `blended_basis` (no premium offset). Default returns `(total_cost - premiums - dividends) / total_shares`.
 
 **Campaign event types** — `c.events` is a list of dicts `{date, type, detail, cash}`. Known types: `'Entry'`, `'Add'`, `'Exit'`, `'Assignment Put (STO)'` (entry via put assignment — put credit excluded from cost basis, triggers amber card banner in tab3), `'Mid-campaign Assignment'` (shares added mid-campaign via put assignment — premium IS already in basis, triggers blue card banner). The Share & Dividend Events table filters out any event type containing 'assign' (case-insensitive), so assignment events are card-only. Detection in `build_campaigns()`: `_find_assignment_premium(t, row)` is called on both the entry branch and the add-to-existing branch.
@@ -131,7 +133,7 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 - `ROADMAP.md` — pending work, prioritised
 - `Known-Limitations.md` — what doesn't work or is untested
-- `test_tastymechanics.py` — 431 tests, 31 sections (section 0 = compute_app_data end-to-end smoke check; gates the rest)
+- `test_tastymechanics.py` — 437 tests, 32 sections (section 0 = compute_app_data end-to-end smoke check; gates the rest)
 - `config.py` — `KNOWN_INDEXES`, `COLOURS`, `DTE_*`, `WIN_RATE_*`, `FIFO_EPSILON`
 
 ---

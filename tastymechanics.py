@@ -52,7 +52,7 @@ from mechanics import (
     calculate_windowed_equity_pnl,
     calculate_daily_realized_pnl,
     build_campaigns,
-    effective_basis, realized_pnl, pure_options_pnl,
+    effective_basis, realized_pnl, pure_options_pnl, open_campaign_equity,
     build_closed_trades,
     build_option_chains,
     calc_dte,
@@ -223,7 +223,7 @@ import hashlib as _hashlib
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.20"
+APP_VERSION = "v26.21"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 
@@ -580,6 +580,17 @@ def main():
     )
     total_realized_pnl += _all_time_income - _wheel_divs_in_camps
 
+    # Recognize equity P/L from partial share sales inside still-open wheel
+    # campaigns. realized_pnl() defers this to campaign close (carry-full-cost),
+    # but the Portfolio-tab chart books it via FIFO on the sale date — so the
+    # All-Time headline would otherwise sit above the chart by this amount.
+    # Adding it here reconciles the two (and the MWR/ROR/report figures derived
+    # from total_realized_pnl) to the broker-realized number. The wheel-card
+    # deferral via realized_pnl() is intentionally left unchanged. MTM subtracts
+    # this back out below to avoid double-counting the carry-full basis.
+    _open_camp_equity = open_campaign_equity(df, all_campaigns)
+    total_realized_pnl += _open_camp_equity
+
     # ── Zero-cost basis exclusion toggle ──────────────────────────────────────────
     # Shown in sidebar only when zero-cost deliveries were detected.
     # When enabled, all tickers with a $0-basis delivery are stripped from every
@@ -636,8 +647,12 @@ def main():
         _all_time_income     = df[df['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
         _wheel_divs_in_camps = sum(c.dividends for camps in all_campaigns.values() for c in camps)
 
+        # df is already filtered to exclude zero-cost tickers here, so
+        # open_campaign_equity honours the exclusion automatically.
+        _open_camp_equity    = open_campaign_equity(df, all_campaigns)
         total_realized_pnl   = (closed_camp_pnl + open_premiums_banked + pure_opts_pnl
-                                 + _all_time_income - _wheel_divs_in_camps)
+                                 + _all_time_income - _wheel_divs_in_camps
+                                 + _open_camp_equity)
 
         # Filter closed trades table
         if not closed_trades_df.empty:
@@ -935,10 +950,12 @@ def main():
 
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric('Realized P/L', fmt_dollar(_pnl_display),
-              help='Total realised P/L — options premiums, share sales, dividends, '
-                   'and net interest (credit earned minus margin debit). ' +
-                   ('Full account history.' if _is_all_time else 'Filtered to selected window.') +
-                   ' Unrealised share gains not included.')
+              help='Total realised P/L — options premiums, share sales (including partial '
+                   'sales inside still-open wheel campaigns), dividends, and net interest '
+                   '(credit earned minus margin debit). ' +
+                   ('Full account history — matches the Portfolio-tab Realized P/L chart.'
+                    if _is_all_time else 'Filtered to selected window.') +
+                   ' Unrealised marks on shares still held are not included.')
     if _ror_display is None:
         _ror_label  = '∞ house money' if net_deposited < 0 else 'N/A'
         _ror_help   = (
@@ -973,9 +990,17 @@ def main():
 
     # ── Realized P/L Breakdown — inline chip line ─────────────────────────────────
     if _is_all_time:
+        # Open Wheel Share Sales: equity P/L from partial sales inside still-open
+        # campaigns, recognized here so the breakdown reconciles to the headline
+        # (and the Portfolio-tab chart). Shown only when non-zero.
+        _osales_chip = (
+            _pnl_chip('Open Wheel Share Sales', _open_camp_equity)
+            if abs(_open_camp_equity) > 0.005 else ''
+        )
         _breakdown_html = (
             _pnl_chip('Closed Wheel Campaigns', closed_camp_pnl) +
             _pnl_chip('Open Wheel Premiums', open_premiums_banked) +
+            _osales_chip +
             _pnl_chip('General Standalone Trading', pure_opts_pnl) +
             f'<span style="color:' + COLOURS['text_dim'] + ';margin:0 6px;font-size:0.78rem;">·</span>'
             f'<span style="color:' + COLOURS['text_muted'] + ';font-size:0.78rem;font-style:italic;">All Time</span>'
@@ -1029,8 +1054,13 @@ def main():
             else:
                 st.warning('Live prices unavailable — check internet connection.')
 
-    # Always use all-time realized P/L for MTM (never windowed)
-    _mtm_realized   = total_realized_pnl
+    # Always use all-time realized P/L for MTM (never windowed).
+    # compute_unrealized_pnl marks open-campaign shares against carry-full
+    # blended_basis, which already carries the sold shares' cost — so combining
+    # it with the reconciled total (which also recognizes that sale via
+    # _open_camp_equity) would count the sold-share cost twice. Use the deferred
+    # realized base here so the MTM pill stays byte-identical to pre-reconcile.
+    _mtm_realized   = total_realized_pnl - _open_camp_equity
     _unreal_val     = _mtm.total   if _mtm else None
     _mtm_pnl_val    = (_mtm_realized + _mtm.total) if _mtm else None
     _mtm_ror_val    = (_mtm_pnl_val / net_deposited * 100) if (_mtm and net_deposited > 0) else None
@@ -1040,10 +1070,14 @@ def main():
     # Computed here, after the MTM block, so the MTM-inclusive MWR can use live
     # unrealized P/L when the Live toggle fetched it. Always all-time (not
     # window-scoped) — long-term success is an account-lifetime question.
+    # mwr_realized uses the reconciled total_realized_pnl (broker-realized).
+    # For the MTM terminal, net out _open_camp_equity from the unrealized arg for
+    # the same carry-full double-count reason as the pill above, keeping mwr_mtm
+    # identical to pre-reconcile.
     _perf = portfolio_metrics(
         _daily_pnl_all, _cash_flows, net_deposited, total_realized_pnl,
         account_days, latest_date,
-        unrealized_total=(_mtm.total if _mtm else None),
+        unrealized_total=((_mtm.total - _open_camp_equity) if _mtm else None),
     )
 
     # Hero stat — MTM ROR rendered larger than a standard st.metric
