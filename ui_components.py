@@ -93,19 +93,30 @@ def detect_strategy(ticker_df):
     if lc > 0 and sc > 0 and len(exps) >= 2 and len(strikes) == 1: return 'Calendar Spread'
     if lp > 0 and sp > 0 and len(exps) >= 2 and len(strikes) == 1: return 'Calendar Spread'
     # Butterfly: 2 longs + 1 short, 3 strikes, 1 expiry AND short strike must be the middle strike
-    if lc == 2 and sc == 1 and len(strikes) == 3 and len(exps) == 1:
-        _sc_strikes = ticker_df[ticker_df.apply(identify_pos_type, axis=1) == 'Short Call']['Strike Price'].dropna()
+    # Butterfly detection requires an options-only structure (ls == 0): a
+    # butterfly held against stock is really a covered / ratio structure and
+    # must fall through to those checks below.  The body leg must also sit on
+    # the MIDDLE of the 3 strikes — without that guard, a covered call plus an
+    # unrelated call spread (e.g. long 70 / short 75 / short 90 + 100 shares)
+    # would satisfy the bare leg-count test and mislabel as a Short Butterfly.
+    # Long Butterfly: 2 long wings + 1 short body, short body on the middle strike.
+    if ls == 0 and lc == 2 and sc == 1 and len(strikes) == 3 and len(exps) == 1:
+        _sc_strikes = ticker_df[types == 'Short Call']['Strike Price'].dropna()
         if not _sc_strikes.empty and sorted(strikes)[0] < _sc_strikes.iloc[0] < sorted(strikes)[-1]:
             return 'Long Call Butterfly'
-    if lp == 2 and sp == 1 and len(strikes) == 3 and len(exps) == 1:
-        _sp_strikes = ticker_df[ticker_df.apply(identify_pos_type, axis=1) == 'Short Put']['Strike Price'].dropna()
+    if ls == 0 and lp == 2 and sp == 1 and len(strikes) == 3 and len(exps) == 1:
+        _sp_strikes = ticker_df[types == 'Short Put']['Strike Price'].dropna()
         if not _sp_strikes.empty and sorted(strikes)[0] < _sp_strikes.iloc[0] < sorted(strikes)[-1]:
             return 'Long Put Butterfly'
-    # Short Butterfly: 1 long body (qty 2) + 2 short wings, 3 strikes, 1 expiry
-    if lc == 1 and sc == 2 and len(strikes) == 3 and len(exps) == 1:
-        return 'Short Call Butterfly'
-    if lp == 1 and sp == 2 and len(strikes) == 3 and len(exps) == 1:
-        return 'Short Put Butterfly'
+    # Short Butterfly: 1 long body (qty 2) + 2 short wings, long body on the middle strike.
+    if ls == 0 and lc == 1 and sc == 2 and len(strikes) == 3 and len(exps) == 1:
+        _lc_strikes = ticker_df[types == 'Long Call']['Strike Price'].dropna()
+        if not _lc_strikes.empty and sorted(strikes)[0] < _lc_strikes.iloc[0] < sorted(strikes)[-1]:
+            return 'Short Call Butterfly'
+    if ls == 0 and lp == 1 and sp == 2 and len(strikes) == 3 and len(exps) == 1:
+        _lp_strikes = ticker_df[types == 'Long Put']['Strike Price'].dropna()
+        if not _lp_strikes.empty and sorted(strikes)[0] < _lp_strikes.iloc[0] < sorted(strikes)[-1]:
+            return 'Short Put Butterfly'
     if ls > 0 and sc > 0 and sp > 0: return 'Covered Strangle'
     # Covered ratio spread: stock + more short calls/puts than long calls/puts
     if ls > 0 and sc > 0 and lc > 0 and sc_qty > lc_qty and sp == 0 and lp == 0:
@@ -153,11 +164,15 @@ def detect_strategy(ticker_df):
         _lp_str = ticker_df[types == 'Long Put']['Strike Price'].dropna()
         if not _sp_str.empty and not _lp_str.empty:
             return 'Put Credit Spread' if _sp_str.min() > _lp_str.min() else 'Put Debit Spread'
-    if sp > 0:       return 'Short Put'
-    if sc > 0:       return 'Short Call'
-    if lc == 1:      return 'Long Call'
-    if lp == 1:      return 'Long Put'
-    if ls > 0:       return 'Long Stock'
+    # Single-leg fallbacks fire only when the position is that leg-type ALONE.
+    # A heterogeneous leftover that matched no named structure above (e.g. a
+    # diagonal, or stock plus unmatched long options) is genuinely unclassifiable
+    # — return Custom/Mixed rather than labelling it by one leg and hiding the rest.
+    if sp > 0  and sc == 0 and lc == 0 and lp == 0 and ls == 0: return 'Short Put'
+    if sc > 0  and sp == 0 and lc == 0 and lp == 0 and ls == 0: return 'Short Call'
+    if lc == 1 and sc == 0 and sp == 0 and lp == 0 and ls == 0: return 'Long Call'
+    if lp == 1 and sc == 0 and sp == 0 and lc == 0 and ls == 0: return 'Long Put'
+    if ls > 0  and sc == 0 and lc == 0 and sp == 0 and lp == 0: return 'Long Stock'
     return 'Custom/Mixed'
 
 

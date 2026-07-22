@@ -215,6 +215,11 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 
 ## Changelog
 
+**v26.22 — Stricter open-position strategy classification** (2026-07-22)
+- **Butterfly labels no longer misfire on covered / ratio structures.** The open-position strategy classifier (`detect_strategy`) tagged any 3-strike, 1-expiry structure with the right leg counts as a butterfly — even a covered call plus an unrelated call spread (e.g. 100 shares + long 70 / short 75 / short 90 calls, which was showing as "Short Call Butterfly"). Butterfly detection now requires an options-only position (no stock) and the long/short body leg to sit on the **middle** of the three strikes. The RKLB-style position now correctly reads as a **Covered Call Ratio Spread**.
+- **Unclassifiable positions now say "Custom/Mixed" instead of guessing.** The single-leg fallbacks (Short Put / Short Call / Long Call / Long Put / Long Stock) previously fired even when *other* unmatched legs were present, labelling a mixed position by one leg and hiding the rest. They now fire only for a homogeneous position; a genuinely unrecognised combination (a diagonal, stock plus an unmatched long option, etc.) falls through to Custom/Mixed.
+- Display-only change; P/L and campaign accounting were never affected. Test suite at **444 tests** (7 new guarding the misclassifications).
+
 **v26.21 — Overview Realized P/L reconciles with the Portfolio-tab chart** (2026-07-22)
 - **All-Time Realized P/L now matches the Portfolio-tab chart.** The Overview headline used campaign accounting, which defers the equity P/L of a partial share sale inside a still-open wheel until the campaign closes; the chart books it via FIFO on the sale date. The two disagreed by exactly that deferred amount (on the sample book, −$381.72 from a partial RKLB sale). The headline — and the Realized ROR, Capital Efficiency, money-weighted return, HTML report, and position snapshot derived from it — now recognizes that settled equity, so the first-glance number equals the chart and your broker's realized figure.
 - **New "Open Wheel Share Sales" breakdown chip** on the All-Time Overview makes the reconciliation visible.

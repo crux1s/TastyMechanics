@@ -1299,6 +1299,37 @@ check_int('ds: Short Put Butterfly',
           _make_row('Equity Option', 'PUT', -1, 105, '2026-06-20'),
       )), 'Short Put Butterfly')
 
+# NOT a Short Call Butterfly — long body on the LOWEST strike, not the middle.
+# (RKLB-style: long 70 / short 75 / short 90, no stock.) Falls through to the
+# ratio-spread branch since sc_qty (2) > lc_qty (1).
+check_int('ds: long-wing-low call structure is NOT a Short Call Butterfly',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL',  1, 70, '2026-08-22'),
+          _make_row('Equity Option', 'CALL', -1, 75, '2026-08-22'),
+          _make_row('Equity Option', 'CALL', -1, 90, '2026-08-22'),
+      )), 'Call Ratio Spread')
+
+# The real RKLB open position: 100 shares + long 70 / short 75 / short 90 calls.
+# Stock present → butterfly branch must not fire; resolves to Covered Call Ratio Spread.
+check_int('ds: RKLB shares + call ratio is Covered Call Ratio Spread (not butterfly)',
+      detect_strategy(_make_df(
+          _make_row('Equity',        '',    100),
+          _make_row('Equity Option', 'CALL',  1, 70, '2026-08-22'),
+          _make_row('Equity Option', 'CALL', -1, 75, '2026-08-22'),
+          _make_row('Equity Option', 'CALL', -1, 90, '2026-08-22'),
+      )), 'Covered Call Ratio Spread')
+
+# Butterfly with stock is a covered structure, not a butterfly — even when the
+# long body IS on the middle strike (valid options-only fly shape + shares).
+# Here net calls are balanced (long 2 == short 2) so it resolves to Covered Call.
+check_int('ds: valid short-fly shape + stock is not a butterfly',
+      detect_strategy(_make_df(
+          _make_row('Equity',        '',    100),
+          _make_row('Equity Option', 'CALL',  2, 100, '2026-06-20'),
+          _make_row('Equity Option', 'CALL', -1,  95, '2026-06-20'),
+          _make_row('Equity Option', 'CALL', -1, 105, '2026-06-20'),
+      )), 'Covered Call')
+
 # Calendar Spread — same strike, 2 expiries (calls)
 check_int('ds: Calendar Spread (calls)',
       detect_strategy(_make_df(
@@ -1331,6 +1362,36 @@ check_int('ds: Custom/Mixed fallback',
           _make_row('Equity Option', 'CALL',  1, 100),
           _make_row('Equity Option', 'CALL',  1, 105),
       )), 'Custom/Mixed')
+
+# Heterogeneous leftovers must fall through to Custom/Mixed rather than being
+# labelled by a single leg (the fallbacks are now leg-type-exclusive).
+# Diagonal — long + short call at different expiries (not a vertical or calendar).
+check_int('ds: diagonal (long+short call, 2 expiries) → Custom/Mixed',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'CALL',  1, 100, '2026-06-20'),
+          _make_row('Equity Option', 'CALL', -1, 105, '2026-07-18'),
+      )), 'Custom/Mixed')
+
+# Stock + long call (no short leg) — not a covered structure; unclassifiable.
+check_int('ds: stock + long call (no short) → Custom/Mixed',
+      detect_strategy(_make_df(
+          _make_row('Equity',        '',    100),
+          _make_row('Equity Option', 'CALL', 1, 110),
+      )), 'Custom/Mixed')
+
+# Stock + long put (no short leg) — protective-put-like but unnamed here.
+check_int('ds: stock + long put (no short) → Custom/Mixed',
+      detect_strategy(_make_df(
+          _make_row('Equity',        '',    100),
+          _make_row('Equity Option', 'PUT', 1, 90),
+      )), 'Custom/Mixed')
+
+# Single-leg positions still classify (fallbacks fire when leg-type is alone).
+check_int('ds: two short puts alone still Short Put',
+      detect_strategy(_make_df(
+          _make_row('Equity Option', 'PUT', -1, 90),
+          _make_row('Equity Option', 'PUT', -1, 95),
+      )), 'Short Put')
 
 # ── Ratio spread detection (qty-based) ────────────────────────────────────────
 # Put Ratio Spread — 2 short puts + 1 long put (DKNG-style)
