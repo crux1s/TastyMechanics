@@ -240,11 +240,13 @@ print('\n── 5. Campaign accounting ─────────────�
 
 achr_post = df[(df['Ticker'] == 'ACHR') & df['Instrument Type'].isin(OPT_TYPES) &
                df['Type'].isin(TRADE_TYPES) & (df['Date'] >= pd.Timestamp('2025-12-19'))]['Total'].sum()
-check('ACHR campaign premiums (post-purchase only, excl assignment STO)', achr_post, 175.60)
+check('ACHR post-purchase options (raw slice, date >= entry)', achr_post, 175.60)
 
 achr_pre = df[(df['Ticker'] == 'ACHR') & df['Instrument Type'].isin(OPT_TYPES) &
               df['Type'].isin(TRADE_TYPES) & (df['Date'] < pd.Timestamp('2025-12-19'))]['Total'].sum()
-check('ACHR pre-purchase STO (outside window = 27.89)', achr_pre, 27.89)
+# Raw pre-entry STO slice = the assigning put; now folded into campaign premiums
+# (no longer in the pure_options outside-window bucket — see §12).
+check('ACHR pre-entry STO (raw slice = 27.89)', achr_pre, 27.89)
 
 sofi_post = df[(df['Ticker'] == 'SOFI') & df['Instrument Type'].isin(OPT_TYPES) &
                df['Type'].isin(TRADE_TYPES) & (df['Date'] >= pd.Timestamp('2025-12-01'))]['Total'].sum()
@@ -428,10 +430,10 @@ def _camp(ticker):
 a = _camp('ACHR')
 check('ACHR total cost (100 @ 8.55)',       a['cost'],      855.00)
 check('ACHR shares held (closed = 0)',      a['shares'],      0.0)
-check('ACHR campaign premiums (closed)',    a['premiums'],  175.60)
+check('ACHR campaign premiums (closed, incl assigning put)', a['premiums'], 203.49)
 check('ACHR dividends',                     a['divs'],        0.00)
 check('ACHR effective basis (closed = 0)', a['eff_basis'],    0.00)
-check('ACHR closed campaign P/L',          a['camp_pnl'],  -86.02)
+check('ACHR closed campaign P/L',          a['camp_pnl'],  -58.13)
 
 s = _camp('SOFI')
 check('SOFI cost basis (200 shares)',  s['cost'],     5558.08)
@@ -470,9 +472,14 @@ check_int('ACHR end_date is set',            int(ac.end_date is not None), 1)
 check('ACHR total_shares after close',       ac.total_shares,            0.0)
 check('ACHR total_cost',                     ac.total_cost,           855.00)
 check('ACHR exit_proceeds',                  ac.exit_proceeds,         593.38)
-check('ACHR premiums',                       ac.premiums,              175.60)
+check('ACHR premiums (incl folded assigning-put credit)', ac.premiums, 203.49)
 check('ACHR dividends',                      ac.dividends,               0.00)
-check('ACHR realized_pnl',                   realized_pnl(ac),          -86.02)
+check('ACHR realized_pnl',                   realized_pnl(ac),          -58.13)
+# Folded premium reconciles: post-purchase options + assigning-put credit.
+check('ACHR premiums = post-purchase (175.60) + assigning put (27.89)',
+      ac.premiums, 175.60 + 27.89)
+check_int('ACHR records the assigned put symbol',
+          len(ac.assignment_option_symbols), 1)
 check('ACHR effective_basis (closed = 0)',   effective_basis(ac),         0.00)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -484,12 +491,14 @@ def _outside(ticker):
     camps = build_campaigns(df, ticker, use_lifetime=False)
     return pure_options_pnl(df, ticker, camps)
 
-check('ACHR outside-window (Dec 12 STO)', _outside('ACHR'),  27.89)
+# ACHR's Dec-12 STO is the assigning put — its credit is now folded into the
+# campaign premiums and excluded from pure_options_pnl (so 0.00, not 27.89).
+check('ACHR outside-window (assigning put folded in → 0)', _outside('ACHR'),  0.00)
 check('SOFI outside-window (Nov 25 STO)', _outside('SOFI'), 117.88)
 check('SMR  outside-window (pre Jan 9)',  _outside('SMR'),  352.79)
 check('JOBY outside-window (none)',       _outside('JOBY'),   0.00)
-check('Total outside-window premiums',
-      sum(_outside(t) for t in ['ACHR', 'SOFI', 'SMR', 'JOBY']), 498.56)
+check('Total outside-window premiums (ACHR assigning put excluded)',
+      sum(_outside(t) for t in ['ACHR', 'SOFI', 'SMR', 'JOBY']), 470.67)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 13. WINDOWED P/L — named windows

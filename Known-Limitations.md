@@ -54,11 +54,8 @@ Since v26.20, share buys below 100 are pooled and folded into the next campaign 
 ### Long options exercised by you
 Exercising a long call or put into a share position is untested. Check the resulting position and cost basis carefully.
 
-### Assignment-entered campaign: put premium not in effective basis
-When the very first shares of a ticker arrive via put assignment (no prior outright purchase), the opening credit of that put is counted as pre-purchase options P/L — it is **not** included in campaign premiums or effective basis. The campaign card effective basis reflects only post-delivery option income. Total P/L is unaffected. Verify this matches your expectations on first occurrence of a new assignment-entered ticker.
-
 ### Rolled pre-purchase put followed by assignment: only final leg folds in
-If you rolled a put one or more times before it was ultimately assigned, each roll creates a new option symbol. Only the opening credit of the final (assigned) contract is attributable to the delivery event. Earlier roll legs remain in the pre-purchase options P/L bucket. Net P/L is correct — only effective basis display is affected. Verify on first occurrence of a multi-roll pre-purchase assignment.
+When the first shares of a ticker arrive via put assignment, the assigning put's credit is folded into the campaign premiums and reduces effective basis (v26.23 — natural wheel accounting). If you rolled that put one or more times before it was assigned, each roll created a new option symbol, and **only the opening credit of the final (assigned) contract folds in** — earlier roll legs remain in the pre-purchase (pure options) P/L bucket. Total P/L is correct either way; only the effective-basis display understates the reduction by the earlier roll legs' net credit. Verify on first occurrence of a multi-roll pre-purchase assignment.
 
 ### Pre-purchase option closed after shares are purchased
 If a put (or call) opened before you owned shares is closed on or after the day you buy shares, the closing transaction falls inside the campaign window and appears as a negative premium entry from day one of the campaign. The opening credit stays in pre-purchase P/L. Net P/L across both legs is correct. First observed: SOFI Dec 2025 (Nov 26 STO, Dec 2 BTC on same day as share purchase).

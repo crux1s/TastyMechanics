@@ -215,6 +215,16 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 
 ## Changelog
 
+**v26.24 — MTM figure on Wheel Cap Efficiency** (2026-07-27)
+- **Wheel Cap Efficiency now shows a mark-to-market companion** when the Wheel tab's 📡 Live prices toggle is on. The tile keeps the realized premium-yield % (annualised premium + dividend income on deployed capital), and a line beneath adds unrealised share P/L on top — so a position that's collected lots of premium but is underwater no longer reads as a high-efficiency winner. Red when negative, green when positive; disappears when Live is off (nothing changes without live prices).
+- Uses the same blended-basis mark as the Overview MTM pill, so the two views are consistent. Realized number and all totals are unchanged.
+
+**v26.23 — Assigning put's credit folds into the wheel campaign** (2026-07-27)
+- **Entry-via-assignment campaigns now credit the assigning put against basis.** When the first shares of a ticker arrive via put assignment, that put's premium is the first rung of the wheel — it now reduces the campaign's effective basis and shows in premiums banked, matching how wheel traders think ("basis = strike − put premium − call premiums"). Previously it sat in a separate pre-purchase bucket and only surfaced via the lifetime/House-Money toggle, making basis and "Days to Free" read worse than reality.
+- **Portfolio totals are unchanged** — the credit *moves* buckets (into campaign premiums, out of standalone options P/L), it isn't newly added, so Realized P/L, ROR, MWR, and the Portfolio-tab chart are byte-identical. The now-obsolete "put credit is in pre-purchase P/L / not in Cost Basis" card banner is removed.
+- The House-Money toggle no longer changes *whether* the assigning put counts against the position (non-lifetime and lifetime now agree) — it only toggles the equity component, as intended. Rolled-put caveat unchanged: only the final assigned contract's credit folds in.
+- New `Campaign.assignment_option_symbols` field (excluded from `pure_options_pnl` to keep the total balanced). Test suite at **446 tests**.
+
 **v26.22 — Stricter open-position strategy classification** (2026-07-22)
 - **Butterfly labels no longer misfire on covered / ratio structures.** The open-position strategy classifier (`detect_strategy`) tagged any 3-strike, 1-expiry structure with the right leg counts as a butterfly — even a covered call plus an unrelated call spread (e.g. 100 shares + long 70 / short 75 / short 90 calls, which was showing as "Short Call Butterfly"). Butterfly detection now requires an options-only position (no stock) and the long/short body leg to sit on the **middle** of the three strikes. The RKLB-style position now correctly reads as a **Covered Call Ratio Spread**.
 - **Unclassifiable positions now say "Custom/Mixed" instead of guessing.** The single-leg fallbacks (Short Put / Short Call / Long Call / Long Put / Long Stock) previously fired even when *other* unmatched legs were present, labelling a mixed position by one leg and hiding the rest. They now fire only for a homogeneous position; a genuinely unrecognised combination (a diagonal, stock plus an unmatched long option, etc.) falls through to Custom/Mixed.

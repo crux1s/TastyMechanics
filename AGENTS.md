@@ -28,7 +28,7 @@ Always run after any change:
 PYTHONIOENCODING=utf-8 python3 test_tastymechanics.py
 ```
 
-Expected: `444 tests | 444 passed | 0 failed` (32 sections, with section 0 = end-to-end smoke check)
+Expected: `446 tests | 446 passed | 0 failed` (32 sections, with section 0 = end-to-end smoke check)
 
 The `PYTHONIOENCODING=utf-8` prefix is required on Windows — omitting it causes a `charmap` codec error on the Unicode characters in test output.
 
@@ -105,7 +105,7 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 **effective_basis()** — `use_lifetime=True` returns raw `blended_basis` (no premium offset). Default returns `(total_cost - premiums - dividends) / total_shares`.
 
-**Campaign event types** — `c.events` is a list of dicts `{date, type, detail, cash}`. Known types: `'Entry'`, `'Add'`, `'Exit'`, `'Assignment Put (STO)'` (entry via put assignment — put credit excluded from cost basis, triggers amber card banner in tab3), `'Mid-campaign Assignment'` (shares added mid-campaign via put assignment — premium IS already in basis, triggers blue card banner). The Share & Dividend Events table filters out any event type containing 'assign' (case-insensitive), so assignment events are card-only. Detection in `build_campaigns()`: `_find_assignment_premium(t, row)` is called on both the entry branch and the add-to-existing branch.
+**Campaign event types** — `c.events` is a list of dicts `{date, type, detail, cash}`. Known types: `'Entry'`, `'Add'`, `'Exit'`, `'Assignment Put (STO)'` (entry via put assignment — the assigning put's credit **is folded into** `c.premiums`, so it reduces effective basis; the put's symbol is recorded in `c.assignment_option_symbols` and excluded from `pure_options_pnl` so `total_realized_pnl` stays balanced — the credit *moves* buckets, it is not newly added), `'Mid-campaign Assignment'` (shares added mid-campaign via put assignment — premium IS already in basis via the in-window STO, triggers blue card banner). The Share & Dividend Events table filters out any event type containing 'assign' (case-insensitive), so assignment events are card-only. Detection in `build_campaigns()`: `_find_assignment_premium(t, row)` returns `(premium, events, symbols)` and is called on both the entry branch (folds the credit + records symbols) and the add-to-existing branch (ignores premium/symbols — already in-window). Rolled puts: only the final assigned symbol's STO folds in; earlier roll legs stay in `pure_options_pnl`.
 
 **Strategy classifier labels** — `_classify_trade_type()` returns direction-aware butterfly labels: `'Long Call/Put Butterfly'` (buy wings, sell body) and `'Short Call/Put Butterfly'` (sell wings, buy body ×2). Iron Condor variants: `'Iron Butterfly'` (short legs share same ATM strike), `'Reverse Iron Butterfly'` (long legs share same ATM strike), `'Iron Condor'` (credit, short legs at different strikes), `'Reverse Iron Condor'` (debit). Both `_classify_trade_type()` and `_calculate_capital_risk()` now consume the same `_LegInfo` dataclass built by `_derive_leg_info(grp, opens)` — any structure-detection change (butterfly flags, jade/ratio lizard conditions, leg-quantity aggregates) must happen in `_derive_leg_info` only. Never re-derive `has_sc`/`has_sp`/`is_butterfly` inline in either consumer.
 
@@ -133,7 +133,7 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 - `ROADMAP.md` — pending work, prioritised
 - `Known-Limitations.md` — what doesn't work or is untested
-- `test_tastymechanics.py` — 444 tests, 32 sections (section 0 = compute_app_data end-to-end smoke check; gates the rest)
+- `test_tastymechanics.py` — 446 tests, 32 sections (section 0 = compute_app_data end-to-end smoke check; gates the rest)
 - `config.py` — `KNOWN_INDEXES`, `COLOURS`, `DTE_*`, `WIN_RATE_*`, `FIFO_EPSILON`
 
 ---

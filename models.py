@@ -97,6 +97,10 @@ class Campaign:
     events:                  list = field(default_factory=list)
     pre_campaign_close_net:  float = 0.0             # net cash from closes of pre-purchase options
     shares_acquired:         float = 0.0             # cumulative shares bought (split-adjusted)
+    assignment_option_symbols: list = field(default_factory=list)  # assigned put symbol(s) whose
+                                                     # credit was folded into premiums on entry —
+                                                     # excluded from pure_options_pnl to avoid
+                                                     # double-counting.
 
 
 # ── Computation output ────────────────────────────────────────────────────────

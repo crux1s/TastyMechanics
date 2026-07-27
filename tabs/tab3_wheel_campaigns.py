@@ -187,36 +187,9 @@ def render_tab3(
     else:
         st.info('No open wheel campaigns.')
 
-    # ── Capital Deployed + Cap Efficiency summary ─────────────────────────────
-    if open_camps and capital_deployed > 0:
-        _total_premiums = sum((c.premiums + c.dividends) for _, _, c in open_camps)
-        _earliest_start = min(c.start_date for _, _, c in open_camps)
-        _days_active    = max((latest_date - _earliest_start).days, 1)
-        _wheel_eff      = _total_premiums / capital_deployed / _days_active * 365 * 100
-        _cd1, _cd2      = st.columns(2)
-        _cd1.metric(
-            'Capital Deployed',
-            fmt_dollar(capital_deployed),
-            help='Cash tied up in open wheel positions (shares × blended cost basis — '
-                 'reflects all adds and assignments, not just the original entry price). '
-                 'Options margin not included.',
-        )
-        _cd2.metric(
-            'Wheel Cap Efficiency',
-            '%.1f%%' % _wheel_eff,
-            help=(
-                'Annualised premium + dividend income as a % of capital deployed in open campaigns. '
-                'Benchmark: S&P ~10%/yr. Note: options margin is excluded from the denominator — '
-                'treat as a directional indicator, not a precise risk-adjusted return.'
-            ),
-        )
-
-    # ── Closed campaigns summary table (collapsed) ────────────────────────────
-    if closed_camps:
-        with st.expander(f'📁 {len(closed_camps)} Closed Campaign{"s" if len(closed_camps) != 1 else ""}', expanded=False):
-            _render_summary(_summary_rows(closed_camps))
-
     # ── Live equity prices for campaign cards ────────────────────────────────
+    # Fetched before the Capital Deployed / Cap Efficiency block so the MTM
+    # figure there can use them; the per-campaign cards below reuse this dict.
     live_prices: dict = {}
     if wheel_live_on:
         _wheel_tickers = frozenset(
@@ -231,6 +204,58 @@ def render_tab3(
                     '📡 Prices: Yahoo Finance — near real-time during market hours. '
                     'Cached 5 min. Ticker symbols sent to Yahoo Finance servers.'
                 )
+
+    # ── Capital Deployed + Cap Efficiency summary ─────────────────────────────
+    if open_camps and capital_deployed > 0:
+        _total_premiums = sum((c.premiums + c.dividends) for _, _, c in open_camps)
+        _earliest_start = min(c.start_date for _, _, c in open_camps)
+        _days_active    = max((latest_date - _earliest_start).days, 1)
+        _wheel_eff      = _total_premiums / capital_deployed / _days_active * 365 * 100
+        # MTM variant — blend unrealised campaign equity (marked vs blended_basis,
+        # same convention as the Overview MTM pill) on top of premium yield, so an
+        # underwater book drags the number down. Only when Live prices are on.
+        _unreal_eq = 0.0
+        for _t, _, _c in open_camps:
+            if _c.total_shares > 0:
+                _lp = live_prices.get(_t, {}).get('last', 0.0)
+                if _lp > 0:
+                    _unreal_eq += (_lp - _c.blended_basis) * _c.total_shares
+        _wheel_eff_mtm = (
+            (_total_premiums + _unreal_eq) / capital_deployed / _days_active * 365 * 100
+            if live_prices else None
+        )
+        _cd1, _cd2      = st.columns(2)
+        _cd1.metric(
+            'Capital Deployed',
+            fmt_dollar(capital_deployed),
+            help='Cash tied up in open wheel positions (shares × blended cost basis — '
+                 'reflects all adds and assignments, not just the original entry price). '
+                 'Options margin not included.',
+        )
+        _cd2.metric(
+            'Wheel Cap Efficiency',
+            '%.1f%%' % _wheel_eff,
+            help=(
+                'Annualised premium + dividend income as a % of capital deployed in open campaigns. '
+                'Benchmark: S&P ~10%/yr. Note: options margin is excluded from the denominator — '
+                'treat as a directional indicator, not a precise risk-adjusted return. '
+                'With 📡 Live prices on, an MTM line adds unrealised share P/L on top of the '
+                'premium yield — so underwater positions pull it down (the realized % alone '
+                'looks best exactly when you are most underwater).'
+            ),
+        )
+        if _wheel_eff_mtm is not None:
+            _mtm_col = COLOURS['green'] if _wheel_eff_mtm >= 0 else COLOURS['red']
+            _cd2.markdown(
+                f'<div style="margin-top:-8px;font-size:0.8rem;color:{_mtm_col};">'
+                f'MTM: {_wheel_eff_mtm:.1f}% · incl. unrealised</div>',
+                unsafe_allow_html=True,
+            )
+
+    # ── Closed campaigns summary table (collapsed) ────────────────────────────
+    if closed_camps:
+        with st.expander(f'📁 {len(closed_camps)} Closed Campaign{"s" if len(closed_camps) != 1 else ""}', expanded=False):
+            _render_summary(_summary_rows(closed_camps))
 
     st.markdown('---')
 
@@ -254,19 +279,11 @@ def render_tab3(
         )
         _camp_eff_str   = '%.1f%%' % _camp_eff if _camp_eff is not None else '—'
         _camp_eff_color = COLOURS['green'] if (_camp_eff or 0) >= 10 else '#ffa421' if (_camp_eff or 0) >= 0 else COLOURS['red']
-        _asgn_events = [e for e in c.events if str(e.get('type', '')).startswith('Assignment Put')]
-        if _asgn_events:
-            _excl = sum(e.get('cash', 0) for e in _asgn_events)
-            _assignment_note = (
-                '<div style="margin-top:10px;padding:6px 10px;'
-                'background:rgba(240,165,0,0.08);border-radius:6px;'
-                'font-size:0.72em;color:#f0a500;text-align:left;">'
-                '&#9888;&#65039; Entered via put assignment \u2014 put credit '
-                '($%.2f) is in pre-purchase P/L and is not included in Cost Basis.'
-                '</div>' % abs(_excl)
-            )
-        else:
-            _assignment_note = ''
+        # Entry-via-assignment: the put credit is now folded into campaign
+        # premiums (reduces effective basis), so the old "credit is in
+        # pre-purchase P/L / not in Cost Basis" warning no longer applies. The
+        # event log still shows the "Assignment Put (STO)" and "(Assigned)" rows.
+        _assignment_note = ''
         _mid_asgn_events = [e for e in c.events if str(e.get('type', '')).startswith('Mid-campaign Assignment')]
         if _mid_asgn_events:
             _mid_dates = ', '.join(e['date'].strftime('%d/%m/%y') for e in _mid_asgn_events)

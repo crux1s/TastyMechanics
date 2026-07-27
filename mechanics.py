@@ -566,14 +566,18 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                     'cash': total})
             elif running_shares < FIFO_EPSILON:
                 just_closed = None  # new entry invalidates prior just_closed reference
-                # New campaign entry — check if arrival was via put assignment
-                assignment_premium, assignment_events = _find_assignment_premium(t, row)
+                # New campaign entry — check if arrival was via put assignment.
+                # The assigning put's credit is folded into the campaign premiums
+                # (natural wheel basis = strike − put premium); its symbol is
+                # recorded so pure_options_pnl excludes it and the portfolio total
+                # stays balanced.
+                assignment_premium, assignment_events, assignment_syms = _find_assignment_premium(t, row)
                 entry_label = 'Bought %.0f @ $%.2f/sh%s' % (
                     qty, pps, ' (Assigned)' if assignment_events else '')
                 # Fold any pre-campaign odd-lot shares into the entry.
                 # start_date stays the entry row's date so option-premium
-                # windowing and pure_options_pnl bucketing are unchanged;
-                # pool events simply carry earlier dates in the event log.
+                # windowing for later legs is unchanged; pool events simply carry
+                # earlier dates in the event log.
                 entry_shares = qty + pool_shares
                 entry_cost   = abs(total) + pool_cost
                 current = Campaign(
@@ -586,6 +590,7 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                         {'date': row.Date, 'type': 'Entry', 'detail': entry_label, 'cash': total}
                     ],
                     shares_acquired=entry_shares,
+                    assignment_option_symbols=assignment_syms,
                 )
                 running_shares = entry_shares
                 pool_shares, pool_cost, pool_events = 0.0, 0.0, []
@@ -599,7 +604,10 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 current.blended_basis = new_basis
                 current.shares_acquired += qty
                 running_shares        = new_shares
-                _, _mid_asgn = _find_assignment_premium(t, row)
+                # Mid-campaign assignment: the put STO is inside the open window
+                # and already in premiums via the option-premium branch, so the
+                # returned premium/symbols are ignored here (display event only).
+                _, _mid_asgn, _ = _find_assignment_premium(t, row)
                 if _mid_asgn:
                     current.events.append({
                         'date': row.Date, 'type': 'Mid-campaign Assignment',
@@ -683,20 +691,32 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
     return campaigns
 
 
-def _find_assignment_premium(t: pd.DataFrame, row: Any) -> tuple[float, list]:
+def _find_assignment_premium(t: pd.DataFrame, row: Any) -> tuple[float, list, list]:
     """
     Look for a put assignment at the same timestamp as a share delivery row.
-    If found, trace back to the originating STO and record it in the campaign
-    event log so the timeline shows "arrived via assignment".
+    If found, trace back to the originating STO(s) and record them in the
+    campaign event log so the timeline shows "arrived via assignment".
 
-    Returns (0.0, list_of_event_dicts).
+    Returns (premium, list_of_event_dicts, list_of_assigned_symbols) where
+    `premium` is the net credit of the assigning put(s) (Σ STO Total) and
+    `symbols` are their option symbols.
 
-    Why premium=0.0: the STO that caused assignment was traded *before* the
-    campaign start date, so pure_options_pnl() already counts it as outside-
-    window P/L. Adding it to c.premiums here would double-count it in
-    total_realized_pnl. The event is retained for display only.
+    The credit is folded into the campaign's premiums by the *entry* branch of
+    build_campaigns() so the effective basis reflects the first rung of the
+    wheel (natural wheel accounting: basis = strike − put premium − call
+    premiums).  To avoid double-counting in total_realized_pnl, pure_options_pnl
+    excludes these symbols (their STO would otherwise land in the pre-purchase /
+    outside-window bucket).  Rolled puts: only the final assigned symbol's STO is
+    captured here; earlier roll legs are different symbols and stay in
+    pure_options (documented limitation).
+
+    The mid-campaign branch ignores the returned premium/symbols — a mid-campaign
+    put STO falls inside the open window and is already in premiums via the
+    normal option-premium path, so nothing needs folding there.
     """
     events  = []
+    premium = 0.0
+    symbols: list = []
     same_dt = t[t['Date'] == row.Date]
     assigned_syms = same_dt[
         same_dt['Sub_Type'].str.lower() == SUB_ASSIGNMENT
@@ -707,12 +727,16 @@ def _find_assignment_premium(t: pd.DataFrame, row: Any) -> tuple[float, list]:
             (t['Sub_Type'].str.lower() == SUB_SELL_OPEN) &
             (t['Date'] < row.Date)
         ]
+        if sto.empty:
+            continue
+        symbols.append(sym)
         for s in sto.itertuples(index=False):
+            premium += s.Total
             events.append({
                 'date': s.Date, 'type': 'Assignment Put (STO)',
                 'detail': str(s.Description)[:60], 'cash': s.Total,
             })
-    return 0.0, events
+    return premium, events, symbols
 
 def effective_basis(c: Campaign, use_lifetime: bool = False) -> float:
     """
@@ -828,6 +852,12 @@ def pure_options_pnl(df: pd.DataFrame, ticker: str, campaigns: list[Campaign]) -
         value is needed and no edge case can arise.
     """
     t = df[(df['Ticker'] == ticker) & option_mask(df['Instrument Type'])]
+    # Exclude assigning-put symbols whose credit was folded into a campaign's
+    # premiums on entry — their STO would otherwise be counted again here (it
+    # predates the campaign start, so it lands in the outside-window bucket).
+    _assigned = {s for c in campaigns for s in c.assignment_option_symbols}
+    if _assigned:
+        t = t[~t['Symbol'].isin(_assigned)]
     dates = t['Date']
     in_any_window = pd.Series(False, index=t.index)
     for c in campaigns:
