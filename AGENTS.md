@@ -28,7 +28,7 @@ Always run after any change:
 PYTHONIOENCODING=utf-8 python3 test_tastymechanics.py
 ```
 
-Expected: `446 tests | 446 passed | 0 failed` (32 sections, with section 0 = end-to-end smoke check)
+Expected: `454 tests | 454 passed | 0 failed` (32 sections, with section 0 = end-to-end smoke check)
 
 The `PYTHONIOENCODING=utf-8` prefix is required on Windows — omitting it causes a `charmap` codec error on the Unicode characters in test output.
 
@@ -117,6 +117,8 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 **Odd-lot share pool** — `build_campaigns()` (non-lifetime path) pools share buys below `WHEEL_MIN_SHARES` while no campaign is open (`pool_shares`/`pool_cost`/`pool_events`) and folds them into the next qualifying entry — trigger is `qty + pool_shares >= WHEEL_MIN_SHARES`, so accumulation entries (60+60) start a campaign. `start_date` stays the qualifying-entry row's date so option-premium windowing and `pure_options_pnl()` bucketing are unchanged; pool events carry their real (earlier) dates in the event log. Mid-campaign adds accept any size (`qty > FIFO_EPSILON`) — an 8-share top-up blends in. Sales while only the pool is held shrink it proportionally. A pool that never reaches a campaign stays invisible (wheel = 100-lot intent). The wheel-ticker candidate filter in `compute_app_data` matches: cumulative positive equity `Net_Qty_Row` per ticker ≥ threshold, not a single 100-lot row. Partial sales inside a campaign keep the carry-full-cost convention — remaining shares carry all remaining `total_cost` (basis display rises after a below-basis partial sale; the sale's P/L settles at campaign close via `exit_proceeds`).
 
+**Roll-chain long/short (`build_option_chains`)** — display-only (feeds the Wheel-tab Option Roll Chains; no P/L). Classifies each leg by direction = (open/close) × qty sign and records **all** legs with an `is_long` flag: short open (open, qty<0) anchors the roll and its `> ROLL_CHAIN_GAP_DAYS` break; long open (open, qty>0) is a spread wing; short close (close, qty>0) is BTC/short expiry/assign; long close (close, qty<0) is STC/long expiry. Tracks `short_qty` and `long_qty` **separately** so a long-leg close no longer consumes a short slot (which used to drop the real short buyback of a 3-legged spread). The gap-break applies to any open when the position is fully flat (`short_qty==0 and long_qty==0`), so a spread's long wing stays with its shorts. `tabs/tab3_wheel_campaigns.py._render_roll_chains()` (shared by open- and closed-campaign panes) labels long wings `🔷 · long wing`, tints them via `_style_chain_row`'s `_is_long` branch, and keys open/closed + roll-count on the short leg. Earlier convention "BTO legs intentionally not recorded" is **reversed** as of v26.25.
+
 **Campaign same-timestamp close** — when a stock exit and option BTC share the exact order timestamp, `Sort_Inst=0` processes the equity row first and seals `current → None`, so naively the BTC won't see a campaign. `build_campaigns()` keeps a `just_closed` reference and routes same-timestamp closing legs into it. `pure_options_pnl()` uses an **inclusive** end boundary (`<= c.end_date`) so the same row isn't double-counted in the outside-window bucket. If you change either side, change both.
 
 **Time window** — `TIME_OPTIONS` is a module-level constant in `tastymechanics.py` (10 presets). `_render_date_picker()` is a module-level helper using `st.popover` (requires Streamlit ≥ 1.31). In `main()`, `end_date` equals `latest_date` for all presets except Custom — all window slices, `calculate_windowed_equity_pnl()`, `_daily_pnl`, and tab render calls use `end_date` as the upper bound, not `latest_date`. The old `tw_tab1/2/4/5` session state keys and the pre-sync loop no longer exist.
@@ -133,7 +135,7 @@ tastymechanics.py      Streamlit wiring — sidebar, cache, tab orchestration
 
 - `ROADMAP.md` — pending work, prioritised
 - `Known-Limitations.md` — what doesn't work or is untested
-- `test_tastymechanics.py` — 446 tests, 32 sections (section 0 = compute_app_data end-to-end smoke check; gates the rest)
+- `test_tastymechanics.py` — 454 tests, 32 sections (section 0 = compute_app_data end-to-end smoke check; gates the rest)
 - `config.py` — `KNOWN_INDEXES`, `COLOURS`, `DTE_*`, `WIN_RATE_*`, `FIFO_EPSILON`
 
 ---

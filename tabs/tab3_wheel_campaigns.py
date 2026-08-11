@@ -36,6 +36,113 @@ from mechanics import (
 from models import Campaign
 
 
+def _render_roll_chains(chains: list) -> None:
+    """Render option roll chains (one st.expander per chain) with long/short-aware
+    leg labels. Long wings (spread legs) are marked 🔷 and tinted distinctly; the
+    open/closed status and roll count key on the SHORT leg, matching
+    build_option_chains. Shared by the open- and closed-campaign detail panes."""
+    for ci, chain in enumerate(chains):
+        cp     = chain[0]['cp']
+        ch_pnl = sum(leg['total'] for leg in chain)
+        # Replay the SHORT position to determine open/closed. Direction-based
+        # (matches the engine): short opens add, short closes (qty>0) subtract;
+        # long-wing legs never affect it. Checking the last event's sub_type is
+        # wrong when an STO sorts before its paired BTC in a rapid roll.
+        _short = 0
+        _last_sto_idx = -1
+        for _i, _leg in enumerate(chain):
+            _sub = str(_leg['sub_type']).lower()
+            _q   = _leg['qty']
+            if 'to open' in _sub and _q < 0:
+                _short += abs(_q)
+                _last_sto_idx = _i
+            elif _q > 0 and (PAT_CLOSE in _sub or 'expiration' in _sub or 'assignment' in _sub):
+                _short = max(_short - abs(_q), 0)
+        is_open_chain = _short > 0
+        # A roll = a short buyback; long-wing closes don't count.
+        n_rolls = sum(1 for leg in chain
+                      if not leg.get('is_long', False)
+                      and PAT_CLOSE in str(leg['sub_type']).lower())
+        chain_label = '%s %s %s Chain %d — %d roll(s) | Net: $%.2f' % (
+            '🟢' if is_open_chain else '✅',
+            '📞' if cp == 'CALL' else '📉',
+            cp.title(), ci + 1, n_rolls, ch_pnl
+        )
+        with st.expander(chain_label, expanded=is_open_chain):
+            chain_rows = []
+            _open_dates    = {}   # (strike, exp) -> open date for days-held lookup
+            _open_pair_idx = {}   # (strike, exp) -> pair_idx so a close shares its open's colour
+            pair_idx = -1
+            for leg_i, leg in enumerate(chain):
+                sub     = str(leg['sub_type']).lower()
+                is_long = leg.get('is_long', False)
+                _key    = (leg['strike'], leg['exp'])
+                if 'to open' in sub:
+                    pair_idx += 1
+                    action = '🔷 Buy to Open · long wing' if is_long else '↪️ Sell to Open'
+                    _open_dates[_key]    = leg['date']
+                    _open_pair_idx[_key] = pair_idx
+                    dit_str  = ''
+                    row_pair = pair_idx
+                elif is_long:
+                    # Long-wing close (sell-to-close / long expiry).
+                    action   = '🔷 Sell to Close · long wing'
+                    _od      = _open_dates.pop(_key, None)
+                    dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
+                    row_pair = _open_pair_idx.pop(_key, pair_idx)
+                elif PAT_CLOSE in sub:
+                    action   = '↩️ Buy to Close'
+                    _od      = _open_dates.pop(_key, None)
+                    dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
+                    row_pair = _open_pair_idx.pop(_key, pair_idx)
+                elif PAT_EXPIR in sub:
+                    action   = '⏹️ Expired'
+                    _od      = _open_dates.pop(_key, None)
+                    dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
+                    row_pair = _open_pair_idx.pop(_key, pair_idx)
+                elif PAT_ASSIGN in sub:
+                    action   = '📋 Assigned'
+                    _od      = _open_dates.pop(_key, None)
+                    dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
+                    row_pair = _open_pair_idx.pop(_key, pair_idx)
+                else:
+                    action   = leg['sub_type']
+                    dit_str  = ''
+                    row_pair = pair_idx
+                dte_str = ''
+                if 'to open' in sub:
+                    try:
+                        exp_dt  = pd.to_datetime(leg['exp'], dayfirst=True)
+                        dte_str = '%dd' % max((exp_dt - leg['date']).days, 0)
+                    except (ValueError, TypeError):
+                        dte_str = ''
+                is_open_leg = is_open_chain and leg_i == _last_sto_idx
+                chain_rows.append({
+                    'Date':   leg['date'].strftime('%d/%m/%y'),
+                    'Action': ('🟢 ' + action) if is_open_leg else action,
+                    'Strike': '%.1f%s' % (leg['strike'], cp[0]),
+                    'Expiry': leg['exp'], 'DTE': dte_str, 'Days Held': dit_str,
+                    'Credit/Debit Rcvd': leg['total'], '_open': is_open_leg,
+                    '_pair': row_pair, '_is_long': is_long,
+                })
+            ch_df = pd.DataFrame(chain_rows)
+            ch_df = pd.concat([ch_df, pd.DataFrame([{
+                'Date': '', 'Action': '━━ Chain Total',
+                'Strike': '', 'Expiry': '', 'DTE': '', 'Days Held': '',
+                'Credit/Debit Rcvd': ch_pnl, '_open': False, '_pair': -1, '_is_long': False,
+            }])], ignore_index=True)
+            st.dataframe(
+                ch_df[['Date', 'Action', 'Strike', 'Expiry', 'DTE', 'Days Held', 'Credit/Debit Rcvd', '_open', '_pair', '_is_long']]
+                .style.apply(_style_chain_row, axis=1)
+                .format({'Credit/Debit Rcvd': lambda x: '${:.2f}'.format(x)})
+                .map(lambda v: 'color: ' + COLOURS['green'] if isinstance(v, float) and v > 0
+                    else ('color: ' + COLOURS['red'] if isinstance(v, float) and v < 0 else ''),
+                    subset=['Credit/Debit Rcvd']),
+                width='stretch', hide_index=True,
+                column_config={'_open': None, '_pair': None, '_is_long': None}
+            )
+
+
 def render_tab3(
     all_campaigns: dict[str, list[Campaign]],
     df: pd.DataFrame,
@@ -437,100 +544,11 @@ def render_tab3(
                 st.markdown('**📎 Option Roll Chains**')
                 st.caption(
                     'Calls and puts tracked as separate chains. Rolls within ~3 days stay in '
-                    'the same chain; longer gaps start a new one. Complex structures '
-                    '(PMCC, Jade Lizards, Iron Condors) are not fully decomposed — P/L is '
-                    'correct in the campaign total, but the chain view may show fragments.'
+                    'the same chain; longer gaps start a new one. Long wings of a spread are '
+                    'marked 🔷 · long wing. Complex structures (PMCC, Jade Lizards, Iron '
+                    'Condors) are not fully decomposed — P/L is correct in the campaign total.'
                 )
-                for ci, chain in enumerate(chains):
-                    cp     = chain[0]['cp']
-                    ch_pnl = sum(leg['total'] for leg in chain)
-                    # Replay net_qty to determine open/closed status. Checking only
-                    # the last event's sub_type is wrong when an STO has an earlier
-                    # timestamp than its paired BTC (rapid rolls in the same second
-                    # or same minute sort STO before BTC, leaving BTC as the final leg).
-                    _net = 0
-                    _last_sto_idx = -1
-                    for _i, _leg in enumerate(chain):
-                        _sub = str(_leg['sub_type']).lower()
-                        if 'to open' in _sub and _leg['qty'] < 0:
-                            _net += abs(_leg['qty'])
-                            _last_sto_idx = _i
-                        elif _net > 0 and (PAT_CLOSE in _sub or 'expiration' in _sub or 'assignment' in _sub):
-                            _net = max(_net - abs(_leg['qty']), 0)
-                    is_open_chain = _net > 0
-                    n_rolls       = sum(1 for leg in chain
-                                        if PAT_CLOSE in str(leg['sub_type']).lower())
-                    chain_label = '%s %s %s Chain %d — %d roll(s) | Net: $%.2f' % (
-                        '🟢' if is_open_chain else '✅',
-                        '📞' if cp == 'CALL' else '📉',
-                        cp.title(), ci + 1, n_rolls, ch_pnl
-                    )
-                    with st.expander(chain_label, expanded=is_open_chain):
-                        chain_rows = []
-                        _open_dates    = {}   # (strike, exp) -> open date for days-held lookup
-                        _open_pair_idx = {}   # (strike, exp) -> pair_idx so BTC shares its STO's colour
-                        pair_idx = -1
-                        for leg_i, leg in enumerate(chain):
-                            sub  = str(leg['sub_type']).lower()
-                            _key = (leg['strike'], leg['exp'])
-                            if 'to open' in sub:
-                                pair_idx += 1
-                                action = '↪️ Sell to Open'
-                                _open_dates[_key]    = leg['date']
-                                _open_pair_idx[_key] = pair_idx
-                                dit_str  = ''
-                                row_pair = pair_idx
-                            elif PAT_CLOSE in sub:
-                                action   = '↩️ Buy to Close'
-                                _od      = _open_dates.pop(_key, None)
-                                dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
-                                row_pair = _open_pair_idx.pop(_key, pair_idx)
-                            elif PAT_EXPIR in sub:
-                                action   = '⏹️ Expired'
-                                _od      = _open_dates.pop(_key, None)
-                                dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
-                                row_pair = _open_pair_idx.pop(_key, pair_idx)
-                            elif PAT_ASSIGN in sub:
-                                action   = '📋 Assigned'
-                                _od      = _open_dates.pop(_key, None)
-                                dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
-                                row_pair = _open_pair_idx.pop(_key, pair_idx)
-                            else:
-                                action   = leg['sub_type']
-                                dit_str  = ''
-                                row_pair = pair_idx
-                            dte_str = ''
-                            if 'to open' in sub:
-                                try:
-                                    exp_dt  = pd.to_datetime(leg['exp'], dayfirst=True)
-                                    dte_str = '%dd' % max((exp_dt - leg['date']).days, 0)
-                                except (ValueError, TypeError):
-                                    dte_str = ''
-                            is_open_leg = is_open_chain and leg_i == _last_sto_idx
-                            chain_rows.append({
-                                'Date':   leg['date'].strftime('%d/%m/%y'),
-                                'Action': ('🟢 ' + action) if is_open_leg else action,
-                                'Strike': '%.1f%s' % (leg['strike'], cp[0]),
-                                'Expiry': leg['exp'], 'DTE': dte_str, 'Days Held': dit_str,
-                                'Credit/Debit Rcvd': leg['total'], '_open': is_open_leg,
-                                '_pair': row_pair,
-                            })
-                        ch_df = pd.DataFrame(chain_rows)
-                        ch_df = pd.concat([ch_df, pd.DataFrame([{
-                            'Date': '', 'Action': '━━ Chain Total',
-                            'Strike': '', 'Expiry': '', 'DTE': '', 'Days Held': '',
-                            'Credit/Debit Rcvd': ch_pnl, '_open': False, '_pair': -1,
-                        }])], ignore_index=True)
-                        st.dataframe(
-                            ch_df[['Date', 'Action', 'Strike', 'Expiry', 'DTE', 'Days Held', 'Credit/Debit Rcvd', '_open', '_pair']]
-                            .style.apply(_style_chain_row, axis=1)
-                            .format({'Credit/Debit Rcvd': lambda x: '${:.2f}'.format(x)})
-                            .map(lambda v: 'color: #00cc96' if isinstance(v, float) and v > 0
-                                else ('color: #ef553b' if isinstance(v, float) and v < 0 else ''),
-                                subset=['Credit/Debit Rcvd']),
-                            width='stretch', hide_index=True,
-                            column_config={'_open': None, '_pair': None}
-                        )
+                _render_roll_chains(chains)
 
             st.markdown('**📋 Share & Dividend Events**')
             ev_df    = pd.DataFrame(c.events)
@@ -655,94 +673,10 @@ def render_tab3(
                         st.markdown('**📎 Option Roll Chains**')
                         st.caption(
                             'Calls and puts tracked as separate chains. Rolls within ~3 days stay in '
-                            'the same chain; longer gaps start a new one.'
+                            'the same chain; longer gaps start a new one. Long wings of a spread '
+                            'are marked 🔷 · long wing.'
                         )
-                        for ci, chain in enumerate(chains):
-                            cp     = chain[0]['cp']
-                            ch_pnl = sum(leg['total'] for leg in chain)
-                            _net = 0
-                            _last_sto_idx = -1
-                            for _i, _leg in enumerate(chain):
-                                _sub = str(_leg['sub_type']).lower()
-                                if 'to open' in _sub and _leg['qty'] < 0:
-                                    _net += abs(_leg['qty'])
-                                    _last_sto_idx = _i
-                                elif _net > 0 and (PAT_CLOSE in _sub or 'expiration' in _sub or 'assignment' in _sub):
-                                    _net = max(_net - abs(_leg['qty']), 0)
-                            is_open_chain = _net > 0
-                            n_rolls       = sum(1 for leg in chain
-                                                if PAT_CLOSE in str(leg['sub_type']).lower())
-                            chain_label = '%s %s %s Chain %d — %d roll(s) | Net: $%.2f' % (
-                                '🟢' if is_open_chain else '✅',
-                                '📞' if cp == 'CALL' else '📉',
-                                cp.title(), ci + 1, n_rolls, ch_pnl
-                            )
-                            with st.expander(chain_label, expanded=is_open_chain):
-                                chain_rows = []
-                                _open_dates    = {}
-                                _open_pair_idx = {}
-                                pair_idx = -1
-                                for leg_i, leg in enumerate(chain):
-                                    sub  = str(leg['sub_type']).lower()
-                                    _key = (leg['strike'], leg['exp'])
-                                    if 'to open' in sub:
-                                        pair_idx += 1
-                                        action = '↪️ Sell to Open'
-                                        _open_dates[_key]    = leg['date']
-                                        _open_pair_idx[_key] = pair_idx
-                                        dit_str  = ''
-                                        row_pair = pair_idx
-                                    elif PAT_CLOSE in sub:
-                                        action   = '↩️ Buy to Close'
-                                        _od      = _open_dates.pop(_key, None)
-                                        dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
-                                        row_pair = _open_pair_idx.pop(_key, pair_idx)
-                                    elif PAT_EXPIR in sub:
-                                        action   = '⏹️ Expired'
-                                        _od      = _open_dates.pop(_key, None)
-                                        dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
-                                        row_pair = _open_pair_idx.pop(_key, pair_idx)
-                                    elif PAT_ASSIGN in sub:
-                                        action   = '📋 Assigned'
-                                        _od      = _open_dates.pop(_key, None)
-                                        dit_str  = '%dd' % (leg['date'] - _od).days if _od else ''
-                                        row_pair = _open_pair_idx.pop(_key, pair_idx)
-                                    else:
-                                        action   = leg['sub_type']
-                                        dit_str  = ''
-                                        row_pair = pair_idx
-                                    dte_str = ''
-                                    if 'to open' in sub:
-                                        try:
-                                            exp_dt  = pd.to_datetime(leg['exp'], dayfirst=True)
-                                            dte_str = '%dd' % max((exp_dt - leg['date']).days, 0)
-                                        except (ValueError, TypeError):
-                                            dte_str = ''
-                                    is_open_leg = is_open_chain and leg_i == _last_sto_idx
-                                    chain_rows.append({
-                                        'Date':   leg['date'].strftime('%d/%m/%y'),
-                                        'Action': ('🟢 ' + action) if is_open_leg else action,
-                                        'Strike': '%.1f%s' % (leg['strike'], cp[0]),
-                                        'Expiry': leg['exp'], 'DTE': dte_str, 'Days Held': dit_str,
-                                        'Credit/Debit Rcvd': leg['total'], '_open': is_open_leg,
-                                        '_pair': row_pair,
-                                    })
-                                ch_df = pd.DataFrame(chain_rows)
-                                ch_df = pd.concat([ch_df, pd.DataFrame([{
-                                    'Date': '', 'Action': '━━ Chain Total',
-                                    'Strike': '', 'Expiry': '', 'DTE': '', 'Days Held': '',
-                                    'Credit/Debit Rcvd': ch_pnl, '_open': False, '_pair': -1,
-                                }])], ignore_index=True)
-                                st.dataframe(
-                                    ch_df[['Date', 'Action', 'Strike', 'Expiry', 'DTE', 'Days Held', 'Credit/Debit Rcvd', '_open', '_pair']]
-                                    .style.apply(_style_chain_row, axis=1)
-                                    .format({'Credit/Debit Rcvd': lambda x: '${:.2f}'.format(x)})
-                                    .map(lambda v: 'color: #00cc96' if isinstance(v, float) and v > 0
-                                        else ('color: #ef553b' if isinstance(v, float) and v < 0 else ''),
-                                        subset=['Credit/Debit Rcvd']),
-                                    width='stretch', hide_index=True,
-                                    column_config={'_open': None, '_pair': None}
-                                )
+                        _render_roll_chains(chains)
 
                     st.markdown('**📋 Share & Dividend Events**')
                     ev_df    = pd.DataFrame(c.events)

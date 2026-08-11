@@ -215,6 +215,10 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 
 ## Changelog
 
+**v26.25 — Option roll chains handle multi-leg spreads** (2026-08-12)
+- **The Wheel-tab roll chain now shows every leg of a spread and marks the long wings.** Previously the chain engine modeled pure short-premium rolls: it dropped long opens entirely and tracked a single net count, so a debit-spread-plus-short-call laid over a wheel (e.g. RKLB long 70 / short 75 / short 90) rendered wrong — the long leg's open was invisible, its close showed orphaned, and one of the short buybacks got dropped. Legs are now classified by direction (open/close × quantity sign) with short and long tracked separately, so nothing is dropped and long wings are labeled **🔷 · long wing** with a distinct row tint.
+- Display-only — P/L, effective basis, and campaign totals were always correct and are unchanged (all legs were already in campaign premiums). The two duplicated chain-render blocks were consolidated into one shared helper. Test suite at **454 tests** (8 new for spread chains).
+
 **v26.24 — MTM figure on Wheel Cap Efficiency** (2026-07-27)
 - **Wheel Cap Efficiency now shows a mark-to-market companion** when the Wheel tab's 📡 Live prices toggle is on. The tile keeps the realized premium-yield % (annualised premium + dividend income on deployed capital), and a line beneath adds unrealised share P/L on top — so a position that's collected lots of premium but is underwater no longer reads as a high-efficiency winner. Red when negative, green when positive; disappears when Live is off (nothing changes without live prices).
 - Uses the same blended-basis mark as the Overview MTM pill, so the two views are consistent. Realized number and all totals are unchanged.

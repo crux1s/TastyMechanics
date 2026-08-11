@@ -817,15 +817,48 @@ _mixed = _make_opts([
 _ch4 = build_option_chains(_mixed)
 check_int('Chains: PUT + CALL → 2 chains (one each)', len(_ch4), 2)
 
-# ── BTO leg in same DataFrame → not recorded in chain ───────────────────────
+# ── BTO leg IS recorded and flagged as a long wing (v26.25) ─────────────────
 _spread = _make_opts([
     {'date': '2025-01-05', 'sub': 'Sell to Open', 'qty': -1, 'total':  80},
     {'date': '2025-01-05', 'sub': 'Buy to Open',  'qty':  1, 'total': -30},
     {'date': '2025-01-19', 'sub': 'Expiration',   'qty':  1, 'total':   0},
 ])
 _ch5 = build_option_chains(_spread)
-check_int('Chains: BTO leg not recorded — chain has 2 events (STO + expiry)',
-          len(_ch5[0]), 2)
+check_int('Chains: long wing recorded — chain has 3 events (STO + BTO + expiry)',
+          len(_ch5[0]), 3)
+_ch5_bto = [e for e in _ch5[0] if 'buy to open' in str(e['sub_type']).lower()][0]
+check_int('Chains: BTO leg flagged is_long', int(_ch5_bto['is_long']), 1)
+check_int('Chains: STO leg not flagged is_long',
+          int([e for e in _ch5[0] if 'sell to open' in str(e['sub_type']).lower()][0]['is_long']), 0)
+
+# ── 3-legged spread over a wheel (RKLB 70/75/90 shape): all legs kept, longs ──
+# flagged, and no short close dropped by the old net-count bug. ──────────────
+_three_leg = _make_opts([
+    {'date': '2026-07-21', 'sub': 'Buy to Open',   'qty':  1, 'cp': 'CALL', 'strike': 70.0, 'total': -730.12},
+    {'date': '2026-07-21', 'sub': 'Sell to Open',  'qty': -1, 'cp': 'CALL', 'strike': 75.0, 'total':  539.86},
+    {'date': '2026-07-21', 'sub': 'Sell to Open',  'qty': -1, 'cp': 'CALL', 'strike': 90.0, 'total':  216.87},
+    {'date': '2026-08-11', 'sub': 'Sell to Close', 'qty': -1, 'cp': 'CALL', 'strike': 70.0, 'total': 1189.85},
+    {'date': '2026-08-11', 'sub': 'Buy to Close',  'qty':  1, 'cp': 'CALL', 'strike': 75.0, 'total': -815.12},
+    {'date': '2026-08-11', 'sub': 'Buy to Close',  'qty':  1, 'cp': 'CALL', 'strike': 90.0, 'total': -177.12},
+])
+_ch7 = build_option_chains(_three_leg)
+check_int('Chains: 3-leg spread → 1 chain', len(_ch7), 1)
+check_int('Chains: all 6 spread legs recorded', len(_ch7[0]), 6)
+# the two strike-70 legs are the long wing (open + close)
+_longs = [e for e in _ch7[0] if e['is_long']]
+check_int('Chains: 2 long-wing legs flagged', len(_longs), 2)
+check_int('Chains: long wing is the 70 strike',
+          int(all(e['strike'] == 70.0 for e in _longs)), 1)
+# regression: the short 90 buyback must NOT be dropped (old net-count bug)
+_btc90 = [e for e in _ch7[0] if e['strike'] == 90.0 and 'buy to close' in str(e['sub_type']).lower()]
+check_int('Chains: short 90 buyback present (not dropped)', len(_btc90), 1)
+# short-count replay ends flat → chain reads closed
+_sq = 0
+for _e in _ch7[0]:
+    _s = str(_e['sub_type']).lower()
+    if 'to open' in _s and _e['qty'] < 0: _sq += abs(_e['qty'])
+    elif _e['qty'] > 0 and ('to close' in _s or 'expir' in _s or 'assign' in _s): _sq = max(_sq - abs(_e['qty']), 0)
+check_int('Chains: 3-leg spread reads closed (short flat)', int(_sq == 0), 1)
 
 # ── Empty DataFrame → no chains ──────────────────────────────────────────────
 _empty = _make_opts([])

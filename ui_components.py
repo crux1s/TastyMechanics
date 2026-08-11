@@ -258,9 +258,11 @@ def _style_daily_theta(row):
     return styles
 
 def _style_chain_row(row):
-    """Highlight open leg and alternate pair tints in a roll-chain detail table."""
+    """Highlight open leg, mark long wings, and alternate pair tints in a roll-chain table."""
     if row.get('_open', False):
         return ['background-color: rgba(0,204,150,0.12); font-weight:600'] * len(row)  # COLOURS['green'] @ 12% opacity
+    if row.get('_is_long', False):
+        return ['background-color: rgba(255,165,0,0.10)'] * len(row)     # COLOURS['orange'] @ 10% — long wing
     pair = row.get('_pair', -1)
     if pair < 0:
         return [''] * len(row)

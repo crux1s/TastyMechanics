@@ -1453,8 +1453,21 @@ def compute_unrealized_pnl(
 def build_option_chains(ticker_opts: pd.DataFrame) -> list:
     """
     Groups option events into roll chains by call/put type.
-    A chain = one continuous short position, rolled multiple times.
-    Chain ends when position goes flat AND next STO is > 3 days later.
+    A chain = one continuous short position, rolled multiple times, plus any
+    long wings (spread legs) opened/closed alongside it.
+
+    Legs are classified by direction = (open/close) × qty sign, and ALL legs are
+    recorded with an 'is_long' flag so the display can mark long wings:
+
+        open,  qty < 0  → short open   (short_qty += |qty|)
+        open,  qty > 0  → long open    (long_qty  += |qty|,  is_long=True)
+        close, qty > 0  → short close  (short_qty -= |qty|)   [BTC / short expiry/assign]
+        close, qty < 0  → long close   (long_qty  -= |qty|,  is_long=True)  [STC / long expiry]
+
+    Chain-break (the > ROLL_CHAIN_GAP_DAYS split) keys on the SHORT leg going flat
+    before a new short open — long legs never trigger a break. Tracking short and
+    long separately keeps a spread's legs from mis-counting each other (a long-leg
+    close no longer consumes a short slot, so the real short close isn't dropped).
     """
     if ticker_opts.empty:
         return []
@@ -1472,40 +1485,48 @@ def build_option_chains(ticker_opts: pd.DataFrame) -> list:
         })
 
         current_chain = []
-        net_qty = 0
+        short_qty = 0
+        long_qty  = 0
         last_close_date = None
 
         for row in legs.itertuples(index=False):
             sub = str(row.Sub_Type).lower()
             qty = row.Net_Qty_Row
             exp_dt = row.Expiration_Date
+            is_open  = 'to open' in sub
+            is_close = (PAT_CLOSE in sub or 'expiration' in sub or 'assignment' in sub)
+            is_long  = (is_open and qty > 0) or (is_close and qty < 0)
             event = {
                 'date': row.Date, 'sub_type': row.Sub_Type,
                 'strike': row.Strike_Price,
                 'exp': pd.to_datetime(exp_dt).strftime('%d/%m/%y') if pd.notna(exp_dt) else '',
                 'qty': qty, 'total': row.Total, 'cp': cp_type,
-                'desc': str(row.Description)[:55],
+                'desc': str(row.Description)[:55], 'is_long': is_long,
             }
-            if 'to open' in sub and qty < 0:
-                if last_close_date is not None and net_qty == 0:
-                    if (row.Date - last_close_date).days > ROLL_CHAIN_GAP_DAYS and current_chain:
-                        chains.append(current_chain)
-                        current_chain = []
-                net_qty += abs(qty)
+            if is_open:
+                # A new open after the position went fully flat (short AND long)
+                # more than the gap ago starts a fresh chain. Applies to long and
+                # short opens alike, so a spread's long wing stays with its shorts
+                # (they share the same order) instead of being stranded.
+                if (last_close_date is not None and short_qty == 0 and long_qty == 0
+                        and current_chain
+                        and (row.Date - last_close_date).days > ROLL_CHAIN_GAP_DAYS):
+                    chains.append(current_chain)
+                    current_chain = []
+                if qty < 0:
+                    short_qty += abs(qty)   # short open — anchors the roll
+                else:
+                    long_qty += abs(qty)    # long wing (spread leg)
                 current_chain.append(event)
                 last_close_date = None
-            elif net_qty > 0 and (PAT_CLOSE in sub or 'expiration' in sub or 'assignment' in sub):
-                # Close / expiry / assignment — reduce net position and record.
-                net_qty = max(net_qty - abs(qty), 0)
+            elif is_close:
+                if qty > 0:
+                    short_qty = max(short_qty - abs(qty), 0)  # BTC / short expiry / assign
+                else:
+                    long_qty = max(long_qty - abs(qty), 0)    # STC / long-wing expiry
                 current_chain.append(event)
-                if net_qty == 0:
+                if short_qty == 0 and long_qty == 0:
                     last_close_date = row.Date
-            # BTO legs (qty > 0, 'to open' in sub) are intentionally not recorded.
-            # Roll chains model short-premium positions — the long wing of a spread
-            # is opened in the same order as the short and appears in closed_trades_df
-            # with correct P/L. Recording it here would duplicate the entry in the
-            # chain visualisation without adding information. If spread-leg detail
-            # is ever needed, add an 'is_long_wing' flag to the event dict here.
 
         if current_chain:
             chains.append(current_chain)
