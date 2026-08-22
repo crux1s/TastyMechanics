@@ -31,7 +31,7 @@ from ingestion import equity_mask, option_mask
 from market_data import fetch_live_prices
 from mechanics import (
     _iter_fifo_sells, build_option_chains,
-    effective_basis, realized_pnl, calc_dte,
+    effective_basis, remaining_lot_basis, campaign_net_mtm, realized_pnl, calc_dte,
 )
 from models import Campaign
 
@@ -154,7 +154,8 @@ def render_tab3(
     """Tab 3 — Wheel Campaigns: summary table, per-campaign cards, roll chains, waterfall."""
     # Read toggle state early — required for data computation and the CSV export button.
     # Session state already holds the user's last toggle interaction before any widget renders.
-    use_lifetime = st.session_state.get('use_lifetime', False)
+    use_lifetime  = st.session_state.get('use_lifetime', False)
+    wheel_live_on = st.session_state.get('wheel_live_prices', False)
 
     # ── Split into open / closed ──────────────────────────────────────────────
     # Computed here (before the header) so the CSV export button can reference
@@ -163,6 +164,30 @@ def render_tab3(
                     for i, c in enumerate(cs) if c.status == 'open'] if all_campaigns else []
     closed_camps = [(t, i, c) for t, cs in sorted(all_campaigns.items())
                     for i, c in enumerate(cs) if c.status == 'closed'] if all_campaigns else []
+
+    # ── Live equity prices (fetched up-front) ─────────────────────────────────
+    # Pulled here — before the summary table — so the table's Net (MTM) column,
+    # the Capital Deployed / Cap Efficiency block, and the per-campaign cards all
+    # share one fetch. Toggle state comes from session_state (the widget itself
+    # renders in the header below; its key persists the choice across reruns).
+    live_prices: dict = {}
+    _live_caption     = False
+    if wheel_live_on:
+        _wheel_tickers = frozenset(
+            ticker for ticker, _, c in open_camps if c.total_shares > 0
+        )
+        if _wheel_tickers:
+            with st.spinner('Fetching live prices…'):
+                _raw = fetch_live_prices(_wheel_tickers, frozenset())
+            if _raw and any(v['last'] > 0 for v in _raw.values()):
+                live_prices   = {t: d for t, d in _raw.items()}
+                _live_caption = True
+
+    def _campaign_net_mtm(c):
+        """Thin wrapper over mechanics.campaign_net_mtm — looks up this campaign's
+        live price from the fetched dict and delegates the (unit-tested) math."""
+        last = live_prices.get(c.ticker, {}).get('last', 0.0)
+        return campaign_net_mtm(c, last, use_lifetime)
 
     # ── Data helpers ──────────────────────────────────────────────────────────
 
@@ -174,7 +199,7 @@ def render_tab3(
                 avg_price = (c.total_cost + c.premiums + c.dividends) / c.total_shares
                 effb      = c.blended_basis
             else:
-                avg_price = c.blended_basis
+                avg_price = remaining_lot_basis(c)
                 effb      = effective_basis(c)
             dur  = (c.end_date or latest_date) - c.start_date
 
@@ -184,7 +209,8 @@ def render_tab3(
                 'Qty': int(c.total_shares), 'Avg Price': avg_price,
                 'Cost Basis': effb, 'Premiums': c.premiums,
                 'Divs': c.dividends, 'Exit': c.exit_proceeds,
-                'P/L': rpnl, 'Days': dur.days,
+                'P/L': rpnl, 'Net (MTM)': _campaign_net_mtm(c),
+                'Days': dur.days,
                 'Entry': c.start_date.strftime('%d/%m/%y'),
                 # NOTE: 'Time to B/E' column removed — it was hardcoded to '—'
                 # here because the summary table renders before live_prices is
@@ -234,11 +260,26 @@ def render_tab3(
         def _fmt_exit(row):
             return '—' if 'Open' in str(row['Status']) else fmt_dollar(row['Exit'])
         df['Exit'] = df.apply(_fmt_exit, axis=1)
-        st.dataframe(df.style.format({
+        # Net (MTM) = campaign P/L if closed at the live price. Only meaningful
+        # with the Live toggle on, so drop the column entirely when every value
+        # is None (Live off, or no open share positions) rather than show a
+        # column of dashes.
+        _colour_cols = ['P/L']
+        _fmt = {
             _basis_cols[0]: fmt_dollar, _basis_cols[1]: fmt_dollar,
-            'Premiums': fmt_dollar, 'Divs': fmt_dollar,
-            'P/L': fmt_dollar,
-        }).map(color_pnl_cell, subset=['P/L']), width='stretch', hide_index=True)
+            'Premiums': fmt_dollar, 'Divs': fmt_dollar, 'P/L': fmt_dollar,
+        }
+        if 'Net (MTM)' in df.columns:
+            if df['Net (MTM)'].notna().any():
+                _fmt['Net (MTM)'] = lambda v: (
+                    fmt_dollar(v) if isinstance(v, (int, float)) and pd.notna(v) else '—')
+                _colour_cols.append('Net (MTM)')
+            else:
+                df = df.drop(columns=['Net (MTM)'])
+        st.dataframe(
+            df.style.format(_fmt).map(color_pnl_cell, subset=_colour_cols),
+            width='stretch', hide_index=True,
+        )
 
     # Pre-compute open rows once — reused by both the export button and the table.
     _open_rows = _summary_rows(open_camps) if open_camps else []
@@ -291,26 +332,14 @@ def render_tab3(
     # ── Open campaigns summary table ──────────────────────────────────────────
     if _open_rows:
         _render_summary(_open_rows)
+        if _live_caption:
+            st.caption(
+                '📡 Net (MTM) = P/L if closed at the live price now — it folds the '
+                'deferred call-away loss and the mark on held shares back into the '
+                'premiums-only Realized P/L. Prices: Yahoo Finance, cached 5 min.'
+            )
     else:
         st.info('No open wheel campaigns.')
-
-    # ── Live equity prices for campaign cards ────────────────────────────────
-    # Fetched before the Capital Deployed / Cap Efficiency block so the MTM
-    # figure there can use them; the per-campaign cards below reuse this dict.
-    live_prices: dict = {}
-    if wheel_live_on:
-        _wheel_tickers = frozenset(
-            ticker for ticker, _, c in open_camps if c.total_shares > 0
-        )
-        if _wheel_tickers:
-            with st.spinner('Fetching live prices…'):
-                _raw = fetch_live_prices(_wheel_tickers, frozenset())
-            if _raw and any(v['last'] > 0 for v in _raw.values()):
-                live_prices = {t: d for t, d in _raw.items()}
-                st.caption(
-                    '📡 Prices: Yahoo Finance — near real-time during market hours. '
-                    'Cached 5 min. Ticker symbols sent to Yahoo Finance servers.'
-                )
 
     # ── Capital Deployed + Cap Efficiency summary ─────────────────────────────
     if open_camps and capital_deployed > 0:
@@ -373,10 +402,27 @@ def render_tab3(
             _entry_basis_card = (c.total_cost + c.premiums + c.dividends) / c.total_shares
             effb = c.blended_basis
         else:
-            _entry_basis_card = c.blended_basis
+            _entry_basis_card = remaining_lot_basis(c)
             effb = effective_basis(c)
         is_open         = True
         pnl_color       = COLOURS['green'] if rpnl >= 0 else COLOURS['red']
+        # Last chip: with Live on, show Net (MTM) — the true result if closed at
+        # market, which folds the deferred call-away loss and the held-share mark
+        # back into the premiums-only Realized P/L. Without Live, fall back to the
+        # Realized P/L (premiums banked) as before. The PREMIUMS chip alongside it
+        # always shows the banked income, so the two together read as
+        # "premiums banked" + "net if closed".
+        _net_mtm = _campaign_net_mtm(c)
+        if _net_mtm is not None:
+            _pnl_label = 'NET (MTM)'
+            _pnl_val   = _net_mtm
+            _pnl_color = COLOURS['green'] if _net_mtm >= 0 else COLOURS['red']
+            _pnl_sub   = '<div style="font-size:0.7em;color:#888;">if closed at live</div>'
+        else:
+            _pnl_label = 'REALIZED P/L'
+            _pnl_val   = rpnl
+            _pnl_color = pnl_color
+            _pnl_sub   = ''
         basis_reduction = _entry_basis_card - effb
         _camp_deployed  = c.total_shares * c.blended_basis
         _camp_days      = max((latest_date - c.start_date).days, 1)
@@ -502,13 +548,13 @@ def render_tab3(
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">TIME TO B/E</div>'
             '<div style="font-size:1.0em;font-weight:600;">{free_in}</div>'
             '<div style="font-size:0.7em;color:#888;">vs live price</div></div>'
-            '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">PREMIUMS</div>'
-            '<div style="font-size:1.0em;font-weight:600;">${premiums:.2f}</div></div>'
+            '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">PREMIUMS BANKED</div>'
+            '<div style="font-size:1.0em;font-weight:600;color:{prem_color};">${premiums:.2f}</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">CAP EFF (ann)</div>'
             '<div style="font-size:1.0em;font-weight:600;color:{camp_eff_color};">{camp_eff}</div>'
             '<div style="font-size:0.7em;color:#888;">vs S&P ~10%</div></div>'
-            '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">REALIZED P/L</div>'
-            '<div style="font-size:1.1em;font-weight:700;color:{pnl_color};">${pnl:+.2f}</div></div>'
+            '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">{pnl_label}</div>'
+            '<div style="font-size:1.1em;font-weight:700;color:{pnl_color};">${pnl:+.2f}</div>{pnl_sub}</div>'
             '</div>{live_strip}{assignment_note}{mid_asgn_note}{pre_camp_note}</div>'
         ).format(
             border=COLOURS['green'] if is_open else '#444',
@@ -521,7 +567,8 @@ def render_tab3(
             entry_basis=_entry_basis_card, eff_basis=effb,
             reduction=basis_reduction if basis_reduction > 0 else 0,
             free_in=_time_to_be,
-            premiums=c.premiums, pnl=rpnl, pnl_color=pnl_color,
+            premiums=c.premiums, prem_color=COLOURS['green'] if c.premiums >= 0 else COLOURS['red'],
+            pnl_label=_pnl_label, pnl=_pnl_val, pnl_color=_pnl_color, pnl_sub=_pnl_sub,
             camp_eff=_camp_eff_str, camp_eff_color=_camp_eff_color,
             live_strip=live_strip,
             assignment_note=_assignment_note,

@@ -83,6 +83,19 @@ class Campaign:
                    campaign close (blended_basis is zeroed when shares hit 0).
                    Used as the covered-call capital base in
                    _calculate_capital_risk.
+    remaining_lot_cost  FIFO cost of the shares STILL HELD — display only.
+                   blended_basis / total_cost use the carry-full-cost convention
+                   (a partial sale leaves ALL remaining cost on the held shares,
+                   deferring the sale's equity P/L to campaign close). That is
+                   correct for P/L, MTM and the portfolio reconcile, but inflates
+                   the per-share basis SHOWN after a below-basis partial sale
+                   (e.g. a covered-call call-away). remaining_lot_cost is the
+                   honest cost of what's actually held (oldest lots consumed
+                   first, FIFO), so the Wheel-tab card and effective_basis() can
+                   display a realistic basis WITHOUT disturbing the carry-full
+                   P/L fields. Equals total_cost when no partial sale has
+                   occurred (FIFO queue still holds every lot). None on the
+                   lifetime path (which has its own accounting).
     """
     ticker:                  str
     total_shares:            float
@@ -101,6 +114,7 @@ class Campaign:
                                                      # credit was folded into premiums on entry —
                                                      # excluded from pure_options_pnl to avoid
                                                      # double-counting.
+    remaining_lot_cost:      Optional[float] = None  # FIFO cost of shares still held (display only)
 
 
 # ── Computation output ────────────────────────────────────────────────────────

@@ -74,10 +74,12 @@ https://tastymechanics-76dxruw38qjhqc2bdxgfrc.streamlit.app/
 
 **Wheel Campaigns tab**
 - Per-ticker campaign cards: entry basis, effective basis, premiums banked, realised P/L, live price strip
+- Held-share basis stays honest after a call-away — a below-basis partial exit shows the FIFO cost of the shares you still hold, not the sold lot's cost carried forward (display only; P/L unchanged)
+- **Net (MTM)** — summary-table column and card chip showing each open campaign's P/L if closed at the live price, so a premium-green but underwater wheel reads true (📡 Live only)
 - **"Days to Free"** — projected days until effective cost basis reaches $0 at current premium/dividend rate
 - Pre-purchase option attribution note when pre-campaign closing debits affect the premium total
 - Option roll chain visualisation — calls and puts tracked as separate chains
-- Share and dividend event log per campaign
+- Share and dividend event log per campaign — call-aways are labelled with the assigned strike
 - Lifetime "House Money" mode toggle (in-tab, right of heading)
 
 **Portfolio Realized P/L tab**
@@ -214,6 +216,12 @@ See the [Architecture wiki page](https://github.com/crux1s/TastyMechanics/wiki/A
 ---
 
 ## Changelog
+
+**v26.26 — Honest held-share basis after a call-away, and a Net (MTM) view** (2026-08-23)
+- **A below-basis call-away no longer inflates the displayed cost basis.** With the carry-full-cost convention, a partial exit inside an open wheel left the *sold* lot's cost riding on the shares you still hold — so after 100 of 200 SOFI shares were called away at $18, the campaign's cost basis read **$47.88** when the 100 shares actually held cost ~$26. The Wheel card + summary table, the Open-Positions basis strip, the HTML report, and the AI snapshot now show the FIFO cost of the shares **still held** (**$26.05** gross / **$18.35** after premiums). `blended_basis` / `total_cost` stay carry-full internally, so P/L, mark-to-market, capital, and the Overview↔chart reconcile are byte-identical — this is a display fix only. New `Campaign.remaining_lot_cost` field and `remaining_lot_basis()` helper.
+- **Called-away shares are now labelled.** A share sale whose timestamp matches a CALL assignment reads **"Sold 100 @ $17.95/sh (Called away — $18 Call)"** in the Share & Dividend Events log, instead of a bare "Sold" line that didn't read as an assignment. Put assignments (share *buys*) never match, so entries are unaffected.
+- **New Net (MTM) column and split P/L chip** on the Wheel tab (📡 Live prices only). An open campaign's green premiums-only "Realized P/L" hides that it can be net underwater once the deferred call-away loss and the mark on held shares are folded in. A **Net (MTM)** column in the summary table, plus a card chip that splits into **Premiums Banked** and **Net (MTM)** ("if closed at live"), surface the true result — SOFI reads **+$769.65** banked but **−$1,102** net at $18.91. New pure `campaign_net_mtm()` helper. Both are display-only and appear only with Live on; nothing changes when it's off.
+- Test suite at **477 tests** (23 new: remaining-lot basis, call-away labelling, the Net (MTM) guards, and an end-to-end Overview↔chart reconcile guard).
 
 **v26.25 — Option roll chains handle multi-leg spreads** (2026-08-12)
 - **The Wheel-tab roll chain now shows every leg of a spread and marks the long wings.** Previously the chain engine modeled pure short-premium rolls: it dropped long opens entirely and tracked a single net count, so a debit-spread-plus-short-call laid over a wheel (e.g. RKLB long 70 / short 75 / short 90) rendered wrong — the long leg's open was invisible, its close showed orphaned, and one of the short buybacks got dropped. Legs are now classified by direction (open/close × quantity sign) with short and long tracked separately, so nothing is dropped and long wings are labeled **🔷 · long wing** with a distinct row tint.

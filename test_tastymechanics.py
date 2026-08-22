@@ -48,11 +48,14 @@ print(f"Script folder: {_HERE}\n")
 # All math functions now live in pure-Python modules — no Streamlit stub needed.
 from ingestion import parse_csv, equity_mask, option_mask
 from config    import OPT_TYPES, TRADE_TYPES, INCOME_SUB_TYPES, KNOWN_INDEXES
+from models     import ParsedData
 from mechanics import (
     _iter_fifo_sells,
     build_campaigns,
     pure_options_pnl,
     effective_basis,
+    remaining_lot_basis,
+    campaign_net_mtm,
     realized_pnl,
     compute_app_data,
     build_option_chains,
@@ -2099,17 +2102,24 @@ check_int('Smoke: mwr_realized None or in (-1,10)',
 # ══════════════════════════════════════════════════════════════════════════════
 print('\n── 30. Odd-lot share pool: pre-campaign buys fold into entry ─────────────')
 
-def _mk_share_row(ts, qty, total, sub_type=None):
-    """Minimal equity row for build_campaigns synthetic tests."""
+def _mk_share_row(ts, qty, total, sub_type=None, ticker='ODDL'):
+    """Minimal equity row for build_campaigns synthetic tests.
+
+    `ticker` defaults to 'ODDL' so existing single-ticker cases are unchanged;
+    pass it to build a multi-ticker book (e.g. the compute_app_data reconcile in
+    section 31e). RootSymbol mirrors the ticker so compute_app_data's open-position
+    groupby (which keys on 'Root Symbol') has the column it needs.
+    """
     if sub_type is None:
         sub_type = 'Buy to Open' if qty > 0 else 'Sell to Close'
     return dict(Date=pd.Timestamp(ts), Type='Trade',
                 Action='BUY_TO_OPEN' if qty > 0 else 'SELL_TO_CLOSE',
-                Symbol='ODDL', Ticker='ODDL', InstrumentType='Equity',
-                Description='%s %.0f ODDL' % ('Bought' if qty > 0 else 'Sold', abs(qty)),
+                Symbol=ticker, Ticker=ticker, InstrumentType='Equity',
+                Description='%s %.0f %s' % ('Bought' if qty > 0 else 'Sold', abs(qty), ticker),
                 SubType=sub_type, Net_Qty_Row=float(qty), Quantity=float(abs(qty)),
                 Value=float(total), Total=float(total), Order_No=1,
-                CallOrPut=None, StrikePrice=None, ExpirationDate=None)
+                CallOrPut=None, StrikePrice=None, ExpirationDate=None,
+                RootSymbol=ticker)
 
 def _mk_share_df(rows):
     out = pd.DataFrame(rows)
@@ -2117,6 +2127,7 @@ def _mk_share_df(rows):
         'InstrumentType': 'Instrument Type', 'SubType': 'Sub Type',
         'Order_No': 'Order #', 'CallOrPut': 'Call or Put',
         'StrikePrice': 'Strike Price', 'ExpirationDate': 'Expiration Date',
+        'RootSymbol': 'Root Symbol',
     })
 
 # ── (a) Odd-lot buys before entry fold in (the RKLB shape: 3+2, +100, −13) ────
@@ -2241,6 +2252,154 @@ _hold_df = _mk_share_df([
 ])
 check('OpenEq: open campaign, no sale → 0',
       open_campaign_equity(_hold_df, {'ODDL': build_campaigns(_hold_df, 'ODDL', use_lifetime=False)}), 0.0)
+
+# ── (e) END-TO-END GUARD: fully-assembled headline == full-portfolio chart ─────
+# Cases (a)-(d) exercise open_campaign_equity() in isolation on a single ticker.
+# This case runs a *mixed* book through compute_app_data() and reproduces main()'s
+# total_realized_pnl assembly (mechanics.py compute_app_data + tastymechanics.py
+# ~:567-592), then asserts it equals the full-portfolio Realized-P/L chart total
+# (calculate_daily_realized_pnl). It guards the whole reconcile chain, not just the
+# one term — and specifically covers a NON-wheel odd-lot equity round-trip, whose
+# P/L reaches the headline via the pure_options_tickers eq_fifo_pnl branch (NOT via
+# open_campaign_equity, which only loops wheel tickers). A regression that dropped
+# either the open-campaign deferral OR the non-wheel equity term would break here
+# while cases (a)-(d) stayed green.
+_recon_df = _mk_share_df([
+    # Wheel ticker WHEE — open campaign with a partial sale (deferred equity)
+    _mk_share_row('2026-01-05',  100, -9500.0, ticker='WHEE'),
+    _mk_share_row('2026-02-10',  -13,  1200.0, ticker='WHEE'),  # partial, stays open
+    # Non-wheel odd-lot ROUND TRIP (50 shares) — never a wheel; +400 realized
+    _mk_share_row('2026-03-01',   50, -2500.0, ticker='ODD'),
+    _mk_share_row('2026-03-15',  -50,  2900.0, ticker='ODD'),
+])
+_recon_parsed = ParsedData(df=_recon_df, split_events=[], zero_cost_rows=[])
+_recon_app    = compute_app_data(_recon_parsed, use_lifetime=False)
+check_int('OpenEq(e): WHEE is the only wheel ticker',
+          _recon_app.wheel_tickers == ['WHEE'], True)
+check_int('OpenEq(e): ODD routed to pure-options (non-wheel) tickers',
+          'ODD' in _recon_app.pure_options_tickers, True)
+
+# Reproduce main()'s headline assembly verbatim.
+_recon_headline = (_recon_app.closed_camp_pnl + _recon_app.open_premiums_banked
+                   + _recon_app.pure_opts_pnl)
+_recon_income   = _recon_df[_recon_df['Sub Type'].isin(INCOME_SUB_TYPES)]['Total'].sum()
+_recon_wheeldiv = sum(c.dividends for cs in _recon_app.all_campaigns.values() for c in cs)
+_recon_headline += _recon_income - _recon_wheeldiv
+_recon_headline += open_campaign_equity(_recon_df, _recon_app.all_campaigns)
+
+_recon_chart = calculate_daily_realized_pnl(
+    _recon_df, _recon_df['Date'].min())['PnL'].sum()
+
+check('OpenEq(e): non-wheel odd-lot equity reaches the headline',
+      _recon_app.pure_opts_pnl, 400.0)
+check('OpenEq(e): assembled headline == full-portfolio chart',
+      _recon_headline, _recon_chart)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 32. REMAINING-LOT BASIS (display) + CALL-AWAY LABELLING
+#
+# After a partial sale inside an OPEN campaign, blended_basis/total_cost keep the
+# carry-full-cost convention (sold lot's cost stays on the held shares, deferring
+# its P/L to close) — correct for P/L/MTM but it inflates the *displayed* basis.
+# remaining_lot_basis()/effective_basis() instead reflect the FIFO cost of shares
+# STILL HELD, so the card shows an honest number without touching the P/L fields.
+# A covered-call call-away (CALL assignment sharing the sale timestamp) also gets
+# labelled in the Exit event. Real-world shape: SOFI (100 @ ~$30 + 100 assigned
+# @ ~$26, then 100 called away @ $18 — 100 still held).
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n── 32. Remaining-lot basis (display) + call-away labelling ───────────────')
+
+def _mk_opt_assign_row(ts, ticker, cp, strike):
+    """Minimal option-assignment row (Receive Deliver / Assignment) for testing
+    call-away detection. Net_Qty_Row=0 like a real assignment removal row."""
+    return dict(Date=pd.Timestamp(ts), Type='Receive Deliver',
+                Action=None, Symbol=ticker + ' OPT', Ticker=ticker,
+                InstrumentType='Equity Option',
+                Description='Removal of option due to assignment',
+                SubType='Assignment', Net_Qty_Row=0.0, Quantity=1.0,
+                Value=0.0, Total=0.0, Order_No=1,
+                CallOrPut=cp, StrikePrice=float(strike), ExpirationDate=None,
+                RootSymbol=ticker)
+
+# ── (a) Call-away: two lots, oldest called away, honest basis on the remainder ─
+_ca_df = _mk_share_df([
+    _mk_share_row('2026-01-05', 100, -3000.0, ticker='RLOT'),           # lot 1 @ $30
+    _mk_share_row('2026-02-05', 100, -2600.0, ticker='RLOT'),           # lot 2 @ $26
+    _mk_share_row('2026-06-01', -100, 1800.0, ticker='RLOT',            # called away @ $18
+                  sub_type='Sell to Close'),
+    _mk_opt_assign_row('2026-06-01', 'RLOT', 'CALL', 18),               # same-ts CALL assignment
+])
+_ca = build_campaigns(_ca_df, 'RLOT', use_lifetime=False)[0]
+check_int('RemLot: campaign still open (100 held)', _ca.status == 'open', True)
+check('RemLot: total_cost stays carry-full',        _ca.total_cost,    5600.0)
+check('RemLot: blended_basis stays carry-full',     _ca.blended_basis, 56.0)
+check('RemLot: remaining_lot_cost = held lot only', _ca.remaining_lot_cost, 2600.0)
+check('RemLot: remaining_lot_basis = FIFO remainder', remaining_lot_basis(_ca), 26.0)
+check('RemLot: effective_basis uses remaining lot', effective_basis(_ca), 26.0)
+_ca_exit = [e for e in _ca.events if e['type'] == 'Exit'][0]
+check_int('RemLot: call-away exit is labelled',
+          'Called away' in _ca_exit['detail'] and '$18 Call' in _ca_exit['detail'], True)
+
+# ── (b) Plain partial sale (no assignment) → not labelled a call-away ─────────
+_ps_df = _mk_share_df([
+    _mk_share_row('2026-01-05', 100, -3000.0, ticker='PLN'),
+    _mk_share_row('2026-02-05', 100, -2600.0, ticker='PLN'),
+    _mk_share_row('2026-06-01', -100, 1800.0, ticker='PLN'),
+])
+_ps = build_campaigns(_ps_df, 'PLN', use_lifetime=False)[0]
+_ps_exit = [e for e in _ps.events if e['type'] == 'Exit'][0]
+check_int('RemLot: discretionary sale not labelled call-away',
+          'Called away' in _ps_exit['detail'], False)
+check('RemLot: discretionary sale still honest basis',
+      remaining_lot_basis(_ps), 26.0)
+
+# ── (c) No partial sale → remaining_lot_basis equals blended_basis ────────────
+_nb = build_campaigns(_mk_share_df([
+    _mk_share_row('2026-01-05', 100, -3000.0, ticker='HOLD'),
+]), 'HOLD', use_lifetime=False)[0]
+check('RemLot: no-sale remaining_lot_basis == blended_basis',
+      remaining_lot_basis(_nb), _nb.blended_basis)
+check('RemLot: no-sale remaining_lot_cost == total_cost',
+      _nb.remaining_lot_cost, _nb.total_cost)
+
+# ── (d) effective_basis nets premiums against the REMAINING lot cost ──────────
+# Synthetic: 2 lots ($30, $26), oldest called away, plus $150 of net premium.
+# Held lot cost $2600, premium $150 → effective = (2600-150)/100 = $24.50.
+_eb_df = _mk_share_df([
+    _mk_share_row('2026-01-05', 100, -3000.0, ticker='EBAS'),
+    _mk_share_row('2026-02-05', 100, -2600.0, ticker='EBAS'),
+    _mk_share_row('2026-06-01', -100, 1800.0, ticker='EBAS', sub_type='Sell to Close'),
+    _mk_opt_assign_row('2026-06-01', 'EBAS', 'CALL', 18),
+])
+_eb = build_campaigns(_eb_df, 'EBAS', use_lifetime=False)[0]
+_eb.premiums = 150.0   # inject net premium (no option-trade rows in this synthetic df)
+check('RemLot: effective_basis nets premium off held lot only',
+      effective_basis(_eb), (2600.0 - 150.0) / 100.0)
+
+# ── (e) Real-data invariant: no partial sale → remaining basis == blended ─────
+# The fixture's SOFI has both buys but no call-away, so the FIFO queue holds all
+# 200 shares and the display basis must equal the carry-full basis exactly.
+_sofi_fix = build_campaigns(df, 'SOFI', use_lifetime=False)[0]
+if _sofi_fix.remaining_lot_cost is not None and _sofi_fix.exit_proceeds == 0.0:
+    check('RemLot: fixture SOFI (no sale) remaining == blended',
+          remaining_lot_basis(_sofi_fix), _sofi_fix.blended_basis)
+
+# ── (f) campaign_net_mtm: P/L if the OPEN campaign were closed at a live price ─
+# Reuses _ca (RLOT: 2 lots @ $30/$26, 100 called away @ $18, 100 still held).
+# Non-lifetime marks against carry-full total_cost ($5,600), so the deferred
+# call-away loss is included: exit(1800) + prem(0) + div(0) − cost(5600) + px×100.
+check('NetMTM: gain when live price is high',
+      campaign_net_mtm(_ca, 40.0), 1800.0 - 5600.0 + 4000.0)          # +200
+check('NetMTM: underwater at the held-lot price',
+      campaign_net_mtm(_ca, 26.0), 1800.0 - 5600.0 + 2600.0)          # −1200
+# Lifetime branch marks held shares vs the (already-netted) total_cost only.
+check('NetMTM: lifetime marks held shares vs net cost',
+      campaign_net_mtm(_ca, 40.0, use_lifetime=True), 40.0 * 100 - _ca.total_cost)
+check_int('NetMTM: no live price → None',    campaign_net_mtm(_ca, 0.0)  is None, True)
+check_int('NetMTM: negative price → None',   campaign_net_mtm(_ca, -5.0) is None, True)
+check_int('NetMTM: closed campaign → None',
+          campaign_net_mtm(_closed_camps[0], 50.0) is None, True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

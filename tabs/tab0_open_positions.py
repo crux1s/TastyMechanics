@@ -16,7 +16,7 @@ from ui_components import (
     _dte_chip, render_position_card,
 )
 from ingestion import equity_mask, option_mask
-from mechanics import calc_dte, effective_basis
+from mechanics import calc_dte, effective_basis, remaining_lot_basis
 from market_data import fetch_live_prices
 from position_snapshot import build_position_snapshot
 
@@ -198,7 +198,7 @@ def render_tab0(
                 _c_entry = (_camp.total_cost + _camp.premiums + _camp.dividends) / _camp.total_shares
                 _c_effb  = _camp.blended_basis
             else:
-                _c_entry = _camp.blended_basis
+                _c_entry = remaining_lot_basis(_camp)
                 _c_effb  = effective_basis(_camp)
             _c_reduc = _c_entry - _c_effb
             _c_prems = _camp.premiums + _camp.dividends
