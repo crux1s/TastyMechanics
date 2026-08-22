@@ -506,6 +506,15 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
     pool_shares:  float              = 0.0
     pool_cost:    float              = 0.0
     pool_events:  list               = []
+    # FIFO lot queue for the CURRENT open campaign — display only. Mirrors the
+    # share buys/sells with per-lot cost so we can report the honest cost of the
+    # shares STILL HELD (see Campaign.remaining_lot_cost). Does NOT touch
+    # total_cost / blended_basis, which stay carry-full for P/L and MTM.
+    lot_queue:    deque              = deque()   # (qty, cost_per_share), oldest first
+
+    def _sync_remaining(camp: Optional[Campaign]) -> None:
+        if camp is not None:
+            camp.remaining_lot_cost = sum(q * cpps for q, cpps in lot_queue)
 
     for row in t.itertuples(index=False):
         inst     = str(row.Instrument_Type)
@@ -545,6 +554,11 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 # Rescale cumulative acquisitions too so total_cost /
                 # shares_acquired stays the correct per-share basis post-split.
                 current.shares_acquired *= ratio
+                # Rescale FIFO lot quantities by the split ratio (cost per share
+                # divides by the same ratio, so remaining_lot_cost is invariant —
+                # the same cash now spans more shares).
+                lot_queue = deque((q * ratio, cpps / ratio) for q, cpps in lot_queue)
+                _sync_remaining(current)
                 current.events.append({
                     'date':   row.Date,
                     'type':   'Stock Split',
@@ -593,6 +607,13 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                     assignment_option_symbols=assignment_syms,
                 )
                 running_shares = entry_shares
+                # Seed the FIFO lot queue: pooled odd-lot shares are the oldest
+                # (bought before this entry), so they go first, then this buy.
+                lot_queue = deque()
+                if pool_shares > FIFO_EPSILON:
+                    lot_queue.append((pool_shares, pool_cost / pool_shares))
+                lot_queue.append((qty, pps))
+                _sync_remaining(current)
                 pool_shares, pool_cost, pool_events = 0.0, 0.0, []
             else:
                 # Adding to an existing position — recalculate blended basis
@@ -618,6 +639,8 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                     'detail': 'Added %.0f @ $%.2f → blended $%.2f/sh%s' % (
                         qty, pps, new_basis, ' (Assigned)' if _mid_asgn else ''),
                     'cash': total})
+                lot_queue.append((qty, pps))
+                _sync_remaining(current)
 
         # ── Share sale / partial exit ──────────────────────────────────────
         elif is_share_row(inst) and qty < 0:
@@ -625,20 +648,41 @@ def build_campaigns(df: pd.DataFrame, ticker: str, use_lifetime: bool = False) -
                 current.exit_proceeds += total
                 running_shares        += qty
                 pps = abs(total) / abs(qty) if abs(qty) > FIFO_EPSILON else 0
+                # Label a call-away: a covered-call assignment at this same
+                # timestamp removed the shares (broker sale, not a discretionary
+                # exit). _find_call_away returns the assigned call's strike.
+                _call_strike = _find_call_away(t, row)
+                _exit_detail = 'Sold %.0f @ $%.2f/sh' % (abs(qty), pps)
+                if _call_strike is not None:
+                    _exit_detail += ' (Called away — $%s Call)' % _fmt_strike(_call_strike)
                 current.events.append({'date': row.Date, 'type': 'Exit',
-                    'detail': 'Sold %.0f @ $%.2f/sh' % (abs(qty), pps), 'cash': total})
+                    'detail': _exit_detail, 'cash': total})
+                # Consume held lots FIFO (oldest first) for remaining_lot_cost.
+                _rem = abs(qty)
+                while _rem > FIFO_EPSILON and lot_queue:
+                    _lq, _lc = lot_queue[0]
+                    _use     = min(_rem, _lq)
+                    _rem     = round(_rem - _use, FIFO_ROUND)
+                    _left    = round(_lq - _use, FIFO_ROUND)
+                    if _left < FIFO_EPSILON:
+                        lot_queue.popleft()
+                    else:
+                        lot_queue[0] = (_left, _lc)
                 if running_shares < FIFO_EPSILON:
                     current.total_shares  = 0.0
                     current.blended_basis = 0.0
+                    current.remaining_lot_cost = 0.0
                     current.end_date = row.Date
                     current.status   = 'closed'
                     campaigns.append(current)
                     just_closed    = campaigns[-1]
                     current        = None
                     running_shares = 0.0
+                    lot_queue      = deque()
                 else:
                     current.total_shares  = running_shares
                     current.blended_basis = current.total_cost / running_shares
+                    _sync_remaining(current)
             elif pool_shares > FIFO_EPSILON:
                 # Odd-lot sale before any campaign — shrink the pool so stale
                 # shares can't leak into a later campaign entry.
@@ -738,6 +782,32 @@ def _find_assignment_premium(t: pd.DataFrame, row: Any) -> tuple[float, list, li
             })
     return premium, events, symbols
 
+def _fmt_strike(strike: float) -> str:
+    """Compact strike for event labels: 18.0 → '18', 18.5 → '18.5'."""
+    return '%g' % strike
+
+def _find_call_away(t: pd.DataFrame, row: Any) -> Optional[float]:
+    """
+    Detect a covered-call call-away for a share-sale row: a CALL assignment
+    sharing the sale's exact timestamp means the shares were assigned away
+    (broker-forced sale at the strike), not sold at will. Returns the assigned
+    call's strike for the event label, or None when the sale was discretionary.
+
+    Mirrors _find_assignment_premium's column access (`t` has 'Sub_Type' renamed
+    but keeps the spaced 'Call or Put' / 'Strike Price' columns). Filtering to
+    Call or Put == CALL keeps put assignments (which are share BUYS on the entry
+    side) from ever matching here.
+    """
+    if 'Call or Put' not in t.columns:
+        return None
+    same_dt = t[(t['Date'] == row.Date) &
+                (t['Sub_Type'].str.lower() == SUB_ASSIGNMENT) &
+                (t['Call or Put'].astype(str).str.upper() == 'CALL')]
+    if same_dt.empty:
+        return None
+    _strike = same_dt['Strike Price'].dropna()
+    return float(_strike.iloc[0]) if not _strike.empty else None
+
 def effective_basis(c: Campaign, use_lifetime: bool = False) -> float:
     """
     Cost per share after netting all premium income and dividends against the
@@ -756,13 +826,66 @@ def effective_basis(c: Campaign, use_lifetime: bool = False) -> float:
     House Money lifetime toggle is off, so the basis card shows the unmodified
     acquisition cost for comparison.
 
+    Cost source: the FIFO cost of shares STILL HELD (remaining_lot_cost) when
+    available, else total_cost. They differ only after a partial sale inside an
+    open campaign — carry-full-cost leaves the sold lot's cost on total_cost
+    (deferring its P/L to close), which would inflate the displayed basis after
+    a below-basis call-away. remaining_lot_cost reflects only the held lots, so
+    the shown basis stays honest. P/L / MTM keep using total_cost / blended_basis
+    directly and are unaffected.
+
     Returns 0.0 when total_shares is 0 (campaign not yet holding shares,
     e.g. a pure-premium run with no assignment yet).
     """
     if use_lifetime:
         return c.blended_basis
-    net = c.total_cost - c.premiums - c.dividends
+    cost = c.remaining_lot_cost if c.remaining_lot_cost is not None else c.total_cost
+    net  = cost - c.premiums - c.dividends
     return net / c.total_shares if c.total_shares > 0 else 0.0
+
+def remaining_lot_basis(c: Campaign) -> float:
+    """
+    Gross (pre-premium) cost per share of the shares STILL HELD — the display
+    counterpart to blended_basis after a partial sale. Uses remaining_lot_cost
+    (FIFO cost of held lots) so a call-away doesn't leave the sold lot's cost
+    riding on the remaining shares; falls back to blended_basis when the FIFO
+    cost wasn't tracked (lifetime path) or no partial sale has occurred (they are
+    equal there anyway). Display only — never used in P/L, MTM, or capital.
+    """
+    if c.remaining_lot_cost is not None and c.total_shares > 0:
+        return c.remaining_lot_cost / c.total_shares
+    return c.blended_basis
+
+def campaign_net_mtm(c: Campaign, last_price: float, use_lifetime: bool = False) -> Optional[float]:
+    """
+    Net campaign P/L if it were CLOSED at `last_price` right now — the number the
+    premiums-only `realized_pnl()` hides on an open wheel. It folds the deferred
+    equity result (a below-basis call-away's loss still sitting in the carry-full
+    cost) and the mark on the still-held shares back into a single figure.
+
+    Returns None when there's nothing to mark — no/zero/negative price, a closed
+    campaign, or no live share position — so the caller shows '—'.
+
+    Non-lifetime:
+        exit_proceeds + premiums + dividends − total_cost + last_price × shares
+        i.e. what realized_pnl() would return if the held shares were sold at
+        last_price. Uses the carry-full total_cost, which still holds every lot's
+        cost (incl. the called-away lot), so the deferred loss is included.
+    Lifetime:
+        last_price × shares − total_cost.  Lifetime total_cost is already net of
+        premiums and prior sales, so only the held shares are marked against it
+        (equivalently (last_price − blended_basis) × shares); adding premiums
+        again would double-count.
+
+    Pure / Streamlit-free — takes a scalar price so the tab layer owns the live
+    fetch and this stays unit-testable.
+    """
+    if not last_price or last_price <= 0 or c.status != 'open' or c.total_shares <= 0:
+        return None
+    if use_lifetime:
+        return last_price * c.total_shares - c.total_cost
+    return (c.exit_proceeds + c.premiums + c.dividends
+            - c.total_cost + last_price * c.total_shares)
 
 def realized_pnl(c: Campaign, use_lifetime: bool = False) -> float:
     """

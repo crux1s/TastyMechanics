@@ -73,6 +73,23 @@ import hashlib as _hashlib
 #
 # Changelog (recent versions — full history in git log)
 # -----------------------------------------------------
+# v26.26 (2026-08-23)
+#   - DISPLAY: Cost basis no longer inflates after a below-basis call-away.
+#     Carry-full-cost left the sold lot's cost on the shares still held (SOFI read
+#     $47.88 with 100 of 200 shares called away at $18). The Wheel card/table,
+#     Open-Positions strip, HTML report and AI snapshot now show the FIFO cost of
+#     shares STILL HELD ($26.05 gross / $18.35 net) via new Campaign.remaining_lot_cost
+#     + remaining_lot_basis(). blended_basis/total_cost stay carry-full, so P/L,
+#     MTM, capital and the Overview↔chart reconcile are byte-identical.
+#   - FEATURE: Called-away share exits are labelled "(Called away — $X Call)" in the
+#     Share & Dividend Events log (_find_call_away; CALL assignments only).
+#   - FEATURE: Net (MTM) column + split P/L chip on the Wheel tab (📡 Live only) —
+#     Premiums Banked + Net (MTM) surface the true result of an open campaign that
+#     looks green on premiums but is underwater once the deferred call-away loss and
+#     held-share mark are folded in. New pure campaign_net_mtm() helper.
+#   - TEST: 477 tests (23 new — remaining-lot basis, call-away labelling, net-MTM
+#     guards, and an end-to-end Overview↔chart reconcile guard).
+#
 # v26.9 (2026-05-21)
 #   - FIX: mechanics.py build_campaigns() — total_shares and blended_basis now
 #     correctly zeroed when a campaign closes (all shares sold). Previously the
@@ -223,7 +240,7 @@ import hashlib as _hashlib
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.25"
+APP_VERSION = "v26.26"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 

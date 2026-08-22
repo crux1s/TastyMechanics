@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from config import LEAPS_DTE_THRESHOLD
-from mechanics import realized_pnl, effective_basis
+from mechanics import realized_pnl, effective_basis, remaining_lot_basis
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -206,7 +206,7 @@ def _dashboard_data(all_cdf, credit_cdf, all_campaigns, daily_pnl_all, series_df
             for c in camps:
                 dur = ((c.end_date if c.end_date is not None else latest) - c.start_date).days
                 campaigns.append({'ticker': str(tk), 'status': 'Closed' if c.status == 'closed' else 'Open',
-                                  'qty': int(c.total_shares), 'avg': _r(c.blended_basis),
+                                  'qty': int(c.total_shares), 'avg': _r(remaining_lot_basis(c)),
                                   'basis': _r(effective_basis(c)), 'prem': _r(c.premiums),
                                   'div': _r(c.dividends), 'exit': _r(c.exit_proceeds),
                                   'pnl': _r(realized_pnl(c)), 'days': int(dur)})

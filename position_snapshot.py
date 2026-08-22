@@ -18,7 +18,7 @@ import pandas as pd
 
 from config import OPT_TYPES, EQUITY_TYPE
 from ui_components import fmt_dollar
-from mechanics import realized_pnl, effective_basis
+from mechanics import realized_pnl, effective_basis, remaining_lot_basis
 from market_data import bs_greeks
 
 
@@ -150,8 +150,9 @@ def build_position_snapshot(
             live_tk  = live_prices.get(ticker, {}) if has_live else {}
             last     = live_tk.get('last', None)
 
+            _gross_basis = remaining_lot_basis(c)   # honest cost of held shares
             if last and c.total_shares > 0:
-                gross_unreal = (last - c.blended_basis) * c.total_shares
+                gross_unreal = (last - _gross_basis) * c.total_shares
                 net_unreal   = (last - effb) * c.total_shares
                 last_str     = f'${last:>6.2f}'
                 eq_delta_str = f'{c.total_shares:+.0f}'    # long stock = positive delta
@@ -163,7 +164,7 @@ def build_position_snapshot(
 
             gross_str = fmt_dollar(gross_unreal) if gross_unreal is not None else '—'
             net_str   = fmt_dollar(net_unreal)   if net_unreal   is not None else '—'
-            add(f'{ticker:<7} {int(c.total_shares):>6}  ${c.blended_basis:>6.2f}  '
+            add(f'{ticker:<7} {int(c.total_shares):>6}  ${_gross_basis:>6.2f}  '
                 f'{fmt_dollar(c.premiums):>9}  ${effb:>8.2f}  '
                 f'{last_str:>7}  {gross_str:>12}  {net_str:>10}  {eq_delta_str:>9}  {days:>4}d')
     else:
