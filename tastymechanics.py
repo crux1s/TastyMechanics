@@ -73,6 +73,19 @@ import hashlib as _hashlib
 #
 # Changelog (recent versions — full history in git log)
 # -----------------------------------------------------
+# v26.27 (2026-08-23)
+#   - DISPLAY: Wheel tab — open campaigns label the premiums-only figure 'Income'
+#     (summary table + CSV), closed keep 'Realized P/L'. Open card's last chip is
+#     always Net (MTM), showing '—' when Live is off instead of a redundant P/L
+#     that just duplicated the Premiums Banked chip.
+#   - DISPLAY: Derivatives tab — 'P/L' → 'Net P/L' across the by-Type, by-Strategy
+#     and by-Ticker tables. Performance by Ticker: 'Total Net Prem' → 'Premium
+#     Collected', 'P/L per DIT' → 'Net P/L / DIT', columns reordered into the
+#     premium-selling flow (Collected → Capture → Net P/L → efficiency).
+#     by-Strategy order aligned to by-Type. Two inline hardcoded P/L colours
+#     replaced with color_pnl_cell (COLOURS single-source).
+#   - Label/order/colour-source only — no figure changed. 477 tests.
+#
 # v26.26 (2026-08-23)
 #   - DISPLAY: Cost basis no longer inflates after a below-basis call-away.
 #     Carry-full-cost left the sold lot's cost on the shares still held (SOFI read
@@ -240,7 +253,7 @@ import hashlib as _hashlib
 #   capital efficiency, candlestick charts, HTML export. See git log for details.
 # ==========================================
 
-APP_VERSION = "v26.26"
+APP_VERSION = "v26.27"
 st.set_page_config(page_title=f"TastyMechanics {APP_VERSION}", layout="wide")
 
 
