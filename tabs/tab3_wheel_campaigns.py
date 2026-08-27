@@ -235,10 +235,20 @@ def render_tab3(
             .str.replace('🟢 ', '', regex=False)
             .str.replace('✅ ', '', regex=False)
         )
+        # Open campaigns only here — realized_pnl is premiums + dividends, so
+        # label it 'Income', matching the on-screen open table (not 'P/L').
+        df_csv = df_csv.rename(columns={'P/L': 'Income'})
         return df_csv.to_csv(index=False)
 
-    def _render_summary(rows):
+    def _render_summary(rows, open_view=False):
         df = pd.DataFrame(rows)
+        # The P/L column means different things by status, so label it honestly:
+        #   open   → 'Income'        (realized_pnl is premiums + dividends only;
+        #                             the equity result is still unrealised)
+        #   closed → 'Realized P/L'  (realized_pnl includes the equity gain/loss)
+        # Calling 'Income' "P/L" on an open campaign overstated it as profit.
+        _pnl_col = 'Income' if open_view else 'Realized P/L'
+        df = df.rename(columns={'P/L': _pnl_col})
         # In Lifetime mode the two basis columns swap meaning vs normal mode:
         #   normal:    Avg Price = blended_basis (cash / shares)
         #              Cost Basis = effective basis (cash − premiums − divs) / shares
@@ -264,10 +274,10 @@ def render_tab3(
         # with the Live toggle on, so drop the column entirely when every value
         # is None (Live off, or no open share positions) rather than show a
         # column of dashes.
-        _colour_cols = ['P/L']
+        _colour_cols = [_pnl_col]
         _fmt = {
             _basis_cols[0]: fmt_dollar, _basis_cols[1]: fmt_dollar,
-            'Premiums': fmt_dollar, 'Divs': fmt_dollar, 'P/L': fmt_dollar,
+            'Premiums': fmt_dollar, 'Divs': fmt_dollar, _pnl_col: fmt_dollar,
         }
         if 'Net (MTM)' in df.columns:
             if df['Net (MTM)'].notna().any():
@@ -331,7 +341,7 @@ def render_tab3(
 
     # ── Open campaigns summary table ──────────────────────────────────────────
     if _open_rows:
-        _render_summary(_open_rows)
+        _render_summary(_open_rows, open_view=True)
         if _live_caption:
             st.caption(
                 '📡 Net (MTM) = P/L if closed at the live price now — it folds the '
@@ -397,7 +407,6 @@ def render_tab3(
 
     # ── Open campaign cards ───────────────────────────────────────────────────
     for _camp_idx, (ticker, i, c) in enumerate(open_camps):
-        rpnl = realized_pnl(c, use_lifetime)
         if use_lifetime and c.total_shares > 0:
             _entry_basis_card = (c.total_cost + c.premiums + c.dividends) / c.total_shares
             effb = c.blended_basis
@@ -405,24 +414,23 @@ def render_tab3(
             _entry_basis_card = remaining_lot_basis(c)
             effb = effective_basis(c)
         is_open         = True
-        pnl_color       = COLOURS['green'] if rpnl >= 0 else COLOURS['red']
-        # Last chip: with Live on, show Net (MTM) — the true result if closed at
-        # market, which folds the deferred call-away loss and the held-share mark
-        # back into the premiums-only Realized P/L. Without Live, fall back to the
-        # Realized P/L (premiums banked) as before. The PREMIUMS chip alongside it
-        # always shows the banked income, so the two together read as
-        # "premiums banked" + "net if closed".
-        _net_mtm = _campaign_net_mtm(c)
+        # Last chip is always Net (MTM) — the true result if closed at market,
+        # which folds the deferred call-away loss and held-share mark back into
+        # the premiums-only figure. With Live off there's no mark, so it shows
+        # '—' rather than the campaign's realized_pnl: on an OPEN campaign that's
+        # just premiums + dividends, which the PREMIUMS BANKED chip beside it
+        # already shows — repeating it under a "P/L" label would double up and
+        # mislabel income as profit.
+        _net_mtm   = _campaign_net_mtm(c)
+        _pnl_label = 'NET (MTM)'
         if _net_mtm is not None:
-            _pnl_label = 'NET (MTM)'
-            _pnl_val   = _net_mtm
+            _pnl_str   = '$%+.2f' % _net_mtm
             _pnl_color = COLOURS['green'] if _net_mtm >= 0 else COLOURS['red']
             _pnl_sub   = '<div style="font-size:0.7em;color:#888;">if closed at live</div>'
         else:
-            _pnl_label = 'REALIZED P/L'
-            _pnl_val   = rpnl
-            _pnl_color = pnl_color
-            _pnl_sub   = ''
+            _pnl_str   = '—'
+            _pnl_color = COLOURS['text_muted']
+            _pnl_sub   = '<div style="font-size:0.7em;color:#888;">📡 Live off</div>'
         basis_reduction = _entry_basis_card - effb
         _camp_deployed  = c.total_shares * c.blended_basis
         _camp_days      = max((latest_date - c.start_date).days, 1)
@@ -554,7 +562,7 @@ def render_tab3(
             '<div style="font-size:1.0em;font-weight:600;color:{camp_eff_color};">{camp_eff}</div>'
             '<div style="font-size:0.7em;color:#888;">vs S&P ~10%</div></div>'
             '<div><div style="font-size:0.7em;color:#888;margin-bottom:2px;">{pnl_label}</div>'
-            '<div style="font-size:1.1em;font-weight:700;color:{pnl_color};">${pnl:+.2f}</div>{pnl_sub}</div>'
+            '<div style="font-size:1.1em;font-weight:700;color:{pnl_color};">{pnl_str}</div>{pnl_sub}</div>'
             '</div>{live_strip}{assignment_note}{mid_asgn_note}{pre_camp_note}</div>'
         ).format(
             border=COLOURS['green'] if is_open else '#444',
@@ -568,7 +576,7 @@ def render_tab3(
             reduction=basis_reduction if basis_reduction > 0 else 0,
             free_in=_time_to_be,
             premiums=c.premiums, prem_color=COLOURS['green'] if c.premiums >= 0 else COLOURS['red'],
-            pnl_label=_pnl_label, pnl=_pnl_val, pnl_color=_pnl_color, pnl_sub=_pnl_sub,
+            pnl_label=_pnl_label, pnl_str=_pnl_str, pnl_color=_pnl_color, pnl_sub=_pnl_sub,
             camp_eff=_camp_eff_str, camp_eff_color=_camp_eff_color,
             live_strip=live_strip,
             assignment_note=_assignment_note,
